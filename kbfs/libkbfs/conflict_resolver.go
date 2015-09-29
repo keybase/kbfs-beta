@@ -184,6 +184,17 @@ func (cr *ConflictResolver) getMDs(ctx context.Context) (
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// re-embed all the block changes
+	err = cr.fbo.reembedBlockChanges(ctx, unmerged)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = cr.fbo.reembedBlockChanges(ctx, merged)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	return unmerged, merged, nil
 }
 
@@ -225,6 +236,23 @@ func (cr *ConflictResolver) updateCurrInput(ctx context.Context,
 	return nil
 }
 
+func (cr *ConflictResolver) makeChains(ctx context.Context,
+	unmerged []*RootMetadata, merged []*RootMetadata) (
+	unmergedChains *crChains, mergedChains *crChains, err error) {
+	unmergedChains, err = newCRChains(unmerged)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	mergedChains, err = newCRChains(merged)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	cr.fbo.status.setCRChains(unmergedChains, mergedChains)
+	return unmergedChains, mergedChains, nil
+}
+
 func (cr *ConflictResolver) doResolve(ctx context.Context, ci conflictInput) {
 	cr.log.CDebugf(ctx, "Starting conflict resolution with input %v", ci)
 	var err error
@@ -248,6 +276,18 @@ func (cr *ConflictResolver) doResolve(ctx context.Context, ci conflictInput) {
 	// Update the current input to reflect the MDs we'll actually be
 	// working with.
 	err = cr.updateCurrInput(ctx, unmerged, merged)
+	if err != nil {
+		return
+	}
+
+	// Canceled before we start the heavy lifting?
+	err = cr.checkDone(ctx)
+	if err != nil {
+		return
+	}
+
+	// Make the chains
+	_, _, err = cr.makeChains(ctx, unmerged, merged)
 	if err != nil {
 		return
 	}

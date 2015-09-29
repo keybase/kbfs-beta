@@ -263,6 +263,9 @@ func (fbo *FolderBranchOps) transitionState(newState state) {
 // The caller must hold writerLock.
 func (fbo *FolderBranchOps) setStagedLocked(staged bool) {
 	fbo.staged = staged
+	if !staged {
+		fbo.status.setCRChains(nil, nil)
+	}
 }
 
 func (fbo *FolderBranchOps) checkDataVersion(p path, ptr BlockPointer) error {
@@ -410,7 +413,7 @@ func (fbo *FolderBranchOps) initMDLocked(
 		expectedKeyGen = PublicKeyGen
 	} else {
 		// create a new set of keys for this metadata
-		if err := fbo.config.KeyManager().Rekey(ctx, md); err != nil {
+		if _, err := fbo.config.KeyManager().Rekey(ctx, md); err != nil {
 			return err
 		}
 		expectedKeyGen = FirstValidKeyGen
@@ -1025,6 +1028,23 @@ func (fbo *FolderBranchOps) cacheBlockIfNotYetDirtyLocked(
 
 type localBcache map[BlockPointer]*DirBlock
 
+// writerLock must be taken by caller.
+func (fbo *FolderBranchOps) incrementMDLocked(md *RootMetadata) (err error) {
+	// no need to take headLock here, since we already have
+	// writerLock; no one else will be modifying the MD.
+	md.PrevRoot, err = fbo.head.MetadataID(fbo.config)
+	if err != nil {
+		return err
+	}
+	// bump revision
+	if md.Revision < MetadataRevisionInitial {
+		md.Revision = MetadataRevisionInitial
+	} else {
+		md.Revision++
+	}
+	return nil
+}
+
 // TODO: deal with multiple nodes for indirect blocks
 //
 // entryType must not be Sym.  writerLock must be taken by caller.
@@ -1070,17 +1090,9 @@ func (fbo *FolderBranchOps) syncBlockLocked(ctx context.Context,
 		if prevIdx < 0 {
 			// root dir, update the MD instead
 			de = md.data.Dir
-			// no need to take headLock here, since we already have
-			// writerLock; no one else will be modifying the MD.
-			md.PrevRoot, err = fbo.head.MetadataID(fbo.config)
+			err := fbo.incrementMDLocked(md)
 			if err != nil {
 				return path{}, DirEntry{}, nil, err
-			}
-			// bump revision
-			if md.Revision < MetadataRevisionInitial {
-				md.Revision = MetadataRevisionInitial
-			} else {
-				md.Revision++
 			}
 		} else {
 			prevDir := path{
@@ -2919,6 +2931,9 @@ func (fbo *FolderBranchOps) Status(
 			WrongOpsError{fbo.folderBranch, folderBranch}
 	}
 
+	// Wait for conflict resolution to settle down, if necessary.
+	fbo.cr.Wait(ctx)
+
 	return fbo.status.getStatus(ctx)
 }
 
@@ -3106,6 +3121,11 @@ func (fbo *FolderBranchOps) notifyOneOp(ctx context.Context, op op,
 			}
 		} else {
 			newNode = oldNode
+			if oldNode != nil {
+				// Add another name to the existing NodeChange.
+				changes[len(changes)-1].DirUpdated =
+					append(changes[len(changes)-1].DirUpdated, realOp.NewName)
+			}
 		}
 
 		if oldNode != nil {
@@ -3222,8 +3242,7 @@ func (fbo *FolderBranchOps) getCurrMDRevision() MetadataRevision {
 	return fbo.getCurrMDRevisionLocked()
 }
 
-// writerLock and headLock must be held by the caller
-func (fbo *FolderBranchOps) reembedBlockChangesLocked(ctx context.Context,
+func (fbo *FolderBranchOps) reembedBlockChanges(ctx context.Context,
 	rmds []*RootMetadata) error {
 	// if any of the operations have unembedded block ops, fetch those
 	// now and fix them up.  TODO: parallelize me.
@@ -3283,7 +3302,7 @@ func (fbo *FolderBranchOps) applyMDUpdatesLocked(ctx context.Context,
 		return errors.New("Ignoring MD updates while writes are dirty")
 	}
 
-	fbo.reembedBlockChangesLocked(ctx, rmds)
+	fbo.reembedBlockChanges(ctx, rmds)
 
 	for _, rmd := range rmds {
 		// check that we're applying the expected MD revision
@@ -3317,7 +3336,7 @@ func (fbo *FolderBranchOps) undoMDUpdatesLocked(ctx context.Context,
 		return errors.New("Ignoring MD updates while writes are dirty")
 	}
 
-	fbo.reembedBlockChangesLocked(ctx, rmds)
+	fbo.reembedBlockChanges(ctx, rmds)
 
 	// go backwards through the updates
 	for i := len(rmds) - 1; i >= 0; i-- {
@@ -3476,6 +3495,53 @@ func (fbo *FolderBranchOps) UnstageForTesting(
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// RekeyForTesting implements the KBFSOps interface for FolderBranchOps
+// TODO: remove once we have automatic rekeying
+func (fbo *FolderBranchOps) RekeyForTesting(
+	ctx context.Context, folderBranch FolderBranch) (err error) {
+	fbo.log.CDebugf(ctx, "RekeyForTesting")
+	defer func() { fbo.log.CDebugf(ctx, "Done: %v", err) }()
+
+	if folderBranch != fbo.folderBranch {
+		return WrongOpsError{fbo.folderBranch, folderBranch}
+	}
+
+	fbo.writerLock.Lock()
+	defer fbo.writerLock.Unlock()
+
+	md, err := fbo.getMDForWriteLocked(ctx)
+	if err != nil {
+		return err
+	}
+
+	rekeyDone, err := fbo.config.KeyManager().Rekey(ctx, md)
+	if err != nil {
+		return err
+	}
+
+	// TODO: implement a "forced" option that rekeys even when the
+	// devices haven't changed?
+	if !rekeyDone {
+		fbo.log.CDebugf(ctx, "No rekey necessary")
+		return nil
+	}
+
+	err = fbo.incrementMDLocked(md)
+	if err != nil {
+		return err
+	}
+
+	// add an empty operation to satisfy assumptions elsewhere
+	md.AddOp(newGCOp())
+
+	err = fbo.finalizeWriteLocked(ctx, md, &blockPutState{})
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // SyncFromServer implements the KBFSOps interface for FolderBranchOps

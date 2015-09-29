@@ -9,46 +9,54 @@ import (
 	"github.com/rcrowley/go-metrics"
 )
 
+const (
+	// EnvTestRootCertPEM is the environment variable name for the CA cert
+	// PEM the client uses to verify the KBFS servers when testing. Any
+	// certificate present here is the default. If none is specified we'll
+	// then default to the hardcoded test certificate. Individual run modes
+	// can override either of these.
+	EnvTestRootCertPEM = "KEYBASE_TEST_ROOT_CERT_PEM"
+)
+
 // ConfigLocal implements the Config interface using purely local
 // server objects (no KBFS operations used RPCs).
 type ConfigLocal struct {
-	kbfs     KBFSOps
-	kbpki    KBPKI
-	keyman   KeyManager
-	rep      Reporter
-	mdcache  MDCache
-	kcache   KeyCache
-	bcache   BlockCache
-	crypto   Crypto
-	codec    Codec
-	mdops    MDOps
-	kops     KeyOps
-	bops     BlockOps
-	mdserv   MDServer
-	bserv    BlockServer
-	keyserv  KeyServer
-	bsplit   BlockSplitter
-	notifier Notifier
-	cacert   []byte
-	registry metrics.Registry
-	loggerFn func(prefix string) logger.Logger
+	kbfs      KBFSOps
+	kbpki     KBPKI
+	keyman    KeyManager
+	rep       Reporter
+	mdcache   MDCache
+	kcache    KeyCache
+	bcache    BlockCache
+	crypto    Crypto
+	codec     Codec
+	mdops     MDOps
+	kops      KeyOps
+	bops      BlockOps
+	mdserv    MDServer
+	bserv     BlockServer
+	keyserv   KeyServer
+	daemon    KeybaseDaemon
+	bsplit    BlockSplitter
+	notifier  Notifier
+	rootCerts []byte
+	registry  metrics.Registry
+	loggerFn  func(prefix string) logger.Logger
 }
 
 var _ Config = (*ConfigLocal)(nil)
 
 // LocalUser represents a fake KBFS user, useful for testing.
 type LocalUser struct {
-	Name                  libkb.NormalizedUsername
-	UID                   keybase1.UID
-	Asserts               []string
-	VerifyingKeys         []VerifyingKey
-	CryptPublicKeys       []CryptPublicKey
-	CurrentPublicKeyIndex int
+	UserInfo
+	Asserts []string
+	// Index into UserInfo.CryptPublicKeys.
+	CurrentCryptPublicKeyIndex int
 }
 
 // GetCurrentCryptPublicKey returns this LocalUser's public encryption key.
 func (lu *LocalUser) GetCurrentCryptPublicKey() CryptPublicKey {
-	return lu.CryptPublicKeys[lu.CurrentPublicKeyIndex]
+	return lu.CryptPublicKeys[lu.CurrentCryptPublicKeyIndex]
 }
 
 func verifyingKeysToPublicKeys(keys []VerifyingKey) []keybase1.PublicKey {
@@ -115,11 +123,13 @@ func MakeLocalUsers(users []libkb.NormalizedUsername) []LocalUser {
 		verifyingKey := MakeLocalUserVerifyingKeyOrBust(users[i])
 		cryptPublicKey := MakeLocalUserCryptPublicKeyOrBust(users[i])
 		localUsers[i] = LocalUser{
-			Name:                  users[i],
-			UID:                   keybase1.MakeTestUID(uint32(i + 1)),
-			VerifyingKeys:         []VerifyingKey{verifyingKey},
-			CryptPublicKeys:       []CryptPublicKey{cryptPublicKey},
-			CurrentPublicKeyIndex: 0,
+			UserInfo: UserInfo{
+				Name:            users[i],
+				UID:             keybase1.MakeTestUID(uint32(i + 1)),
+				VerifyingKeys:   []VerifyingKey{verifyingKey},
+				CryptPublicKeys: []CryptPublicKey{cryptPublicKey},
+			},
+			CurrentCryptPublicKeyIndex: 0,
 		}
 	}
 	return localUsers
@@ -129,7 +139,6 @@ func MakeLocalUsers(users []libkb.NormalizedUsername) []LocalUser {
 func NewConfigLocal() *ConfigLocal {
 	config := &ConfigLocal{}
 	config.SetKBFSOps(NewKBFSOpsStandard(config))
-	config.SetKeyManager(&KeyManagerStandard{config})
 	config.SetReporter(NewReporterSimple(10))
 	config.SetMDCache(NewMDCacheStandard(5000))
 	config.SetKeyCache(NewKeyCacheStandard(5000))
@@ -142,12 +151,14 @@ func NewConfigLocal() *ConfigLocal {
 	config.SetBlockSplitter(&BlockSplitterSimple{64 * 1024, 8 * 1024})
 	config.SetNotifier(config.kbfs.(*KBFSOpsStandard))
 
-	// set the cert to be the environment variable, if it exists
-	envCACert := os.Getenv(EnvCACertPEM)
-	if len(envCACert) != 0 {
-		config.SetCACert([]byte(envCACert))
+	// Set the cert to be the environment variable, if it exists.
+	envTestRootCert := os.Getenv(EnvTestRootCertPEM)
+	if len(envTestRootCert) != 0 {
+		// Some integration tests specify this via the environment.
+		config.SetRootCerts([]byte(envTestRootCert))
 	} else {
-		config.SetCACert([]byte(TestCACert))
+		// If none specified use a hard-coded test certificate.
+		config.SetRootCerts([]byte(TestRootCert))
 	}
 
 	// Don't bother creating the registry if UseNilMetrics is set.
@@ -309,6 +320,16 @@ func (c *ConfigLocal) SetKeyServer(k KeyServer) {
 	c.keyserv = k
 }
 
+// KeybaseDaemon implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) KeybaseDaemon() KeybaseDaemon {
+	return c.daemon
+}
+
+// SetKeybaseDaemon implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) SetKeybaseDaemon(k KeybaseDaemon) {
+	c.daemon = k
+}
+
 // BlockSplitter implements the Config interface for ConfigLocal.
 func (c *ConfigLocal) BlockSplitter() BlockSplitter {
 	return c.bsplit
@@ -339,14 +360,14 @@ func (c *ConfigLocal) ReqsBufSize() int {
 	return 20
 }
 
-// CACert implements the Config interface for ConfigLocal.
-func (c *ConfigLocal) CACert() []byte {
-	return c.cacert
+// RootCerts implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) RootCerts() []byte {
+	return c.rootCerts
 }
 
-// SetCACert implements the Config interface for ConfigLocal.
-func (c *ConfigLocal) SetCACert(cert []byte) {
-	c.cacert = cert
+// SetRootCerts implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) SetRootCerts(pem []byte) {
+	c.rootCerts = pem
 }
 
 // MakeLogger implements the Config interface for ConfigLocal.
@@ -388,6 +409,6 @@ func (c *ConfigLocal) Shutdown() {
 	c.KBFSOps().Shutdown()
 	c.MDServer().Shutdown()
 	c.KeyServer().Shutdown()
-	c.KBPKI().Shutdown()
+	c.KeybaseDaemon().Shutdown()
 	c.BlockServer().Shutdown()
 }

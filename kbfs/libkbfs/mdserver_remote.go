@@ -5,8 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cenkalti/backoff"
-	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/logger"
 	keybase1 "github.com/keybase/client/protocol/go"
 	"golang.org/x/net/context"
@@ -151,6 +149,15 @@ func (md *MDServerRemote) OnDisconnected() {
 	md.resetPingTicker(0)
 }
 
+// ShouldThrottle implements the ConnectionHandler interface.
+func (md *MDServerRemote) ShouldThrottle(err error) bool {
+	if err == nil {
+		return false
+	}
+	_, shouldThrottle := err.(MDServerErrorThrottle)
+	return shouldThrottle
+}
+
 // Signal errors and clear any registered observers.
 func (md *MDServerRemote) cancelObservers() {
 	md.observerMu.Lock()
@@ -184,23 +191,7 @@ func (md *MDServerRemote) doCommand(ctx context.Context, command func() error) e
 		return runUnlessCanceled(ctx, command)
 	}
 
-	// retry throttle errors w/backoff
-	var err error
-	backoff.RetryNotify(func() error {
-		// this will retry connectivity errors w/backoff
-		err = md.conn.DoCommand(ctx, command)
-		_, throttle := err.(MDServerErrorThrottle)
-		if err != nil && throttle {
-			return err
-		}
-		// short circuit retry loop if no error/error isn't MDServerErrorThrottle.
-		return nil
-	}, backoff.NewExponentialBackOff(),
-		func(err error, nextTime time.Duration) {
-			libkb.G.Log.Warning("MDServerRemote: error: %q; will retry in %s",
-				err, nextTime)
-		})
-	return err
+	return md.conn.DoCommand(ctx, command)
 }
 
 // Helper used to retrieve metadata blocks from the MD server.
@@ -217,6 +208,7 @@ func (md *MDServerRemote) get(ctx context.Context, id TlfID, handle *TlfHandle,
 		StartRevision: start.Number(),
 		StopRevision:  stop.Number(),
 		Unmerged:      isUnmerged,
+		LogTags:       LogTagsFromContextToMap(ctx),
 	}
 	if id == NullTlfID {
 		arg.FolderHandle = handle.ToBytes(md.config)
@@ -296,16 +288,25 @@ func (md *MDServerRemote) Put(ctx context.Context, rmds *RootMetadataSigned) err
 	if err != nil {
 		return err
 	}
+
 	// put request
+	arg := keybase1.PutMetadataArg{
+		MdBlock: rmdsBytes,
+		LogTags: LogTagsFromContextToMap(ctx),
+	}
 	return md.doCommand(ctx, func() error {
-		return md.client().PutMetadata(rmdsBytes)
+		return md.client().PutMetadata(arg)
 	})
 }
 
 // PruneUnmerged implements the MDServer interface for MDServerRemote.
 func (md *MDServerRemote) PruneUnmerged(ctx context.Context, id TlfID) error {
+	arg := keybase1.PruneUnmergedArg{
+		FolderID: id.String(),
+		LogTags:  LogTagsFromContextToMap(ctx),
+	}
 	return md.doCommand(ctx, func() error {
-		return md.client().PruneUnmerged(id.String())
+		return md.client().PruneUnmerged(arg)
 	})
 }
 
@@ -335,6 +336,7 @@ func (md *MDServerRemote) RegisterForUpdate(ctx context.Context, id TlfID,
 	arg := keybase1.RegisterForUpdatesArg{
 		FolderID:     id.String(),
 		CurrRevision: currHead.Number(),
+		LogTags:      LogTagsFromContextToMap(ctx),
 	}
 
 	// register
@@ -404,9 +406,13 @@ func (md *MDServerRemote) GetTLFCryptKeyServerHalf(ctx context.Context,
 	}
 
 	// get the key
+	arg := keybase1.GetKeyArg{
+		KeyHalfID: idBytes,
+		LogTags:   LogTagsFromContextToMap(ctx),
+	}
 	var keyBytes []byte
 	err = md.doCommand(ctx, func() error {
-		keyBytes, err = md.client().GetKey(idBytes)
+		keyBytes, err = md.client().GetKey(arg)
 		return err
 	})
 	if err != nil {
@@ -443,7 +449,11 @@ func (md *MDServerRemote) PutTLFCryptKeyServerHalves(ctx context.Context,
 		}
 	}
 	// put the keys
+	arg := keybase1.PutKeysArg{
+		KeyHalves: keyHalves,
+		LogTags:   LogTagsFromContextToMap(ctx),
+	}
 	return md.doCommand(ctx, func() error {
-		return md.client().PutKeys(keyHalves)
+		return md.client().PutKeys(arg)
 	})
 }

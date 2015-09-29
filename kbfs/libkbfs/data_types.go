@@ -24,6 +24,23 @@ const (
 	PublicUIDName = "public"
 )
 
+// UserInfo contains all the info about a keybase user that kbfs cares
+// about.
+type UserInfo struct {
+	Name            libkb.NormalizedUsername
+	UID             keybase1.UID
+	VerifyingKeys   []VerifyingKey
+	CryptPublicKeys []CryptPublicKey
+}
+
+// SessionInfo contains all the info about the keybase session that
+// kbfs cares about.
+type SessionInfo struct {
+	UID            keybase1.UID
+	Token          string
+	CryptPublicKey CryptPublicKey
+}
+
 // All section references below are to https://keybase.io/blog/crypto
 // (version 1.3).
 
@@ -308,7 +325,7 @@ func (nonce BlockRefNonce) String() string {
 // BlockPointer contains the identifying information for a block in KBFS.
 type BlockPointer struct {
 	ID      BlockID
-	KeyGen  KeyGen  // if valid, which generation of the DirKeyBundle to use.
+	KeyGen  KeyGen  // if valid, which generation of the TLFKeyBundle to use.
 	DataVer DataVer // if valid, which version of the KBFS data structures is pointed to
 	// Creator is the UID that was first charged for the initial
 	// reference to this block.
@@ -743,91 +760,6 @@ func (p path) hasPublic() bool {
 	// explicit readers, but for now we expect the caller to check
 	// that.
 	return len(p.path) == 1 && !p.Tlf.IsPublic()
-}
-
-// TLFCryptKeyServerHalfID is the identifier type for a server-side key half.
-type TLFCryptKeyServerHalfID struct {
-	ID HMAC // Exported for serialization.
-}
-
-// DeepCopy returns a complete copy of a TLFCryptKeyServerHalfID.
-func (id TLFCryptKeyServerHalfID) DeepCopy() TLFCryptKeyServerHalfID {
-	return id
-}
-
-// String implements the Stringer interface for TLFCryptKeyServerHalfID.
-func (id TLFCryptKeyServerHalfID) String() string {
-	return id.ID.String()
-}
-
-// TLFCryptKeyInfo is a per-device key half entry in the DirKeyBundle.
-type TLFCryptKeyInfo struct {
-	ClientHalf   EncryptedTLFCryptKeyClientHalf
-	ServerHalfID TLFCryptKeyServerHalfID
-}
-
-// DeepCopy returns a complete copy of a TLFCryptKeyInfo.
-func (info TLFCryptKeyInfo) DeepCopy() TLFCryptKeyInfo {
-	return TLFCryptKeyInfo{
-		ClientHalf:   info.ClientHalf.DeepCopy(),
-		ServerHalfID: info.ServerHalfID.DeepCopy(),
-	}
-}
-
-// DirKeyBundle is a bundle of all the keys for a directory
-type DirKeyBundle struct {
-	// Symmetric secret key, encrypted for each writer's device
-	// (identified by the KID of the corresponding device CryptPublicKey).
-	WKeys map[keybase1.UID]map[keybase1.KID]TLFCryptKeyInfo
-	// Symmetric secret key, encrypted for each reader's device
-	// (identified by the KID of the corresponding device CryptPublicKey).
-	RKeys map[keybase1.UID]map[keybase1.KID]TLFCryptKeyInfo
-
-	// M_f as described in 4.1.1 of https://keybase.io/blog/crypto
-	// .
-	TLFPublicKey TLFPublicKey `codec:"pubKey"`
-
-	// M_e as described in 4.1.1 of https://keybase.io/blog/crypto
-	// .
-	//
-	// TODO: Prepend M_e to all entries of WKeys and RKeys above
-	// instead, so that we have the freedom to pick different
-	// ephemeral keys.
-	TLFEphemeralPublicKey TLFEphemeralPublicKey `codec:"ePubKey"`
-}
-
-// DeepCopy returns a complete copy of this DirKeyBundle.
-func (dkb DirKeyBundle) DeepCopy() DirKeyBundle {
-	newDkb := dkb
-	newDkb.WKeys = make(map[keybase1.UID]map[keybase1.KID]TLFCryptKeyInfo)
-	for u, m := range dkb.WKeys {
-		newDkb.WKeys[u] = make(map[keybase1.KID]TLFCryptKeyInfo)
-		for k, b := range m {
-			newDkb.WKeys[u][k] = b.DeepCopy()
-		}
-	}
-	newDkb.RKeys = make(map[keybase1.UID]map[keybase1.KID]TLFCryptKeyInfo)
-	for u, m := range dkb.RKeys {
-		newDkb.RKeys[u] = make(map[keybase1.KID]TLFCryptKeyInfo)
-		for k, b := range m {
-			newDkb.RKeys[u][k] = b.DeepCopy()
-		}
-	}
-	newDkb.TLFPublicKey = dkb.TLFPublicKey.DeepCopy()
-	newDkb.TLFEphemeralPublicKey = dkb.TLFEphemeralPublicKey.DeepCopy()
-	return newDkb
-}
-
-// IsWriter returns true if the given user device is in the writer set.
-func (dkb *DirKeyBundle) IsWriter(user keybase1.UID, deviceKID keybase1.KID) bool {
-	_, ok := dkb.WKeys[user][deviceKID]
-	return ok
-}
-
-// IsReader returns true if the given user device is in the reader set.
-func (dkb *DirKeyBundle) IsReader(user keybase1.UID, deviceKID keybase1.KID) bool {
-	_, ok := dkb.RKeys[user][deviceKID]
-	return ok
 }
 
 // BlockChanges tracks the set of blocks that changed in a commit, and

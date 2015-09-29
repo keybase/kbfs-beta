@@ -12,14 +12,11 @@ import (
 )
 
 const (
-	// EnvMDServerAddr is the environment variable name for an mdserver address.
-	EnvMDServerAddr = "KEYBASE_MDSERVER_BIND_ADDR"
-	// EnvBServerAddr is the environment variable name for a block
+	// EnvTestMDServerAddr is the environment variable name for an mdserver address.
+	EnvTestMDServerAddr = "KEYBASE_TEST_MDSERVER_ADDR"
+	// EnvTestBServerAddr is the environment variable name for a block
 	// server address.
-	EnvBServerAddr = "KEYBASE_BSERVER_BIND_ADDR"
-	// EnvCACertPEM is the environment variable name for the CA cert
-	// PEM the client uses to verify the KBFS servers.
-	EnvCACertPEM = "KEYBASE_CA_CERT_PEM"
+	EnvTestBServerAddr = "KEYBASE_TEST_BSERVER_ADDR"
 )
 
 // RandomBlockID returns a randomly-generated BlockID for testing.
@@ -80,12 +77,15 @@ func MakeTestConfigOrBust(t *testing.T, users ...libkb.NormalizedUsername) *Conf
 	config := NewConfigLocal()
 	setTestLogger(config, t)
 
+	config.SetKeyManager(NewKeyManagerStandard(config))
+
 	localUsers := MakeLocalUsers(users)
 	loggedInUser := localUsers[0]
 
-	kbpki := NewKBPKIMemory(loggedInUser.UID, localUsers)
+	daemon := NewKeybaseDaemonMemory(loggedInUser.UID, localUsers)
+	config.SetKeybaseDaemon(daemon)
 
-	// TODO: Consider using fake BlockOps and MDOps instead.
+	kbpki := NewKBPKIClient(config)
 	config.SetKBPKI(kbpki)
 
 	signingKey := MakeLocalUserSigningKeyOrBust(loggedInUser.Name)
@@ -94,7 +94,7 @@ func MakeTestConfigOrBust(t *testing.T, users ...libkb.NormalizedUsername) *Conf
 	config.SetCrypto(crypto)
 
 	// see if a local remote server is specified
-	bserverAddr := os.Getenv(EnvBServerAddr)
+	bserverAddr := os.Getenv(EnvTestBServerAddr)
 	if len(bserverAddr) != 0 {
 		blockServer :=
 			NewBlockServerRemote(context.TODO(), config, bserverAddr)
@@ -108,7 +108,7 @@ func MakeTestConfigOrBust(t *testing.T, users ...libkb.NormalizedUsername) *Conf
 	}
 
 	// see if a local remote server is specified
-	mdServerAddr := os.Getenv(EnvMDServerAddr)
+	mdServerAddr := os.Getenv(EnvTestMDServerAddr)
 
 	var err error
 	var mdServer MDServer
@@ -154,19 +154,23 @@ func MakeTestConfigOrBust(t *testing.T, users ...libkb.NormalizedUsername) *Conf
 func ConfigAsUser(config *ConfigLocal, loggedInUser libkb.NormalizedUsername) *ConfigLocal {
 	c := NewConfigLocal()
 	c.SetLoggerMaker(config.loggerFn)
+	c.SetRootCerts(config.RootCerts())
 
-	pki := config.KBPKI().(*KBPKILocal)
-	loggedInUID, ok := pki.Asserts[string(loggedInUser)]
+	c.SetKeyManager(NewKeyManagerStandard(c))
+
+	daemon := config.KeybaseDaemon().(KeybaseDaemonLocal)
+	loggedInUID, ok := daemon.asserts[string(loggedInUser)]
 	if !ok {
 		panic("bad test: unknown user: " + loggedInUser)
 	}
 
 	var localUsers []LocalUser
-	for _, u := range pki.Users {
+	for _, u := range daemon.localUsers {
 		localUsers = append(localUsers, u)
 	}
-	newPKI := NewKBPKIMemory(loggedInUID, localUsers)
-	c.SetKBPKI(newPKI)
+	newDaemon := NewKeybaseDaemonMemory(loggedInUID, localUsers)
+	c.SetKeybaseDaemon(newDaemon)
+	c.SetKBPKI(NewKBPKIClient(c))
 
 	signingKey := MakeLocalUserSigningKeyOrBust(loggedInUser)
 	cryptPrivateKey := MakeLocalUserCryptPrivateKeyOrBust(loggedInUser)
@@ -181,7 +185,7 @@ func ConfigAsUser(config *ConfigLocal, loggedInUser libkb.NormalizedUsername) *C
 	}
 
 	// see if a local remote server is specified
-	mdServerAddr := os.Getenv(EnvMDServerAddr)
+	mdServerAddr := os.Getenv(EnvTestMDServerAddr)
 
 	var mdServer MDServer
 	var keyServer KeyServer
@@ -254,7 +258,7 @@ func NewFolderWithIDAndWriter(t *testing.T, id TlfID, revision MetadataRevision,
 	rmd.Revision = revision
 	rmd.data.LastWriter = h.Writers[0]
 	if !public {
-		AddNewKeysOrBust(t, rmd, DirKeyBundle{})
+		AddNewKeysOrBust(t, rmd, TLFKeyBundle{})
 	}
 
 	rmds := &RootMetadataSigned{}
@@ -268,10 +272,108 @@ func NewFolderWithIDAndWriter(t *testing.T, id TlfID, revision MetadataRevision,
 }
 
 // AddNewKeysOrBust adds new keys to root metadata and blows up on error.
-func AddNewKeysOrBust(t *testing.T, rmd *RootMetadata, dkb DirKeyBundle) {
-	if err := rmd.AddNewKeys(dkb); err != nil {
+func AddNewKeysOrBust(t *testing.T, rmd *RootMetadata, tkb TLFKeyBundle) {
+	if err := rmd.AddNewKeys(tkb); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// AddDeviceForLocalUserOrBust creates a new device for a user and
+// returns the index for that device.
+func AddDeviceForLocalUserOrBust(t *testing.T, config Config,
+	uid keybase1.UID) int {
+	kbd, ok := config.KeybaseDaemon().(KeybaseDaemonLocal)
+	if !ok {
+		t.Fatalf("Bad keybase daemon")
+	}
+
+	user, ok := kbd.localUsers[uid]
+	if !ok {
+		t.Fatalf("No such user: %s", uid)
+	}
+
+	index := len(user.VerifyingKeys)
+	keySalt := libkb.NormalizedUsername(string(user.Name) + " " + string(index))
+	newVerifyingKey := MakeLocalUserVerifyingKeyOrBust(keySalt)
+	user.VerifyingKeys = append(user.VerifyingKeys, newVerifyingKey)
+	newCryptPublicKey := MakeLocalUserCryptPublicKeyOrBust(keySalt)
+	user.CryptPublicKeys = append(user.CryptPublicKeys, newCryptPublicKey)
+
+	// kbd is just a copy, but kbd.localUsers is the same map
+	kbd.localUsers[uid] = user
+
+	return index
+}
+
+// RevokeDeviceForLocalUserOrBust revokes a device for a user in the
+// given index.
+func RevokeDeviceForLocalUserOrBust(t *testing.T, config Config,
+	uid keybase1.UID, index int) {
+	kbd, ok := config.KeybaseDaemon().(KeybaseDaemonLocal)
+	if !ok {
+		t.Fatalf("Bad keybase daemon")
+	}
+
+	user, ok := kbd.localUsers[uid]
+	if !ok {
+		t.Fatalf("No such user: %s", uid)
+	}
+
+	if index >= len(user.VerifyingKeys) ||
+		(kbd.currentUID == uid && index == user.CurrentCryptPublicKeyIndex) {
+		t.Fatalf("Can't revoke index %d", index)
+	}
+
+	user.VerifyingKeys = append(user.VerifyingKeys[:index],
+		user.VerifyingKeys[index+1:]...)
+	user.CryptPublicKeys = append(user.CryptPublicKeys[:index],
+		user.CryptPublicKeys[index+1:]...)
+
+	if kbd.currentUID == uid && index < user.CurrentCryptPublicKeyIndex {
+		user.CurrentCryptPublicKeyIndex--
+	}
+
+	// kbd is just a copy, but kbd.localUsers is the same map
+	kbd.localUsers[uid] = user
+}
+
+// SwitchDeviceForLocalUserOrBust switches the current user's current device
+func SwitchDeviceForLocalUserOrBust(t *testing.T, config Config, index int) {
+	uid, err := config.KBPKI().GetCurrentUID(context.Background())
+	if err != nil {
+		t.Fatalf("Couldn't get UID: %v", err)
+	}
+
+	kbd, ok := config.KeybaseDaemon().(KeybaseDaemonLocal)
+	if !ok {
+		t.Fatalf("Bad keybase daemon")
+	}
+
+	user, ok := kbd.localUsers[uid]
+	if !ok {
+		t.Fatalf("No such user: %s", uid)
+	}
+
+	if index >= len(user.CryptPublicKeys) {
+		t.Fatalf("Wrong crypt public key index: %d", index)
+	}
+	user.CurrentCryptPublicKeyIndex = index
+
+	// kbd is just a copy, but kbd.localUsers is the same map
+	kbd.localUsers[uid] = user
+
+	crypto, ok := config.Crypto().(*CryptoLocal)
+	if !ok {
+		t.Fatalf("Bad crypto")
+	}
+
+	keySalt := user.Name
+	if index > 0 {
+		keySalt = libkb.NormalizedUsername(string(user.Name) + " " +
+			string(index))
+	}
+	crypto.signingKey = MakeLocalUserSigningKeyOrBust(keySalt)
+	crypto.cryptPrivateKey = MakeLocalUserCryptPrivateKeyOrBust(keySalt)
 }
 
 func testWithCanceledContext(t *testing.T, ctx context.Context,
@@ -293,24 +395,26 @@ func testWithCanceledContext(t *testing.T, ctx context.Context,
 }
 
 // MakeDirRKeyBundle creates a new bundle with a reader key.
-func MakeDirRKeyBundle(uid keybase1.UID, cryptPublicKey CryptPublicKey) DirKeyBundle {
-	return DirKeyBundle{
-		RKeys: map[keybase1.UID]map[keybase1.KID]TLFCryptKeyInfo{
-			uid: map[keybase1.KID]TLFCryptKeyInfo{
+func MakeDirRKeyBundle(uid keybase1.UID, cryptPublicKey CryptPublicKey) TLFKeyBundle {
+	return TLFKeyBundle{
+		RKeys: map[keybase1.UID]UserCryptKeyBundle{
+			uid: UserCryptKeyBundle{
 				cryptPublicKey.KID: TLFCryptKeyInfo{},
 			},
 		},
+		TLFEphemeralPublicKeys: make([]TLFEphemeralPublicKey, 1),
 	}
 }
 
 // MakeDirWKeyBundle creates a new bundle with a writer key.
-func MakeDirWKeyBundle(uid keybase1.UID, cryptPublicKey CryptPublicKey) DirKeyBundle {
-	return DirKeyBundle{
-		WKeys: map[keybase1.UID]map[keybase1.KID]TLFCryptKeyInfo{
-			uid: map[keybase1.KID]TLFCryptKeyInfo{
+func MakeDirWKeyBundle(uid keybase1.UID, cryptPublicKey CryptPublicKey) TLFKeyBundle {
+	return TLFKeyBundle{
+		WKeys: map[keybase1.UID]UserCryptKeyBundle{
+			uid: UserCryptKeyBundle{
 				cryptPublicKey.KID: TLFCryptKeyInfo{},
 			},
 		},
+		TLFEphemeralPublicKeys: make([]TLFEphemeralPublicKey, 1),
 	}
 }
 

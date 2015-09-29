@@ -74,7 +74,7 @@ type RootMetadata struct {
 	Writers []keybase1.UID
 	// For private TLFs. Key generations for this metadata. The
 	// most recent one is last in the array.
-	Keys []DirKeyBundle
+	Keys []TLFKeyBundle
 	// Pointer to the previous root block ID
 	PrevRoot MdID
 	// The directory ID, signed over to make verification easier
@@ -100,8 +100,8 @@ type RootMetadata struct {
 }
 
 // GetKeyGeneration returns the current key generation for the current block.
-func (md *RootMetadata) GetKeyGeneration() int {
-	return len(md.Keys)
+func (md *RootMetadata) GetKeyGeneration() KeyGen {
+	return KeyGen(len(md.Keys))
 }
 
 // MergedStatus returns the status of this update -- has it been
@@ -154,9 +154,9 @@ func NewRootMetadata(d *TlfHandle, id TlfID) *RootMetadata {
 	if id.IsPublic() {
 		writers = make([]keybase1.UID, 0, 1)
 	}
-	var keys []DirKeyBundle
+	var keys []TLFKeyBundle
 	if id.IsPublic() {
-		keys = make([]DirKeyBundle, 0, 1)
+		keys = make([]TLFKeyBundle, 0, 1)
 	}
 	md := RootMetadata{
 		Writers: writers,
@@ -184,7 +184,7 @@ func (md RootMetadata) DeepCopy() RootMetadata {
 	// no need to copy the serialized metadata, if it exists
 	newMd.Writers = make([]keybase1.UID, len(md.Writers))
 	copy(newMd.Writers, md.Writers)
-	newMd.Keys = make([]DirKeyBundle, len(md.Keys))
+	newMd.Keys = make([]TLFKeyBundle, len(md.Keys))
 	for i, k := range md.Keys {
 		newMd.Keys[i] = k.DeepCopy()
 	}
@@ -196,9 +196,9 @@ func (md RootMetadata) DeepCopy() RootMetadata {
 	return newMd
 }
 
-func (md RootMetadata) getDirKeyBundle(keyGen KeyGen) (*DirKeyBundle, error) {
+func (md RootMetadata) getTLFKeyBundle(keyGen KeyGen) (*TLFKeyBundle, error) {
 	if md.ID.IsPublic() {
-		return nil, InvalidPublicTLFOperation{md.ID, "getDirKeyBundle"}
+		return nil, InvalidPublicTLFOperation{md.ID, "getTLFKeyBundle"}
 	}
 
 	if keyGen < FirstValidKeyGen {
@@ -216,29 +216,25 @@ func (md RootMetadata) getDirKeyBundle(keyGen KeyGen) (*DirKeyBundle, error) {
 func (md RootMetadata) GetTLFCryptKeyInfo(keyGen KeyGen, user keybase1.UID,
 	currentCryptPublicKey CryptPublicKey) (
 	info TLFCryptKeyInfo, ok bool, err error) {
-	dkb, err := md.getDirKeyBundle(keyGen)
+	tkb, err := md.getTLFKeyBundle(keyGen)
 	if err != nil {
 		return
 	}
 
-	key := currentCryptPublicKey.KID
-	if u, ok1 := dkb.WKeys[user]; ok1 {
-		info, ok = u[key]
-	} else if u, ok1 = dkb.RKeys[user]; ok1 {
-		info, ok = u[key]
-	}
-	return
+	return tkb.GetTLFCryptKeyInfo(user, currentCryptPublicKey)
 }
 
-// GetTLFEphemeralPublicKey returns the ephemeral public key for this
-// top-level folder.
+// GetTLFEphemeralPublicKey returns the ephemeral public key used for
+// the TLFCryptKeyInfo for the given user and device.
 func (md RootMetadata) GetTLFEphemeralPublicKey(
-	keyGen KeyGen) (TLFEphemeralPublicKey, error) {
-	dkb, err := md.getDirKeyBundle(keyGen)
+	keyGen KeyGen, user keybase1.UID,
+	currentCryptPublicKey CryptPublicKey) (TLFEphemeralPublicKey, error) {
+	tkb, err := md.getTLFKeyBundle(keyGen)
 	if err != nil {
 		return TLFEphemeralPublicKey{}, err
 	}
-	return dkb.TLFEphemeralPublicKey, nil
+
+	return tkb.GetTLFEphemeralPublicKey(user, currentCryptPublicKey)
 }
 
 // LatestKeyGeneration returns the newest key generation for this RootMetadata.
@@ -254,8 +250,8 @@ func (md RootMetadata) LatestKeyGeneration() KeyGen {
 }
 
 // AddNewKeys makes a new key generation for this RootMetadata using the
-// given DirKeyBundle.
-func (md *RootMetadata) AddNewKeys(keys DirKeyBundle) error {
+// given TLFKeyBundle.
+func (md *RootMetadata) AddNewKeys(keys TLFKeyBundle) error {
 	if md.ID.IsPublic() {
 		return InvalidPublicTLFOperation{md.ID, "AddNewKeys"}
 	}
@@ -276,15 +272,15 @@ func (md *RootMetadata) GetTlfHandle() *TlfHandle {
 		h.Writers = make([]keybase1.UID, len(md.Writers))
 		copy(h.Writers, md.Writers)
 	} else {
-		dkb := &md.Keys[len(md.Keys)-1]
-		for w := range dkb.WKeys {
+		tkb := &md.Keys[len(md.Keys)-1]
+		for w := range tkb.WKeys {
 			h.Writers = append(h.Writers, w)
 		}
-		for r := range dkb.RKeys {
+		for r := range tkb.RKeys {
 			// TODO: Return an error instead if r is
 			// PublicUID. Maybe return an error if r is in
 			// WKeys also.
-			if _, ok := dkb.WKeys[r]; !ok &&
+			if _, ok := tkb.WKeys[r]; !ok &&
 				r != keybase1.PublicUID {
 				h.Readers = append(h.Readers, r)
 			}

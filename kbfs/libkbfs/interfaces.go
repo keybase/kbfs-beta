@@ -212,6 +212,9 @@ type KBFSOps interface {
 	// folder-branch. TODO: remove this once we have automatic
 	// conflict resolution.
 	UnstageForTesting(ctx context.Context, folderBranch FolderBranch) error
+	// RekeyForTesting rekeys this folder. TODO: remove this once we
+	// have automatic rekeying.
+	RekeyForTesting(ctx context.Context, folderBranch FolderBranch) error
 	// SyncFromServer blocks until the local client has contacted the
 	// server and guaranteed that all known updates for the given
 	// top-level folder have been applied locally (and notifications
@@ -220,6 +223,41 @@ type KBFSOps interface {
 	SyncFromServer(ctx context.Context, folderBranch FolderBranch) error
 	// Shutdown is called to clean up any resources associated with
 	// this KBFSOps instance.
+	Shutdown()
+}
+
+// KeybaseDaemon is an interface for communicating with the local
+// Keybase daemon.
+type KeybaseDaemon interface {
+	// Identify, given an assertion, returns a UserInfo struct
+	// with the user that matches that assertion, or an error
+	// otherwise.
+	Identify(ctx context.Context, assertion string) (UserInfo, error)
+
+	// CurrentUID returns the UID of the current session, or an
+	// error otherwise. This should be faster than calling
+	// CurrentSession.
+	CurrentUID(ctx context.Context, sessionID int) (keybase1.UID, error)
+
+	// CurrentSession returns a SessionInfo struct with all the
+	// information for the current session, or an error otherwise.
+	CurrentSession(ctx context.Context, sessionID int) (SessionInfo, error)
+
+	// FavoriteAdd adds the given folder to the list of favorites.
+	FavoriteAdd(ctx context.Context, folder keybase1.Folder) error
+
+	// FavoriteAdd removes the given folder from the list of
+	// favorites.
+	FavoriteDelete(ctx context.Context, folder keybase1.Folder) error
+
+	// FavoriteList returns the current list of favorites.
+	FavoriteList(ctx context.Context, sessionID int) ([]keybase1.Folder, error)
+
+	// TODO: Add CryptoClient methods, too.
+
+	// Shutdown frees any resources associated with this
+	// instance. No other methods may be called after this is
+	// called.
 	Shutdown()
 }
 
@@ -252,6 +290,9 @@ type KBPKI interface {
 	GetCryptPublicKeys(ctx context.Context, uid keybase1.UID) (
 		[]CryptPublicKey, error)
 
+	// TODO: Split the methods below off into a separate
+	// FavoriteOps interface.
+
 	// FavoriteAdd adds folder to the list of the logged in user's
 	// favorite folders.  It is idempotent.
 	FavoriteAdd(ctx context.Context, folder keybase1.Folder) error
@@ -263,9 +304,6 @@ type KBPKI interface {
 	// FavoriteList returns the list of all favorite folders for
 	// the logged in user.
 	FavoriteList(ctx context.Context) ([]keybase1.Folder, error)
-
-	// Shutdown is called to free any KBPKI resources.
-	Shutdown()
 }
 
 // KeyManager fetches and constructs the keys needed for KBFS file
@@ -289,9 +327,15 @@ type KeyManager interface {
 	GetTLFCryptKeyForBlockDecryption(ctx context.Context, md *RootMetadata,
 		blockPtr BlockPointer) (TLFCryptKey, error)
 
-	// Rekey creates a new epoch of keys for the given TLF, which
-	// must not be public.
-	Rekey(ctx context.Context, md *RootMetadata) error
+	// Rekey checks the given MD object (which must not represent a
+	// public TLF) against the current set of device keys for all
+	// valid readers and writers.  If there are any new devices, it
+	// updates all existing key generations to include the new
+	// devices.  If there are devices that have been removed, it
+	// creates a new epoch of keys for the TLF.  If no devices have
+	// changed, or if there was an error, it returns false.
+	// Otherwise, it returns true.
+	Rekey(ctx context.Context, md *RootMetadata) (bool, error)
 }
 
 // ReportingLevel indicate the severity of a reported event.
@@ -792,6 +836,8 @@ type Config interface {
 	SetBlockServer(BlockServer)
 	KeyServer() KeyServer
 	SetKeyServer(KeyServer)
+	KeybaseDaemon() KeybaseDaemon
+	SetKeybaseDaemon(KeybaseDaemon)
 	BlockSplitter() BlockSplitter
 	SetBlockSplitter(BlockSplitter)
 	Notifier() Notifier
@@ -800,8 +846,8 @@ type Config interface {
 	// ReqsBufSize indicates the number of read or write operations
 	// that can be buffered per folder
 	ReqsBufSize() int
-	CACert() []byte
-	SetCACert([]byte)
+	RootCerts() []byte
+	SetRootCerts([]byte)
 	MakeLogger(module string) logger.Logger
 	SetLoggerMaker(func(module string) logger.Logger)
 	// MetricsRegistry may be nil, which should be interpreted as

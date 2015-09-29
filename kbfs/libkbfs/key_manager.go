@@ -1,6 +1,7 @@
 package libkbfs
 
 import (
+	"github.com/keybase/client/go/logger"
 	keybase1 "github.com/keybase/client/protocol/go"
 	"golang.org/x/net/context"
 )
@@ -10,6 +11,12 @@ import (
 // necessary to run KBFS.
 type KeyManagerStandard struct {
 	config Config
+	log    logger.Logger
+}
+
+// NewKeyManagerStandard returns a new KeyManagerStandard
+func NewKeyManagerStandard(config Config) *KeyManagerStandard {
+	return &KeyManagerStandard{config, config.MakeLogger("")}
 }
 
 // GetTLFCryptKeyForEncryption implements the KeyManager interface for
@@ -81,7 +88,8 @@ func (km *KeyManagerStandard) getTLFCryptKey(ctx context.Context,
 		return
 	}
 
-	ePublicKey, err := md.GetTLFEphemeralPublicKey(keyGen)
+	ePublicKey, err := md.GetTLFEphemeralPublicKey(keyGen, uid,
+		currentCryptPublicKey)
 	if err != nil {
 		return
 	}
@@ -113,130 +121,195 @@ func (km *KeyManagerStandard) getTLFCryptKey(ctx context.Context,
 	return
 }
 
-func (km *KeyManagerStandard) secretKeysForUID(ctx context.Context,
-	md *RootMetadata, uid keybase1.UID, tlfCryptKey TLFCryptKey,
-	ePrivKey TLFEphemeralPrivateKey) (
-	clientMap map[keybase1.KID]TLFCryptKeyInfo,
-	serverMap map[keybase1.KID]TLFCryptKeyServerHalf, err error) {
-	defer func() {
-		if err != nil {
-			clientMap = nil
-			serverMap = nil
-		}
-	}()
-
-	clientMap = make(map[keybase1.KID]TLFCryptKeyInfo)
-	serverMap = make(map[keybase1.KID]TLFCryptKeyServerHalf)
-
-	if md.ID.IsPublic() {
-		// no per-device keys for public directories
-		// TODO: Handle this at a higher level.
-		return
-	}
-
-	crypto := km.config.Crypto()
-
-	publicKeys, err := km.config.KBPKI().GetCryptPublicKeys(ctx, uid)
-	if err != nil {
-		return
-	}
-
-	// for each device:
-	//    * create a new random server half
-	//    * mask it with the key to get the client half
-	//    * encrypt the client half
-	//
-	// TODO: parallelize
-	for _, k := range publicKeys {
-		var serverHalf TLFCryptKeyServerHalf
-		serverHalf, err = crypto.MakeRandomTLFCryptKeyServerHalf()
-		if err != nil {
-			return
-		}
-
-		var clientHalf TLFCryptKeyClientHalf
-		clientHalf, err = crypto.MaskTLFCryptKey(serverHalf, tlfCryptKey)
-		if err != nil {
-			return
-		}
-
-		var encryptedClientHalf EncryptedTLFCryptKeyClientHalf
-		encryptedClientHalf, err = crypto.EncryptTLFCryptKeyClientHalf(ePrivKey, k, clientHalf)
-		if err != nil {
-			return
-		}
-
-		var serverHalfID TLFCryptKeyServerHalfID
-		serverHalfID, err = crypto.GetTLFCryptKeyServerHalfID(uid, k.KID, serverHalf)
-		if err != nil {
-			return
-		}
-
-		keyInfo := TLFCryptKeyInfo{
-			ClientHalf:   encryptedClientHalf,
-			ServerHalfID: serverHalfID,
-		}
-		clientMap[k.KID] = keyInfo
-		serverMap[k.KID] = serverHalf
-	}
-
-	return
-}
-
-// Rekey implements the KeyManager interface for KeyManagerStandard.
-func (km *KeyManagerStandard) Rekey(ctx context.Context,
-	md *RootMetadata) error {
-	if md.ID.IsPublic() {
-		return InvalidPublicTLFOperation{md.ID, "rekey"}
-	}
-
-	crypto := km.config.Crypto()
-	pubKey, privKey, ePubKey, ePrivKey, tlfCryptKey, err := crypto.MakeRandomTLFKeys()
+func (km *KeyManagerStandard) updateKeyBundle(ctx context.Context,
+	md *RootMetadata, keyGen KeyGen, wKeys map[keybase1.UID][]CryptPublicKey,
+	rKeys map[keybase1.UID][]CryptPublicKey, ePubKey TLFEphemeralPublicKey,
+	ePrivKey TLFEphemeralPrivateKey, tlfCryptKey TLFCryptKey) error {
+	tkb, err := md.getTLFKeyBundle(keyGen)
 	if err != nil {
 		return err
 	}
 
-	handle := md.GetTlfHandle()
-	newClientKeys := DirKeyBundle{
-		WKeys:                 make(map[keybase1.UID]map[keybase1.KID]TLFCryptKeyInfo),
-		RKeys:                 make(map[keybase1.UID]map[keybase1.KID]TLFCryptKeyInfo),
-		TLFPublicKey:          pubKey,
-		TLFEphemeralPublicKey: ePubKey,
-	}
-	newServerKeys := make(map[keybase1.UID]map[keybase1.KID]TLFCryptKeyServerHalf)
-
-	// TODO: parallelize
-	for _, w := range handle.Writers {
-		clientMap, serverMap, err := km.secretKeysForUID(ctx, md, w, tlfCryptKey, ePrivKey)
-		if err != nil {
-			return err
-		}
-		newClientKeys.WKeys[w] = clientMap
-		newServerKeys[w] = serverMap
-	}
-	for _, r := range handle.Readers {
-		clientMap, serverMap, err := km.secretKeysForUID(ctx, md, r, tlfCryptKey, ePrivKey)
-		if err != nil {
-			return err
-		}
-		newClientKeys.RKeys[r] = clientMap
-		newServerKeys[r] = serverMap
+	newServerKeys, err := tkb.fillInDevices(km.config.Crypto(), wKeys, rKeys,
+		ePubKey, ePrivKey, tlfCryptKey)
+	if err != nil {
+		return err
 	}
 
 	// Push new keys to the key server.
-	if err = km.config.KeyOps().PutTLFCryptKeyServerHalves(ctx, newServerKeys); err != nil {
+	if err = km.config.KeyOps().
+		PutTLFCryptKeyServerHalves(ctx, newServerKeys); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+func (km *KeyManagerStandard) checkForNewDevice(ctx context.Context,
+	md *RootMetadata, info map[keybase1.UID]UserCryptKeyBundle,
+	expectedKeys map[keybase1.UID][]CryptPublicKey) bool {
+	for u, keys := range expectedKeys {
+		kids, ok := info[u]
+		if !ok {
+			// Currently there probably shouldn't be any new users
+			// in the handle, but don't error just in case we ever
+			// want to support that in the future.
+			km.log.CInfof(ctx, "Rekey %s: adding new user %s", md.ID, u)
+			return true
+		}
+		for _, k := range keys {
+			if _, ok := kids[k.KID]; !ok {
+				km.log.CInfof(ctx, "Rekey %s: adding new device %s for user %s",
+					md.ID, k.KID, u)
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (km *KeyManagerStandard) checkForRemovedDevice(ctx context.Context,
+	md *RootMetadata, info map[keybase1.UID]UserCryptKeyBundle,
+	expectedKeys map[keybase1.UID][]CryptPublicKey) bool {
+	for u, kids := range info {
+		keys, ok := expectedKeys[u]
+		if !ok {
+			// Currently there probably shouldn't be any users removed
+			// from the handle, but don't error just in case we ever
+			// want to support that in the future.
+			km.log.CInfof(ctx, "Rekey %s: removing user %s", md.ID, u)
+			return true
+		}
+		keyLookup := make(map[keybase1.KID]bool)
+		for _, key := range keys {
+			keyLookup[key.KID] = true
+		}
+		for kid := range kids {
+			// Make sure every kid has an expected key
+			if !keyLookup[kid] {
+				km.log.CInfof(ctx,
+					"Rekey %s: removing device %s for user %s", md.ID, kid, u)
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Rekey implements the KeyManager interface for KeyManagerStandard.
+func (km *KeyManagerStandard) Rekey(ctx context.Context, md *RootMetadata) (
+	rekeyDone bool, err error) {
+	km.log.CDebugf(ctx, "Rekey %s", md.ID)
+	defer func() { km.log.CDebugf(ctx, "Rekey %s done: %v", md.ID, err) }()
+
+	currKeyGen := md.GetKeyGeneration()
+	if md.ID.IsPublic() || currKeyGen == PublicKeyGen {
+		return false, InvalidPublicTLFOperation{md.ID, "rekey"}
+	}
+
+	handle := md.GetTlfHandle()
+
+	// Decide whether we have a new device and/or a revoked device, or neither.
+	// Look up all the device public keys for all writers and readers first.
+	wKeys := make(map[keybase1.UID][]CryptPublicKey)
+	rKeys := make(map[keybase1.UID][]CryptPublicKey)
+
+	// TODO: parallelize
+	for _, w := range handle.Writers {
+		publicKeys, err := km.config.KBPKI().GetCryptPublicKeys(ctx, w)
+		if err != nil {
+			return false, err
+		}
+		wKeys[w] = publicKeys
+	}
+	for _, r := range handle.Readers {
+		publicKeys, err := km.config.KBPKI().GetCryptPublicKeys(ctx, r)
+		if err != nil {
+			return false, err
+		}
+		rKeys[r] = publicKeys
+	}
+
+	// If there's at least one revoked device, add a new key generation
+	addNewDevice := false
+	incKeyGen := false
+	if currKeyGen < FirstValidKeyGen {
+		incKeyGen = true
+	} else {
+		// See if there is at least one new device in relation to the
+		// current key bundle
+		tkb, err := md.getTLFKeyBundle(currKeyGen)
+		if err != nil {
+			return false, err
+		}
+
+		addNewDevice = km.checkForNewDevice(ctx, md, tkb.WKeys, wKeys) ||
+			km.checkForNewDevice(ctx, md, tkb.RKeys, rKeys)
+
+		incKeyGen = km.checkForRemovedDevice(ctx, md, tkb.WKeys, wKeys) ||
+			km.checkForRemovedDevice(ctx, md, tkb.RKeys, rKeys)
+	}
+
+	if !addNewDevice && !incKeyGen {
+		km.log.CDebugf(ctx, "Skipping rekeying %s: no new or removed devices",
+			md.ID)
+		return false, nil
+	}
+
+	// For addNewDevice, we only use the ephemeral keys; incKeyGen
+	// needs all of them.  ePrivKey will be discarded at the end of the
+	// function in either case.
+	//
+	// TODO: split MakeRandomTLFKeys into two separate methods.
+	pubKey, privKey, ePubKey, ePrivKey, tlfCryptKey, err :=
+		km.config.Crypto().MakeRandomTLFKeys()
+	if err != nil {
+		return false, err
+	}
+
+	// If there's at least one new device, add that device to every key bundle.
+	if addNewDevice {
+		for keyGen := KeyGen(FirstValidKeyGen); keyGen <= currKeyGen; keyGen++ {
+			currTlfCryptKey, err := km.getTLFCryptKey(ctx, md, keyGen)
+			if err != nil {
+				return false, err
+			}
+
+			err = km.updateKeyBundle(ctx, md, keyGen, wKeys, rKeys,
+				ePubKey, ePrivKey, currTlfCryptKey)
+			if err != nil {
+				return false, err
+			}
+		}
+	}
+
+	if !incKeyGen {
+		// we're done!
+		return true, nil
+	}
+
+	newClientKeys := TLFKeyBundle{
+		WKeys:        make(map[keybase1.UID]UserCryptKeyBundle),
+		RKeys:        make(map[keybase1.UID]UserCryptKeyBundle),
+		TLFPublicKey: pubKey,
+		// TLFEphemeralPublicKeys will be filled in by updateKeyBundle
+	}
 	err = md.AddNewKeys(newClientKeys)
 	if err != nil {
-		return err
+		return false, err
 	}
-
-	// Discard ePrivKey.
-
+	currKeyGen = md.GetKeyGeneration()
+	err = km.updateKeyBundle(ctx, md, currKeyGen, wKeys, rKeys, ePubKey,
+		ePrivKey, tlfCryptKey)
+	if err != nil {
+		return false, err
+	}
 	md.data.TLFPrivateKey = privKey
 
 	// Might as well cache the TLFCryptKey while we're at it.
-	return km.config.KeyCache().PutTLFCryptKey(md.ID, md.LatestKeyGeneration(), tlfCryptKey)
+	err = km.config.KeyCache().PutTLFCryptKey(md.ID, currKeyGen, tlfCryptKey)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }

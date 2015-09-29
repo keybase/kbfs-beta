@@ -179,7 +179,7 @@ func makeIDAndRMD(t *testing.T, config *ConfigMock) (
 	keybase1.UID, TlfID, *RootMetadata) {
 	uid, id, h := makeID(t, config, false)
 	rmd := NewRootMetadataForTest(h, id)
-	AddNewKeysOrBust(t, rmd, DirKeyBundle{})
+	AddNewKeysOrBust(t, rmd, TLFKeyBundle{})
 
 	ops := getOps(config, id)
 	ops.head = rmd
@@ -259,8 +259,8 @@ func fillInNewMD(t *testing.T, config *ConfigMock, rmd *RootMetadata) (
 	if !rmd.ID.IsPublic() {
 		config.mockKeyman.EXPECT().Rekey(gomock.Any(), rmd).
 			Do(func(ctx context.Context, rmd *RootMetadata) {
-			AddNewKeysOrBust(t, rmd, DirKeyBundle{})
-		}).Return(nil)
+			AddNewKeysOrBust(t, rmd, TLFKeyBundle{})
+		}).Return(true, nil)
 	}
 	rootPtr = BlockPointer{
 		ID:      fakeBlockID(42),
@@ -3365,6 +3365,11 @@ func testSyncDirtySuccess(t *testing.T, isUnmerged bool) {
 	blocks := make([]BlockID, 2)
 	var expectedPath path
 	if isUnmerged {
+		// Turn off the conflict resolver to avoid unexpected mock
+		// calls.  Recreate the input channel to make sure the later
+		// Shutdown() call works.
+		ops.cr.Shutdown()
+		ops.cr.inputChan = make(chan conflictInput)
 		expectedPath, _ = expectSyncBlockUnmerged(t, config, nil, uid, id,
 			"", p, rmd, false, 0, 0, 0, &newRmd, blocks)
 	} else {

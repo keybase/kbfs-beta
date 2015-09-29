@@ -409,6 +409,16 @@ func (_mr *_MockKBFSOpsRecorder) UnstageForTesting(arg0, arg1 interface{}) *gomo
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "UnstageForTesting", arg0, arg1)
 }
 
+func (_m *MockKBFSOps) RekeyForTesting(ctx context.Context, folderBranch FolderBranch) error {
+	ret := _m.ctrl.Call(_m, "RekeyForTesting", ctx, folderBranch)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+func (_mr *_MockKBFSOpsRecorder) RekeyForTesting(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "RekeyForTesting", arg0, arg1)
+}
+
 func (_m *MockKBFSOps) SyncFromServer(ctx context.Context, folderBranch FolderBranch) error {
 	ret := _m.ctrl.Call(_m, "SyncFromServer", ctx, folderBranch)
 	ret0, _ := ret[0].(error)
@@ -424,6 +434,88 @@ func (_m *MockKBFSOps) Shutdown() {
 }
 
 func (_mr *_MockKBFSOpsRecorder) Shutdown() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "Shutdown")
+}
+
+// Mock of KeybaseDaemon interface
+type MockKeybaseDaemon struct {
+	ctrl     *gomock.Controller
+	recorder *_MockKeybaseDaemonRecorder
+}
+
+// Recorder for MockKeybaseDaemon (not exported)
+type _MockKeybaseDaemonRecorder struct {
+	mock *MockKeybaseDaemon
+}
+
+func NewMockKeybaseDaemon(ctrl *gomock.Controller) *MockKeybaseDaemon {
+	mock := &MockKeybaseDaemon{ctrl: ctrl}
+	mock.recorder = &_MockKeybaseDaemonRecorder{mock}
+	return mock
+}
+
+func (_m *MockKeybaseDaemon) EXPECT() *_MockKeybaseDaemonRecorder {
+	return _m.recorder
+}
+
+func (_m *MockKeybaseDaemon) Identify(ctx context.Context, assertion string) (UserInfo, error) {
+	ret := _m.ctrl.Call(_m, "Identify", ctx, assertion)
+	ret0, _ := ret[0].(UserInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+func (_mr *_MockKeybaseDaemonRecorder) Identify(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "Identify", arg0, arg1)
+}
+
+func (_m *MockKeybaseDaemon) CurrentSession(ctx context.Context, sessionID int) (SessionInfo, error) {
+	ret := _m.ctrl.Call(_m, "CurrentSession", ctx, sessionID)
+	ret0, _ := ret[0].(SessionInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+func (_mr *_MockKeybaseDaemonRecorder) CurrentSession(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "CurrentSession", arg0, arg1)
+}
+
+func (_m *MockKeybaseDaemon) FavoriteAdd(ctx context.Context, folder go0.Folder) error {
+	ret := _m.ctrl.Call(_m, "FavoriteAdd", ctx, folder)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+func (_mr *_MockKeybaseDaemonRecorder) FavoriteAdd(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "FavoriteAdd", arg0, arg1)
+}
+
+func (_m *MockKeybaseDaemon) FavoriteDelete(ctx context.Context, folder go0.Folder) error {
+	ret := _m.ctrl.Call(_m, "FavoriteDelete", ctx, folder)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+func (_mr *_MockKeybaseDaemonRecorder) FavoriteDelete(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "FavoriteDelete", arg0, arg1)
+}
+
+func (_m *MockKeybaseDaemon) FavoriteList(ctx context.Context, sessionID int) ([]go0.Folder, error) {
+	ret := _m.ctrl.Call(_m, "FavoriteList", ctx, sessionID)
+	ret0, _ := ret[0].([]go0.Folder)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+func (_mr *_MockKeybaseDaemonRecorder) FavoriteList(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "FavoriteList", arg0, arg1)
+}
+
+func (_m *MockKeybaseDaemon) Shutdown() {
+	_m.ctrl.Call(_m, "Shutdown")
+}
+
+func (_mr *_MockKeybaseDaemonRecorder) Shutdown() *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "Shutdown")
 }
 
@@ -555,14 +647,6 @@ func (_mr *_MockKBPKIRecorder) FavoriteList(arg0 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "FavoriteList", arg0)
 }
 
-func (_m *MockKBPKI) Shutdown() {
-	_m.ctrl.Call(_m, "Shutdown")
-}
-
-func (_mr *_MockKBPKIRecorder) Shutdown() *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "Shutdown")
-}
-
 // Mock of KeyManager interface
 type MockKeyManager struct {
 	ctrl     *gomock.Controller
@@ -617,10 +701,11 @@ func (_mr *_MockKeyManagerRecorder) GetTLFCryptKeyForBlockDecryption(arg0, arg1,
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetTLFCryptKeyForBlockDecryption", arg0, arg1, arg2)
 }
 
-func (_m *MockKeyManager) Rekey(ctx context.Context, md *RootMetadata) error {
+func (_m *MockKeyManager) Rekey(ctx context.Context, md *RootMetadata) (bool, error) {
 	ret := _m.ctrl.Call(_m, "Rekey", ctx, md)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 func (_mr *_MockKeyManagerRecorder) Rekey(arg0, arg1 interface{}) *gomock.Call {
@@ -2021,6 +2106,24 @@ func (_mr *_MockConfigRecorder) SetKeyServer(arg0 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "SetKeyServer", arg0)
 }
 
+func (_m *MockConfig) KeybaseDaemon() KeybaseDaemon {
+	ret := _m.ctrl.Call(_m, "KeybaseDaemon")
+	ret0, _ := ret[0].(KeybaseDaemon)
+	return ret0
+}
+
+func (_mr *_MockConfigRecorder) KeybaseDaemon() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "KeybaseDaemon")
+}
+
+func (_m *MockConfig) SetKeybaseDaemon(_param0 KeybaseDaemon) {
+	_m.ctrl.Call(_m, "SetKeybaseDaemon", _param0)
+}
+
+func (_mr *_MockConfigRecorder) SetKeybaseDaemon(arg0 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "SetKeybaseDaemon", arg0)
+}
+
 func (_m *MockConfig) BlockSplitter() BlockSplitter {
 	ret := _m.ctrl.Call(_m, "BlockSplitter")
 	ret0, _ := ret[0].(BlockSplitter)
@@ -2077,22 +2180,22 @@ func (_mr *_MockConfigRecorder) ReqsBufSize() *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "ReqsBufSize")
 }
 
-func (_m *MockConfig) CACert() []byte {
-	ret := _m.ctrl.Call(_m, "CACert")
+func (_m *MockConfig) RootCerts() []byte {
+	ret := _m.ctrl.Call(_m, "RootCerts")
 	ret0, _ := ret[0].([]byte)
 	return ret0
 }
 
-func (_mr *_MockConfigRecorder) CACert() *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "CACert")
+func (_mr *_MockConfigRecorder) RootCerts() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "RootCerts")
 }
 
-func (_m *MockConfig) SetCACert(_param0 []byte) {
-	_m.ctrl.Call(_m, "SetCACert", _param0)
+func (_m *MockConfig) SetRootCerts(_param0 []byte) {
+	_m.ctrl.Call(_m, "SetRootCerts", _param0)
 }
 
-func (_mr *_MockConfigRecorder) SetCACert(arg0 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "SetCACert", arg0)
+func (_mr *_MockConfigRecorder) SetRootCerts(arg0 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "SetRootCerts", arg0)
 }
 
 func (_m *MockConfig) MakeLogger(module string) logger.Logger {
