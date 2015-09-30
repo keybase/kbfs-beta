@@ -801,7 +801,7 @@ func (fbo *FolderBranchOps) getEntryLocked(ctx context.Context,
 // Lookup implements the KBFSOps interface for FolderBranchOps
 func (fbo *FolderBranchOps) Lookup(ctx context.Context, dir Node, name string) (
 	node Node, de DirEntry, err error) {
-	fbo.log.CDebugf(ctx, "Lookup %v %p", dir.GetID(), name)
+	fbo.log.CDebugf(ctx, "Lookup %p %s", dir.GetID(), name)
 	defer func() { fbo.log.CDebugf(ctx, "Done: %v", err) }()
 
 	err = fbo.checkNode(dir)
@@ -2508,7 +2508,7 @@ func (fbo *FolderBranchOps) setExLocked(
 // SetEx implements the KBFSOps interface for FolderBranchOps
 func (fbo *FolderBranchOps) SetEx(
 	ctx context.Context, file Node, ex bool) (err error) {
-	fbo.log.CDebugf(ctx, "SetEx %p %v", file.GetID(), ex)
+	fbo.log.CDebugf(ctx, "SetEx %p %t", file.GetID(), ex)
 	defer func() { fbo.log.CDebugf(ctx, "Done: %v", err) }()
 
 	err = fbo.checkNode(file)
@@ -2759,11 +2759,9 @@ func (fbo *FolderBranchOps) syncLocked(ctx context.Context, file path) (
 					return true, err
 				}
 
-				// put the new block in the cache, but defer the
-				// finalize until after the new path is ready, in case
-				// anyone tries to read the dirty file in the
-				// meantime.
-				bcache.Put(newInfo.BlockPointer, fbo.id(), block)
+				// Defer the DeleteDirty until after the new path is
+				// ready, in case anyone tries to read the dirty file
+				// in the meantime.
 				localPtr := ptr.BlockPointer
 				deferredDirtyDeletes =
 					append(deferredDirtyDeletes, func() error {
