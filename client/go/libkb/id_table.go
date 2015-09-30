@@ -346,11 +346,8 @@ func ParseWebServiceBinding(base GenericChainLink) (ret RemoteProofChainLink, e 
 	var sptf string
 	ptf := base.packed.AtKey("proof_text_full")
 	if !ptf.IsNil() {
-		var err error
-		sptf, err = ptf.GetString()
-		if err == nil {
-			G.Log.Debug("Found proof_text_full: %s", sptf)
-		}
+		// TODO: add test that returning on err here is ok:
+		sptf, _ = ptf.GetString()
 	}
 
 	if jw.IsNil() {
@@ -566,13 +563,6 @@ func (s *SibkeyChainLink) insertIntoTable(tab *IdentityTable) {
 // VerifyReverseSig checks a SibkeyChainLink's reverse signature using the ComputedKeyFamily provided.
 func (s *SibkeyChainLink) VerifyReverseSig(ckf ComputedKeyFamily) (err error) {
 	var key GenericKey
-
-	if len(s.reverseSig) == 0 {
-		G.Log.Warning("!! Sibkey delegations without reverse sigs are soon to be retired!!")
-		G.Log.Warning("!! We're leaving them on for now for testing purposes!!")
-		G.Log.Warning("!! SibkeyChainLink: %s (device: %+v)", s.ToDisplayString(), s.device)
-		return
-	}
 
 	if key, err = ckf.FindKeyWithKIDUnsafe(s.GetDelegatedKid()); err != nil {
 		return err

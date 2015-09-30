@@ -13,9 +13,8 @@ import (
 
 func NewCmdSignup(cl *libcmdline.CommandLine) cli.Command {
 	cmd := cli.Command{
-		Name:        "signup",
-		Usage:       "keybase signup",
-		Description: "Signup for a new account.",
+		Name:  "signup",
+		Usage: "Signup for a new account",
 		Action: func(c *cli.Context) {
 			cl.ChooseCommand(&CmdSignup{}, "signup", c)
 		},
@@ -27,6 +26,10 @@ func NewCmdSignup(cl *libcmdline.CommandLine) cli.Command {
 			cli.StringFlag{
 				Name:  "email",
 				Usage: "Specify an account email.",
+			},
+			cli.StringFlag{
+				Name:  "username",
+				Usage: "Specify a username.",
 			},
 		},
 	}
@@ -72,18 +75,8 @@ func (s *CmdSignup) ParseArgv(ctx *cli.Context) error {
 	}
 
 	s.defaultEmail = ctx.String("email")
-
 	s.defaultUsername = ctx.String("username")
-	if s.defaultUsername == "" {
-		cl := G.Env.GetCommandLine()
-		s.defaultUsername = cl.GetUsername().String()
-	}
-
 	s.defaultPassphrase = ctx.String("passphrase")
-	if s.defaultPassphrase == "" {
-		s.defaultPassphrase = "home computer"
-	}
-
 	s.defaultDevice = ctx.String("device")
 	if s.defaultDevice == "" {
 		s.defaultDevice = "home computer"
@@ -367,7 +360,6 @@ func (s *CmdSignup) initClient() error {
 	}
 
 	protocols := []rpc2.Protocol{
-		NewLogUIProtocol(),
 		NewSecretUIProtocol(),
 	}
 	if s.doPrompt {

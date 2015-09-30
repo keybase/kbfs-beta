@@ -10,26 +10,22 @@ import (
 
 func NewCmdVersion(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "version",
-		Usage:       "keybase version",
-		Description: "Print out version and build information.",
+		Name:  "version",
+		Usage: "Print out version and build information",
 		Flags: []cli.Flag{
-			cli.BoolFlag{
-				Name:  "v, verbose",
-				Usage: "Show extra info.",
-			},
-			cli.BoolFlag{
-				Name:  "d, devel",
-				Usage: "Show build info (for development releases).",
+			cli.StringFlag{
+				Name:  "f, format",
+				Usage: "Alternate format for version output. Specify 's' for simple (1.2.3) or 'v' for verbose. Default (blank) includes build number (1.2.3-400).",
 			},
 		},
 		Action: func(c *cli.Context) {
-			devel := c.Bool("devel")
-			verbose := c.Bool("verbose")
-			if verbose {
-				libkb.VersionMessage(devel, func(s string) { GlobUI.Println(s) })
-			} else {
-				GlobUI.Println(libkb.VersionString(devel))
+			switch c.String("format") {
+			case "":
+				GlobUI.Println(libkb.VersionString())
+			case "s":
+				GlobUI.Println(libkb.Version)
+			case "v":
+				libkb.VersionMessage(func(s string) { GlobUI.Println(s) })
 			}
 			os.Exit(0)
 		},

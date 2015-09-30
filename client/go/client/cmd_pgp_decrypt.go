@@ -10,9 +10,8 @@ import (
 
 func NewCmdPGPDecrypt(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "decrypt",
-		Usage:       "keybase pgp decrypt",
-		Description: "PGP decrypt messages or files for keybase users.",
+		Name:  "decrypt",
+		Usage: "PGP decrypt messages or files for keybase users",
 		Action: func(c *cli.Context) {
 			cl.ChooseCommand(&CmdPGPDecrypt{}, "decrypt", c)
 		},
@@ -46,6 +45,9 @@ func NewCmdPGPDecrypt(cl *libcmdline.CommandLine) cli.Command {
 				Usage: "Specify an outfile (stdout by default).",
 			},
 		},
+		Description : `Use of this command requires at least one PGP secret key imported
+   into the local Keybase keyring. It will try all secret keys in the local keyring that match the
+   given ciphertext, and will succeed so long as one such key is available.`,
 	}
 }
 
@@ -64,8 +66,7 @@ func (c *CmdPGPDecrypt) Run() error {
 	protocols := []rpc2.Protocol{
 		NewStreamUIProtocol(),
 		NewSecretUIProtocol(),
-		NewIdentifyUIProtocol(),
-		NewLogUIProtocol(),
+		NewIdentifyTrackUIProtocol(),
 	}
 	if err := RegisterProtocols(protocols); err != nil {
 		return err

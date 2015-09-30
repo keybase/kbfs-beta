@@ -15,12 +15,11 @@ type Locksmith struct {
 	arg *LocksmithArg
 
 	status     LocksmithStatus
-	user       *libkb.User
 	signingKey libkb.GenericKey
 	devName    string
 	lks        *libkb.LKSec
 	kexMu      sync.Mutex
-	kex        *KexFwd
+	kex        *KexNewDevice
 	canceled   chan struct{}
 }
 
@@ -76,12 +75,31 @@ func (d *Locksmith) Run(ctx *Context) error {
 		return nil
 	}
 
-	// fix the user if necessary
+	// fix the user if necessary (provision a device if needed)
 	return d.fix(ctx)
 }
 
 func (d *Locksmith) Status() LocksmithStatus {
 	return d.status
+}
+
+func (d *Locksmith) verifyFixRequirements(ctx *Context) error {
+	if ctx.LoginContext == nil {
+		return nil
+	}
+
+	// If there's a LoginContext, then there must be a PassphraseStreamCache.
+	// Otherwise, Locksmith can't provision a device during login.
+	//
+	// Since this is in the middle of the login process, Locksmith can't use
+	// LoginState to get the passphrase stream.  So the caller of locksmith has
+	// to do it.
+	cached := ctx.LoginContext.PassphraseStreamCache()
+	if cached == nil {
+		return errors.New("Locksmith can't run with a nil PassphraseStreamCache during login")
+	}
+
+	return nil
 }
 
 func (d *Locksmith) check(ctx *Context) error {
@@ -108,19 +126,34 @@ func (d *Locksmith) hasPGP() bool {
 	return len(d.arg.User.GetActivePGPKeys(false)) > 0
 }
 
-func (d *Locksmith) fix(ctx *Context) error {
-	return nil
+func (d *Locksmith) hasSingleSyncedPGPKey(ctx *Context) bool {
+	ckf := d.arg.User.GetComputedKeyFamily()
+	if ckf == nil {
+		return false
+	}
+
+	var count int
+	if ctx.LoginContext != nil {
+		count = len(ctx.LoginContext.SecretSyncer().AllActiveKeys(ckf))
+	} else {
+		aerr := d.G().LoginState().SecretSyncer(func(ss *libkb.SecretSyncer) {
+			count = len(ss.AllActiveKeys(ckf))
+		}, "Locksmith - hasSingleSyncedPGPKey")
+		if aerr != nil {
+			return false
+		}
+	}
+	return count == 1
 }
 
-func (d *Locksmith) LoginCheckup(ctx *Context, u *libkb.User) error {
-	d.user = u
-
-	d.syncSecrets(ctx)
-
-	if err := d.checkKeys(ctx); err != nil {
-		return err
+func (d *Locksmith) fix(ctx *Context) error {
+	if err := d.verifyFixRequirements(ctx); err != nil {
+		// any errors here need to be fixed in code, so panic to get
+		// stack trace:
+		panic(err)
 	}
-	return nil
+
+	return d.checkKeys(ctx)
 }
 
 func (d *Locksmith) Cancel() error {
@@ -154,19 +187,19 @@ func (d *Locksmith) checkKeys(ctx *Context) error {
 		d.G().Log.Debug("- Locksmith::checkKeys()")
 	}()
 
-	kf := d.user.GetKeyFamily()
+	kf := d.arg.User.GetKeyFamily()
 	if kf == nil {
 		d.G().Log.Debug("| User didn't have a key family")
 		return d.addBasicKeys(ctx)
 	}
-	if d.user.GetEldestKID().IsNil() {
+	if d.arg.User.GetEldestKID().IsNil() {
 		d.G().Log.Debug("| User didn't have an eldest key")
 		return d.addBasicKeys(ctx)
 	}
 
 	// they have at least one key
 
-	if d.user.HasDeviceInCurrentInstall() {
+	if d.arg.User.HasDeviceInCurrentInstall() {
 		// they have a device sibkey for this device
 		d.G().Log.Debug("| User has a device in the current install; all done")
 		return nil
@@ -177,7 +210,7 @@ func (d *Locksmith) checkKeys(ctx *Context) error {
 	d.G().Log.Debug("| Syncing secrets")
 	d.syncSecrets(ctx)
 
-	hasPGP := len(d.user.GetActivePGPKeys(false)) > 0
+	hasPGP := d.hasPGP()
 
 	hasActiveDevice, err := d.hasActiveDevice(ctx)
 	if err != nil {
@@ -207,10 +240,9 @@ func (d *Locksmith) checkKeys(ctx *Context) error {
 	return d.paperKey(ctx)
 }
 
-// addBasicKeys is used for accounts that have no device or det
-// keys.
+// addBasicKeys is used for accounts that have no keys.
 func (d *Locksmith) addBasicKeys(ctx *Context) error {
-	if err := d.addDeviceKey(ctx); err != nil {
+	if err := d.addEldestDeviceKey(ctx); err != nil {
 		return err
 	}
 
@@ -221,33 +253,15 @@ func (d *Locksmith) addBasicKeys(ctx *Context) error {
 	return nil
 }
 
-func (d *Locksmith) addDeviceKey(ctx *Context) error {
-	devname, err := d.deviceName(ctx)
-	if err != nil {
-		return err
-	}
-	pps, err := d.ppStream(ctx)
-	if err != nil {
-		return err
-	}
-
-	d.lks = libkb.NewLKSec(pps, d.user.GetUID(), d.G())
-	args := &DeviceWrapArgs{
-		Me:         d.user,
-		DeviceName: devname,
-		Lks:        d.lks,
-		IsEldest:   true,
-	}
-	eng := NewDeviceWrap(args, d.G())
-	if err := RunEngine(eng, ctx); err != nil {
-		return err
-	}
-
-	d.signingKey = eng.SigningKey()
-
-	return nil
+// addEldestDeviceKey adds a device sibkey/subkey as the eldest
+// key in an account.
+func (d *Locksmith) addEldestDeviceKey(ctx *Context) error {
+	var nilEldestKID keybase1.KID
+	return d.addDeviceKeyWithSigner(ctx, nil, nilEldestKID)
 }
 
+// To add a device key as the eldest key, signer and eldestKID
+// should be nil.
 func (d *Locksmith) addDeviceKeyWithSigner(ctx *Context, signer libkb.GenericKey, eldestKID keybase1.KID) error {
 	devname, err := d.deviceName(ctx)
 	if err != nil {
@@ -257,14 +271,17 @@ func (d *Locksmith) addDeviceKeyWithSigner(ctx *Context, signer libkb.GenericKey
 	if err != nil {
 		return err
 	}
-	d.lks = libkb.NewLKSec(pps, d.user.GetUID(), d.G())
+	d.lks = libkb.NewLKSec(pps, d.arg.User.GetUID(), d.G())
 	args := &DeviceWrapArgs{
-		Me:         d.user,
+		Me:         d.arg.User,
 		DeviceName: devname,
 		Lks:        d.lks,
 		IsEldest:   false,
 		Signer:     signer,
 		EldestKID:  eldestKID,
+	}
+	if signer == nil && eldestKID.IsNil() {
+		args.IsEldest = true
 	}
 	eng := NewDeviceWrap(args, d.G())
 	if err := RunEngine(eng, ctx); err != nil {
@@ -303,6 +320,14 @@ func (d *Locksmith) deviceSign(ctx *Context, withPGPOption bool) error {
 	}
 	if err != nil {
 		return err
+	}
+
+	if len(devs) == 0 && withPGPOption {
+		if d.hasSingleSyncedPGPKey(ctx) {
+			// the user only has a synced pgp key, so bypass the
+			// select signer interface.
+			return d.deviceSignPGP(ctx)
+		}
 	}
 
 	var arg keybase1.SelectSignerArg
@@ -403,7 +428,7 @@ func (d *Locksmith) deviceSign(ctx *Context, withPGPOption bool) error {
 				ctx.LogUI.Debug("device sign w/ paper backup key success")
 				return nil
 			}
-			d.G().Log.Debug("deviceSignPaper error: %s", err)
+			ctx.LogUI.Errorf("deviceSignPaper error: %s", err)
 			uiarg := keybase1.DeviceSignAttemptErrArg{
 				Msg:     err.Error(),
 				Attempt: i + 1,
@@ -420,21 +445,26 @@ func (d *Locksmith) deviceSign(ctx *Context, withPGPOption bool) error {
 	return fmt.Errorf("device sign process retry attempts exhausted")
 }
 
-func (d *Locksmith) deviceSignPGP(ctx *Context) error {
-	pgpKeys := d.user.GetActivePGPKeys(false)
+func (d *Locksmith) deviceSignPGP(ctx *Context) (err error) {
+	d.G().Log.Debug("+ deviceSignPGP")
+	defer func() {
+		d.G().Log.Debug("- deviceSignPGP -> %s", libkb.ErrToOk(err))
+	}()
+	pgpKeys := d.arg.User.GetActivePGPKeys(false)
 	if len(pgpKeys) == 0 {
-		return errors.New("no active PGP keys unexpectedly")
+		err = errors.New("no active PGP keys unexpectedly")
+		return err
 	}
 	var selected *libkb.PGPKeyBundle
 	if len(pgpKeys) > 1 {
 		// show a list of pgp keys and let them select which one to use
-		var err error
 		selected, err = d.selectPGPKey(ctx, pgpKeys)
 		if err != nil {
 			return err
 		}
 		if selected == nil {
-			return fmt.Errorf("no key selected")
+			err = fmt.Errorf("no key selected")
+			return err
 		}
 	} else {
 		selected = pgpKeys[0]
@@ -448,7 +478,7 @@ func (d *Locksmith) deviceSignPGP(ctx *Context) error {
 	if ctx.LoginContext != nil {
 		pk, ok = ctx.LoginContext.SecretSyncer().FindPrivateKey(selected.GetKID().String())
 	} else {
-		err := d.G().LoginState().SecretSyncer(func(ss *libkb.SecretSyncer) {
+		err = d.G().LoginState().SecretSyncer(func(ss *libkb.SecretSyncer) {
 			pk, ok = ss.FindPrivateKey(selected.GetKID().String())
 		}, "Locksmith - deviceSignPGP - FindPrivateKey")
 		if err != nil {
@@ -456,13 +486,16 @@ func (d *Locksmith) deviceSignPGP(ctx *Context) error {
 		}
 	}
 	if ok {
-		skb, err := pk.ToSKB(d.G())
-		if err != nil {
+		d.G().Log.Debug("| found synced secret key, unlocking it")
+		skb, serr := pk.ToSKB(d.G())
+		if serr != nil {
+			err = serr
 			return err
 		}
 
-		pgpk, err := skb.PromptAndUnlock(ctx.LoginContext, "pgp sign", "keybase", nil, ctx.SecretUI, nil, d.arg.User)
-		if err != nil {
+		pgpk, perr := skb.PromptAndUnlock(ctx.LoginContext, "sign new device", "keybase", nil, ctx.SecretUI, nil, d.arg.User)
+		if perr != nil {
+			err = perr
 			return err
 		}
 		return d.deviceSignPGPNext(ctx, pgpk)
@@ -470,17 +503,18 @@ func (d *Locksmith) deviceSignPGP(ctx *Context) error {
 
 	// use gpg to unlock it
 	gpg := d.G().GetGpgClient()
-	if _, err := gpg.Configure(); err != nil {
+	if err = gpg.Configure(); err != nil {
 		return err
 	}
 
-	bundle, err := gpg.ImportKey(true, selected.GetFingerprint())
-	if err != nil {
-		return fmt.Errorf("ImportKey error: %s", err)
+	bundle, ierr := gpg.ImportKey(true, selected.GetFingerprint())
+	if ierr != nil {
+		err = fmt.Errorf("ImportKey error: %s", ierr)
 	}
 
-	if err := bundle.Unlock("Import of key into keybase keyring", ctx.SecretUI); err != nil {
-		return fmt.Errorf("bundle Unlock error: %s", err)
+	if err = bundle.Unlock("adding this device to your account", ctx.SecretUI); err != nil {
+		err = fmt.Errorf("bundle Unlock error: %s", err)
+		return err
 	}
 
 	return d.deviceSignPGPNext(ctx, bundle)
@@ -491,7 +525,7 @@ func (d *Locksmith) deviceSignPGPNext(ctx *Context, pgpk libkb.GenericKey) error
 		return fmt.Errorf("pgp key can't sign")
 	}
 
-	eldest := d.user.GetEldestKID()
+	eldest := d.arg.User.GetEldestKID()
 	ctx.LogUI.Debug("eldest kid from user: %s", eldest)
 	if err := d.addDeviceKeyWithSigner(ctx, pgpk, eldest); err != nil {
 		return err
@@ -509,8 +543,8 @@ func (d *Locksmith) deviceSignExistingDevice(ctx *Context, existingID keybase1.D
 		return err
 	}
 
-	kargs := &KexFwdArgs{
-		User:    d.user,
+	kargs := &KexNewDeviceArgs{
+		User:    d.arg.User,
 		Dst:     existingID,
 		DstName: existingName,
 		DevType: newDevType,
@@ -518,7 +552,7 @@ func (d *Locksmith) deviceSignExistingDevice(ctx *Context, existingID keybase1.D
 	}
 
 	d.kexMu.Lock()
-	d.kex = NewKexFwd(pps, kargs, d.G())
+	d.kex = NewKexNewDevice(pps, kargs, d.G())
 	d.kexMu.Unlock()
 
 	err = RunEngine(d.kex, ctx)
@@ -531,12 +565,12 @@ func (d *Locksmith) deviceSignExistingDevice(ctx *Context, existingID keybase1.D
 }
 
 func (d *Locksmith) deviceSignPaper(ctx *Context) error {
-	kp, err := findPaperKeys(ctx, d.G(), d.user)
+	kp, err := findPaperKeys(ctx, d.G(), d.arg.User)
 	if err != nil {
 		return err
 	}
 
-	eldest := d.user.GetEldestKID()
+	eldest := d.arg.User.GetEldestKID()
 	ctx.LogUI.Debug("eldest kid from user: %s", eldest)
 	if err := d.addDeviceKeyWithSigner(ctx, kp.sigKey, eldest); err != nil {
 		return err
@@ -604,11 +638,20 @@ func (d *Locksmith) deviceName(ctx *Context) (string, error) {
 				errCh <- err
 				return
 			}
+			if !libkb.CheckDeviceName.F(name) {
+				errCh <- errors.New("Invalid device name")
+				return
+			}
+
 			if len(name) > 0 && !d.isDeviceNameTaken(ctx, name) {
 				nameCh <- name
 				return
 			}
-			ctx.LocksmithUI.DeviceNameTaken(keybase1.DeviceNameTakenArg{Name: name})
+			err = ctx.LocksmithUI.DeviceNameTaken(keybase1.DeviceNameTakenArg{Name: name})
+			if err != nil {
+				errCh <- err
+				return
+			}
 		}
 		errCh <- ErrDeviceMustBeUnique
 	}()
@@ -664,7 +707,7 @@ func (d *Locksmith) isDeviceNameTaken(ctx *Context, name string) bool {
 func (d *Locksmith) paperKey(ctx *Context) error {
 	args := &PaperKeyPrimaryArgs{
 		SigningKey: d.signingKey,
-		Me:         d.user,
+		Me:         d.arg.User,
 	}
 	eng := NewPaperKeyPrimary(d.G(), args)
 	return RunEngine(eng, ctx)

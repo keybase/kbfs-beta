@@ -1,3 +1,5 @@
+// +build !release
+
 package libkb
 
 import (
@@ -79,6 +81,7 @@ func (tc *TestContext) Cleanup() {
 		G.Log.Debug("cleaning up %s", tc.Tp.Home)
 		tc.G.Shutdown()
 		os.RemoveAll(tc.Tp.Home)
+		tc.ClearAllStoredSecrets()
 	}
 }
 
@@ -148,6 +151,21 @@ func (tc *TestContext) ResetLoginState() {
 	tc.G.createLoginState()
 }
 
+func (tc TestContext) ClearAllStoredSecrets() error {
+	usernames, err := GetUsersWithStoredSecrets()
+	if err != nil {
+		return err
+	}
+	for _, username := range usernames {
+		nu := NewNormalizedUsername(username)
+		err = ClearStoredSecret(nu)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 var setupTestMu sync.Mutex
 
 func setupTestContext(t *testing.T, nm string) (tc TestContext, err error) {
@@ -167,7 +185,6 @@ func setupTestContext(t *testing.T, nm string) (tc TestContext, err error) {
 	tc.Tp.GPGHome = tc.Tp.Home
 	tc.Tp.GPGOptions = []string{"--homedir=" + tc.Tp.GPGHome}
 
-	tc.Tp.ServerURI = DevelServerURI
 	tc.Tp.Debug = false
 	tc.Tp.Devel = true
 	g.Env.Test = tc.Tp
@@ -177,6 +194,10 @@ func setupTestContext(t *testing.T, nm string) (tc TestContext, err error) {
 	if err = g.ConfigureAPI(); err != nil {
 		return
 	}
+
+	// use stub engine for external api
+	g.XAPI = NewStubAPIEngine()
+
 	if err = g.ConfigureConfig(); err != nil {
 		return
 	}

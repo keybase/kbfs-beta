@@ -144,7 +144,7 @@ func (s *SKB) ToPacket() (ret *KeybasePacket, err error) {
 
 func (s *SKB) ReadKey() (g GenericKey, err error) {
 	switch {
-	case IsPGPAlgo(s.Type) || s.Type == 0:
+	case IsPGPAlgo(s.Type):
 		g, err = ReadOneKeyFromBytes(s.Pub)
 	case s.Type == KIDNaclEddsa:
 		g, err = ImportNaclSigningKeyPairFromBytes(s.Pub, nil)
@@ -201,7 +201,7 @@ func (s *SKB) devHumandDescription(owner *User, key GenericKey) (string, error) 
 		return "", err
 	}
 	if device == nil {
-		return "", ErrNoDevice
+		return "", NoDeviceError{Reason: fmt.Sprintf("for key ID %s", key.GetKID())}
 	}
 	if device.Description == nil {
 		return "", fmt.Errorf("no device description")
@@ -305,6 +305,8 @@ func (s *SKB) UnlockSecretKey(lctx LoginContext, passphrase string, tsec *triple
 					return nil, aerr
 				}
 			}
+		} else {
+			s.G().Log.Debug("| not caching passphrase stream:  err = %v, ppsIn = %v", err, ppsIn)
 		}
 	default:
 		err = BadKeyError{fmt.Sprintf("Can't unlock secret with protection type %d", int(s.Priv.Encryption))}
@@ -318,7 +320,7 @@ func (s *SKB) UnlockSecretKey(lctx LoginContext, passphrase string, tsec *triple
 func (s *SKB) parseUnlocked(unlocked []byte) (key GenericKey, err error) {
 
 	switch {
-	case IsPGPAlgo(s.Type) || s.Type == 0:
+	case IsPGPAlgo(s.Type):
 		key, err = ReadOneKeyFromBytes(unlocked)
 	case s.Type == KIDNaclEddsa:
 		key, err = ImportNaclSigningKeyPairFromBytes(s.Pub, unlocked)
@@ -352,11 +354,15 @@ func (s *SKB) tsecUnlock(tsec *triplesec.Cipher) ([]byte, error) {
 }
 
 func (s *SKB) lksUnlock(lctx LoginContext, pps *PassphraseStream, secretStorer SecretStorer, lks *LKSec) (unlocked []byte, err error) {
+	s.G().Log.Debug("+ SKB:lksUnlock")
+	defer func() {
+		s.G().Log.Debug("- SKB:lksUnlock -> %s", ErrToOk(err))
+	}()
 	if lks == nil {
-		s.G().Log.Debug("creating new lks")
+		s.G().Log.Debug("| creating new lks")
 		lks = s.newLKSec(pps)
 		s.Lock()
-		s.G().Log.Debug("setting uid in lks to %s", s.uid)
+		s.G().Log.Debug("| setting uid in lks to %s", s.uid)
 		lks.SetUID(s.uid)
 		s.Unlock()
 	}
@@ -669,7 +675,7 @@ func (s *SKB) UnlockNoPrompt(lctx LoginContext, secretStore SecretStore, lksPrel
 		}
 		// fall through if it's a passphrase error
 	} else {
-		s.G().Log.Debug("| No 3Sec or PassphraseStream in PromptAndUnlock")
+		s.G().Log.Debug("| No 3Sec or PassphraseStream in UnlockNoPrompt")
 	}
 
 	// failed to unlock without prompting user for passphrase

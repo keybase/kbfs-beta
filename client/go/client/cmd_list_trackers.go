@@ -10,7 +10,6 @@ import (
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/protocol/go"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
 )
 
 // CmdListTrackers is the 'list-trackers' command.  It displays
@@ -26,9 +25,9 @@ type CmdListTrackers struct {
 // NewCmdListTrackers creates a new cli.Command.
 func NewCmdListTrackers(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "list-trackers",
-		Usage:       "keybase list-trackers <username>",
-		Description: "List trackers.",
+		Name:         "list-trackers",
+		ArgumentHelp: "<username>",
+		Usage:        "List trackers",
 		Flags: []cli.Flag{
 			cli.BoolFlag{
 				Name:  "i, uid",
@@ -82,10 +81,7 @@ func (c *CmdListTrackers) Run() error {
 	if err != nil {
 		return err
 	}
-	protocols := []rpc2.Protocol{
-		NewLogUIProtocol(),
-	}
-	if err := RegisterProtocols(protocols); err != nil {
+	if err := RegisterProtocols(nil); err != nil {
 		return err
 	}
 
@@ -215,7 +211,7 @@ func (c *CmdListTrackers) ParseArgv(ctx *cli.Context) error {
 			var err error
 			c.uid, err = libkb.UIDFromHex(ctx.Args()[0])
 			if err != nil {
-				return err
+				return fmt.Errorf("UID must be a 32-character hex string")
 			}
 		} else {
 			c.username = ctx.Args()[0]

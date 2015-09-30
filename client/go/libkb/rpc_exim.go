@@ -137,20 +137,14 @@ func ExportErrorAsStatus(e error) (ret *keybase1.Status) {
 		}
 	}
 
-	if e == ErrTimeout {
-		return &keybase1.Status{
-			Code: SCTimeout,
-			Name: "SC_TIMEOUT",
-			Desc: e.Error(),
-		}
-	}
-
 	if ee, ok := e.(ExportableError); ok {
 		tmp := ee.ToStatus()
 		return &tmp
 	}
 
-	G.Log.Warning("not exportable error: %v (%T)", e, e)
+	if G.Env.GetRunMode() != ProductionRunMode {
+		G.Log.Warning("not exportable error: %v (%T)", e, e)
+	}
 
 	return &keybase1.Status{
 		Name: "GENERIC",
@@ -212,6 +206,18 @@ func ImportStatusAsError(s *keybase1.Status) error {
 		return io.EOF
 	case SCSelfNotFound:
 		return SelfNotFoundError{msg: s.Desc}
+	case SCDeviceNotFound:
+		return NoDeviceError{Reason: s.Desc}
+	case SCTimeout:
+		return TimeoutError{}
+	case SCDeviceMismatch:
+		return ReceiverDeviceError{Msg: s.Desc}
+	case SCBadKexPhrase:
+		return InvalidKexPhraseError{}
+	case SCReloginRequired:
+		return ReloginRequiredError{}
+	case SCDeviceRequired:
+		return DeviceRequiredError{}
 	default:
 		ase := AppStatusError{
 			Code:   s.Code,
@@ -687,6 +693,54 @@ func (e SelfNotFoundError) ToStatus() keybase1.Status {
 	return keybase1.Status{
 		Code: SCSelfNotFound,
 		Name: "SELF_NOT_FOUND",
+		Desc: e.Error(),
+	}
+}
+
+func (e NoDeviceError) ToStatus() keybase1.Status {
+	return keybase1.Status{
+		Code: SCDeviceNotFound,
+		Name: "DEVICE_NOT_FOUND",
+		Desc: e.Error(),
+	}
+}
+
+func (e TimeoutError) ToStatus() keybase1.Status {
+	return keybase1.Status{
+		Code: SCTimeout,
+		Name: "SC_TIMEOUT",
+		Desc: e.Error(),
+	}
+}
+
+func (e ReceiverDeviceError) ToStatus() keybase1.Status {
+	return keybase1.Status{
+		Code: SCDeviceMismatch,
+		Name: "SC_DEVICE_MISMATCH",
+		Desc: e.Error(),
+	}
+}
+
+func (e InvalidKexPhraseError) ToStatus() keybase1.Status {
+	return keybase1.Status{
+		Code: SCBadKexPhrase,
+		Name: "SC_BAD_KEX_PHRASE",
+		Desc: e.Error(),
+	}
+}
+
+func (e ReloginRequiredError) ToStatus() keybase1.Status {
+	return keybase1.Status{
+		Code: SCReloginRequired,
+		Name: "SC_RELOGIN_REQUIRED",
+		Desc: e.Error(),
+	}
+}
+
+func (e DeviceRequiredError) ToStatus() keybase1.Status {
+	return keybase1.Status{
+		Code: SCDeviceRequired,
+		Name: "SC_DEVICE_REQUIRED",
 		Desc: e.Error(),
 	}
 }

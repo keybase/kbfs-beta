@@ -33,7 +33,8 @@ func RegisterProtocols(srv *rpc2.Server, xp *rpc2.Transport) error {
 		keybase1.BTCProtocol(NewBTCHandler(xp)),
 		keybase1.ConfigProtocol(ConfigHandler{xp}),
 		keybase1.CryptoProtocol(NewCryptoHandler(xp)),
-		keybase1.CtlProtocol(CtlHandler{}),
+		keybase1.CtlProtocol(NewCtlHandler(xp)),
+		keybase1.DebuggingProtocol(NewDebuggingHandler(xp)),
 		keybase1.DeviceProtocol(NewDeviceHandler(xp)),
 		keybase1.DoctorProtocol(NewDoctorHandler(xp)),
 		keybase1.FavoriteProtocol(NewFavoriteHandler(xp)),
@@ -105,6 +106,7 @@ func (d *Service) Run() (err error) {
 	if err = d.GetExclusiveLock(); err != nil {
 		return
 	}
+
 	if err = d.OpenSocket(); err != nil {
 		return
 	}
@@ -123,6 +125,10 @@ func (d *Service) StartLoopbackServer(g *libkb.GlobalContext) error {
 
 	var l net.Listener
 	var err error
+
+	if err = d.GetExclusiveLock(); err != nil {
+		return err
+	}
 
 	if l, err = g.MakeLoopbackServer(); err != nil {
 		return err
@@ -148,17 +154,36 @@ func (d *Service) writeVersionFile() error {
 	return ioutil.WriteFile(versionFilePath, []byte(version), 0644)
 }
 
+// ReleaseLock releases the locking pidfile by closing, unlocking and
+// deleting it.
 func (d *Service) ReleaseLock() error {
+	G.Log.Debug("Releasing lock file")
 	return d.lockPid.Close()
 }
 
-func (d *Service) GetExclusiveLock() error {
+// GetExclusiveLockWithoutAutoUnlock grabs the exclusive lock over running
+// keybase and continues to hold the lock. The caller is then required to
+// manually release this lock via ReleaseLock()
+func (d *Service) GetExclusiveLockWithoutAutoUnlock() error {
 	if err := os.MkdirAll(G.Env.GetRuntimeDir(), libkb.PermDir); err != nil {
 		return err
 	}
 	if err := d.lockPIDFile(); err != nil {
 		return err
 	}
+	return nil
+}
+
+// GetExclusiveLock grabs the exclusive lock over running keybase
+// and then installs a shutdown hook to release the lock automatically
+// on shutdown.
+func (d *Service) GetExclusiveLock() error {
+	if err := d.GetExclusiveLockWithoutAutoUnlock(); err != nil {
+		return err
+	}
+	G.PushShutdownHook(func() error {
+		return d.ReleaseLock()
+	})
 	return nil
 }
 
@@ -186,7 +211,7 @@ func (d *Service) lockPIDFile() (err error) {
 	}
 	d.lockPid = libkb.NewLockPIDFile(fn)
 	if err = d.lockPid.Lock(); err != nil {
-		return fmt.Errorf("error locking %s: server already running", fn)
+		return err
 	}
 	G.Log.Debug("Locking pidfile %s\n", fn)
 	return nil
@@ -198,10 +223,6 @@ func (d *Service) ConfigRPCServer() (l net.Listener, err error) {
 	}
 
 	G.PushShutdownHook(func() error {
-		G.Log.Info("Closing socket")
-		if err := d.lockPid.Close(); err != nil {
-			G.Log.Warning("error closing lock pid file: %s", err)
-		}
 		return l.Close()
 	})
 
@@ -225,13 +246,16 @@ func (d *Service) ParseArgv(ctx *cli.Context) error {
 
 func NewCmdService(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "service",
-		Usage:       "keybase service",
-		Description: "Run the keybase local service.",
+		Name:  "service",
+		Usage: "Run the keybase service",
 		Flags: []cli.Flag{
 			cli.StringFlag{
 				Name:  "chdir",
-				Usage: "specify where to run as a daemon (via chdir)",
+				Usage: "Specify where to run as a daemon (via chdir)",
+			},
+			cli.StringFlag{
+				Name:  "label",
+				Usage: "Specifying a label can help identify services.",
 			},
 		},
 		Action: func(c *cli.Context) {

@@ -35,7 +35,6 @@ func (c *CmdDeviceRemove) Run() (err error) {
 	}
 
 	protocols := []rpc2.Protocol{
-		NewLogUIProtocol(),
 		NewSecretUIProtocol(),
 	}
 	if err = RegisterProtocols(protocols); err != nil {
@@ -50,9 +49,9 @@ func (c *CmdDeviceRemove) Run() (err error) {
 
 func NewCmdDeviceRemove(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "remove",
-		Usage:       "keybase device remove <id>",
-		Description: "Remove a device.",
+		Name:         "remove",
+		ArgumentHelp: "<id>",
+		Usage:        "Remove a device",
 		Flags: []cli.Flag{
 			cli.BoolFlag{
 				Name:  "f, force",

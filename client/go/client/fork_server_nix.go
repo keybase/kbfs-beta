@@ -19,11 +19,11 @@ func GetExtraFlags() []cli.Flag {
 	return []cli.Flag{
 		cli.BoolFlag{
 			Name:  "no-auto-fork, F",
-			Usage: "disable auto-fork of background service",
+			Usage: "Disable auto-fork of background service.",
 		},
 		cli.BoolFlag{
 			Name:  "auto-fork",
-			Usage: "enable auto-fork of background service",
+			Usage: "Enable auto-fork of background service.",
 		},
 	}
 }
@@ -38,7 +38,7 @@ func ForkServerNix(cl libkb.CommandLine) error {
 	// If we try to get an exclusive lock and succeed, it means we
 	// need to relaunch the daemon since it's dead
 	G.Log.Debug("Getting flock")
-	err := srv.GetExclusiveLock()
+	err := srv.GetExclusiveLockWithoutAutoUnlock()
 	if err == nil {
 		G.Log.Debug("Flocked! Server must have died")
 		srv.ReleaseLock()
@@ -108,6 +108,8 @@ func makeServerCommandLine(cl libkb.CommandLine) (arg0 string, args []string, er
 		"socket-file",
 		"gpg-options",
 		"local-rpc-debug-unsafe",
+		"run-mode",
+		"timers",
 	}
 	args = append(args, arg0)
 
@@ -131,7 +133,7 @@ func makeServerCommandLine(cl libkb.CommandLine) (arg0 string, args []string, er
 		return
 	}
 
-	G.Log.Info("| Setting run directory for keybase service to %s", chdir)
+	G.Log.Debug("| Setting run directory for keybase service to %s", chdir)
 	args = append(args, "--chdir", chdir)
 
 	G.Log.Debug("| Made server args: %s %v", arg0, args)

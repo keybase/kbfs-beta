@@ -5,7 +5,6 @@ import (
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/protocol/go"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
 )
 
 type CmdPGPPull struct {
@@ -23,10 +22,7 @@ func (v *CmdPGPPull) Run() (err error) {
 		return err
 	}
 
-	protocols := []rpc2.Protocol{
-		NewLogUIProtocol(),
-	}
-	if err = RegisterProtocols(protocols); err != nil {
+	if err = RegisterProtocols(nil); err != nil {
 		return err
 	}
 
@@ -37,13 +33,21 @@ func (v *CmdPGPPull) Run() (err error) {
 
 func NewCmdPGPPull(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "pull",
-		Usage:       "keybase pgp pull",
-		Description: "Download the latest PGP keys for people you track.",
-		Flags:       []cli.Flag{},
+		Name:         "pull",
+		ArgumentHelp: "[<usernames...>]",
+		Usage:        "Download the latest PGP keys for people you track.",
+		Flags:        []cli.Flag{},
 		Action: func(c *cli.Context) {
 			cl.ChooseCommand(&CmdPGPPull{}, "pull", c)
 		},
+		Description: `"keybase pgp pull" pulls down all of the PGP keys for the people
+   you track. On success, it imports those keys into your local GnuPG keychain.
+   For existing keys, this means the local GnuPG keyring will get an updated,
+   merged copy, via GnuGP's default key merging strategy. For new keys, it
+   will be a plain import.
+
+   If usernames (or user assertions) are supplied, only those tracked users
+   are pulled. Without arguments, all tracked users are pulled.`,
 	}
 }
 

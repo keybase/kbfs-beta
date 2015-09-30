@@ -9,14 +9,13 @@ import (
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/launchd"
 	"github.com/keybase/client/go/libcmdline"
-	"github.com/keybase/client/go/libkb"
 )
 
 func NewCmdLaunchd(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "launchd",
-		Usage:       "keybase launchd [...]",
-		Description: "Manage keybase launchd services.",
+		Name:         "launchd",
+		Usage:        "Manage keybase launchd services",
+		ArgumentHelp: "[arguments...]",
 		Subcommands: []cli.Command{
 			NewCmdLaunchdInstall(cl),
 			NewCmdLaunchdUninstall(cl),
@@ -31,15 +30,9 @@ func NewCmdLaunchd(cl *libcmdline.CommandLine) cli.Command {
 
 func NewCmdLaunchdInstall(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "install",
-		Usage:       "keybase launchd install <label> <path/to/keybase>",
-		Description: "Install a keybase launchd service.",
-		Flags: []cli.Flag{
-			cli.StringFlag{
-				Name:  "run-mode",
-				Usage: fmt.Sprintf("Run mode (%s)", libkb.RunModes),
-			},
-		},
+		Name:         "install",
+		ArgumentHelp: "<label> <path/to/keybase> <args>",
+		Usage:        "Install a launchd service",
 		Action: func(c *cli.Context) {
 			args := c.Args()
 			if len(args) < 1 {
@@ -48,16 +41,19 @@ func NewCmdLaunchdInstall(cl *libcmdline.CommandLine) cli.Command {
 			if len(args) < 2 {
 				G.Log.Fatalf("No path to keybase executable specified.")
 			}
-			plistArgs := []string{"--log-format=file"}
 
-			runMode := c.String("run-mode")
-			if runMode != "" {
-				plistArgs = append(plistArgs, fmt.Sprintf("--run-mode=%s", runMode))
-			}
+			label := args[0]
+			binPath := args[1]
+			plistArgs := args[2:]
 
-			plistArgs = append(plistArgs, "service")
+			envVars := make(map[string]string)
+			envVars["PATH"] = "/sbin:/usr/sbin:/bin:/usr/bin:/usr/local/bin"
+			envVars["KEYBASE_LABEL"] = label
+			envVars["KEYBASE_LOG_FORMAT"] = "file"
 
-			plist := launchd.NewPlist(args[0], args[1], plistArgs)
+			workingDir := G.Env.GetCacheDir()
+
+			plist := launchd.NewPlist(label, binPath, plistArgs, envVars, workingDir)
 			err := launchd.Install(plist)
 			if err != nil {
 				G.Log.Fatalf("%v", err)
@@ -69,9 +65,9 @@ func NewCmdLaunchdInstall(cl *libcmdline.CommandLine) cli.Command {
 
 func NewCmdLaunchdUninstall(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "uninstall",
-		Usage:       "keybase launchd uninstall <label>",
-		Description: "Uninstall a keybase launchd service.",
+		Name:         "uninstall",
+		ArgumentHelp: "<label>",
+		Usage:        "Uninstall a keybase launchd service",
 		Action: func(c *cli.Context) {
 			args := c.Args()
 			if len(args) < 1 {
@@ -88,9 +84,8 @@ func NewCmdLaunchdUninstall(cl *libcmdline.CommandLine) cli.Command {
 
 func NewCmdLaunchdList(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "list",
-		Usage:       "keybase launchd list",
-		Description: "List keybase launchd services.",
+		Name:  "list",
+		Usage: "List keybase launchd services",
 		Action: func(c *cli.Context) {
 			err := launchd.ShowServices("keybase")
 			if err != nil {
@@ -103,9 +98,9 @@ func NewCmdLaunchdList(cl *libcmdline.CommandLine) cli.Command {
 
 func NewCmdLaunchdStatus(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "status",
-		Usage:       "keybase launchd status <label>",
-		Description: "Status for keybase launchd service.",
+		Name:         "status",
+		ArgumentHelp: "<label>",
+		Usage:        "Status for keybase launchd service",
 		Action: func(c *cli.Context) {
 			args := c.Args()
 			if len(args) < 1 {
@@ -122,9 +117,9 @@ func NewCmdLaunchdStatus(cl *libcmdline.CommandLine) cli.Command {
 
 func NewCmdLaunchdRestart(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "restart",
-		Usage:       "keybase launchd restart <label>",
-		Description: "Restart a keybase launchd service.",
+		Name:         "restart",
+		ArgumentHelp: "<label>",
+		Usage:        "Restart a keybase launchd service",
 		Action: func(c *cli.Context) {
 			args := c.Args()
 			if len(args) < 1 {
@@ -141,9 +136,9 @@ func NewCmdLaunchdRestart(cl *libcmdline.CommandLine) cli.Command {
 
 func NewCmdLaunchdStart(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "start",
-		Usage:       "keybase launchd start <label>",
-		Description: "Start a keybase launchd service",
+		Name:         "start",
+		ArgumentHelp: "<label>",
+		Usage:        "Start a keybase launchd service",
 		Action: func(c *cli.Context) {
 			args := c.Args()
 			if len(args) < 1 {
@@ -160,9 +155,9 @@ func NewCmdLaunchdStart(cl *libcmdline.CommandLine) cli.Command {
 
 func NewCmdLaunchdStop(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "stop",
-		Usage:       "keybase launchd stop <label>",
-		Description: "Stop a keybase launchd service.",
+		Name:         "stop",
+		ArgumentHelp: "<label>",
+		Usage:        "Stop a keybase launchd service",
 		Action: func(c *cli.Context) {
 			args := c.Args()
 			if len(args) < 1 {

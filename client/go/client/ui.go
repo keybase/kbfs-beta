@@ -178,7 +178,7 @@ func (w RemoteProofWrapper) GetHostname() string       { return w.p.Value }
 func (w RemoteProofWrapper) GetDomain() string         { return w.p.Value }
 
 func (w RemoteProofWrapper) ToDisplayString() string {
-	return libkb.NewMarkup(w.p.DisplayMarkup).GetRaw()
+	return w.p.DisplayMarkup
 }
 
 type LinkCheckResultWrapper struct {
@@ -473,7 +473,7 @@ type LocksmithUI struct {
 }
 
 func (d LocksmithUI) PromptDeviceName(dummy int) (string, error) {
-	return d.parent.Prompt("Enter a name for this device", false, libkb.CheckDeviceName)
+	return d.parent.Prompt("Enter a public name for this device", false, libkb.CheckDeviceName)
 }
 
 func (d LocksmithUI) DeviceNameTaken(arg keybase1.DeviceNameTakenArg) error {
@@ -491,14 +491,14 @@ func (d LocksmithUI) SelectSigner(arg keybase1.SelectSignerArg) (res keybase1.Se
 		var req string
 		switch dev.Type {
 		case libkb.DeviceTypeDesktop:
-			req = "requires access to that computer"
+			req = "requires access to that device"
 		case libkb.DeviceTypeMobile:
 			req = "requires your device"
 		default:
 			return res, fmt.Errorf("unknown device type: %q", dev.Type)
 		}
 
-		fmt.Fprintf(w, "(%d) with your key called %q\t(%s)\n", i+1, dev.Name, req)
+		fmt.Fprintf(w, "(%d) with your device named %q\t(%s)\n", i+1, dev.Name, req)
 		optcount++
 	}
 
@@ -512,27 +512,15 @@ func (d LocksmithUI) SelectSigner(arg keybase1.SelectSignerArg) (res keybase1.Se
 		optcount++
 	}
 
-	fmt.Fprintf(w, "(999) ...nevermind, I'll add this device later\t(logout)\n")
-
 	w.Flush()
 
-	ret, err := d.parent.PromptSelectionOrCancel("Choose a signing option", 1, 999)
+	ret, err := d.parent.PromptSelectionOrCancel("Choose a signing option", 1, optcount)
 	if err != nil {
 		if err == ErrInputCanceled {
 			res.Action = keybase1.SelectSignerAction_CANCEL
 			return res, nil
 		}
 		return res, err
-	}
-
-	if ret == 999 {
-		res.Action = keybase1.SelectSignerAction_CANCEL
-		return res, nil
-	}
-
-	if ret < 1 || ret > optcount {
-		res.Action = keybase1.SelectSignerAction_CANCEL
-		return res, nil
 	}
 
 	res.Action = keybase1.SelectSignerAction_SIGN
@@ -559,9 +547,7 @@ func (d LocksmithUI) DeviceSignAttemptErr(arg keybase1.DeviceSignAttemptErrArg) 
 }
 
 func (d LocksmithUI) DisplaySecretWords(arg keybase1.DisplaySecretWordsArg) error {
-	d.parent.Printf("On your %q computer, a window should have appeared. Type this in it:\n\n", arg.DeviceNameExisting)
-	d.parent.Printf("\t%s\n\n", arg.Secret)
-	d.parent.Printf("Alternatively, if you're using the terminal at %q, type this:\n\n", arg.DeviceNameExisting)
+	d.parent.Printf("\nUsing the terminal at %q, type this:\n\n", arg.DeviceNameExisting)
 	d.parent.Printf("\tkeybase device add \"%s\"\n\n", arg.Secret)
 	return nil
 }
@@ -618,15 +604,21 @@ func (l LoginUI) DisplayPrimaryPaperKey(arg keybase1.DisplayPrimaryPaperKeyArg) 
 	if l.noPrompt {
 		return nil
 	}
-	l.parent.Printf("IMPORTANT: PAPER KEY GENERATION\n\n")
+	l.parent.Printf("\n")
+	l.parent.Printf("===============================\n")
+	l.parent.Printf("IMPORTANT: PAPER KEY GENERATION\n")
+	l.parent.Printf("===============================\n\n")
 	l.parent.Printf("During Keybase's alpha, everyone gets a paper key. This is a private key.\n")
 	l.parent.Printf("  1. you must write it down\n")
-	l.parent.Printf("  2. it can be used to recover data\n")
-	l.parent.Printf("  3. it can be used to add new computers before we have a mobile app, so your wallet is a good place for it.\n\n")
+	l.parent.Printf("  2. the first two words are a public label\n")
+	l.parent.Printf("  3. it can be used to recover data\n")
+	l.parent.Printf("  4. it can provision new keys/devices, so put it in your wallet\n")
+	l.parent.Printf("  5. just like any other device, it'll be revokable/replaceable if you lose it\n\n")
 	l.parent.Printf("Your paper key is\n\n")
 	l.parent.Printf("\t%s\n\n", arg.Phrase)
-	l.parent.Printf("Write it down now.\n\n")
-	confirmed, err := l.parent.PromptYesNo("Have you written down the above key?", PromptDefaultNo)
+	l.parent.Printf("Write it down....now!\n\n")
+
+	confirmed, err := l.parent.PromptYesNo("Have you written down the above paper key?", PromptDefaultNo)
 	if err != nil {
 		return err
 	}
@@ -634,6 +626,18 @@ func (l LoginUI) DisplayPrimaryPaperKey(arg keybase1.DisplayPrimaryPaperKeyArg) 
 		l.parent.Printf("\nPlease write down your paper key\n\n")
 		l.parent.Printf("\t%s\n\n", arg.Phrase)
 		confirmed, err = l.parent.PromptYesNo("Now have you written it down?", PromptDefaultNo)
+		if err != nil {
+			return err
+		}
+	}
+
+	confirmed, err = l.parent.PromptYesNo("Excellent!  Is it in your wallet?", PromptDefaultNo)
+	if err != nil {
+		return err
+	}
+	for !confirmed {
+		l.parent.Printf("\nPlease put it in your wallet.\n\n")
+		confirmed, err = l.parent.PromptYesNo("Now is it in your wallet?", PromptDefaultNo)
 		if err != nil {
 			return err
 		}
@@ -892,17 +896,17 @@ func (ui *UI) PromptSelectionOrCancel(prompt string, low, hi int) (ret int, err 
 		Prompt: prompt,
 		Checker: &libkb.Checker{
 			F: func(s string) bool {
-				if s == "c" {
+				if s == "q" {
 					return true
 				}
 				v, e := strconv.Atoi(s)
 				return (e == nil && v >= low && v <= hi)
 			},
-			Hint: fmt.Sprintf("%d-%d, or c to cancel", low, hi),
+			Hint: fmt.Sprintf("%d-%d, or q to cancel", low, hi),
 		},
 	}
 	err = NewPrompter([]*Field{field}).Run()
-	if p := field.Value; p == nil || *p == "c" {
+	if p := field.Value; p == nil || *p == "q" {
 		err = ErrInputCanceled
 	} else {
 		ret, err = strconv.Atoi(*p)

@@ -38,22 +38,14 @@ func NewGpgCLI(arg GpgCLIArg) *GpgCLI {
 	}
 }
 
-func (g *GpgCLI) Configure() (configExplicit bool, err error) {
+func (g *GpgCLI) Configure() (err error) {
 
 	g.mutex.Lock()
 	defer g.mutex.Unlock()
 
-	if g.configured {
-		configExplicit = g.configExplicit
-		err = g.configError
-		return
-	}
-
 	prog := G.Env.GetGpg()
 	opts := G.Env.GetGpgOptions()
 
-	// If we asked for any explicit GPG options
-	configExplicit = (len(prog) > 0 || opts != nil)
 	if len(prog) > 0 {
 		err = canExec(prog)
 	} else {
@@ -67,16 +59,13 @@ func (g *GpgCLI) Configure() (configExplicit bool, err error) {
 
 	g.path = prog
 	g.options = opts
-	g.configured = true
-	g.configExplicit = configExplicit
-	g.configError = err
 
 	return
 }
 
 // CanExec returns true if a gpg executable exists.
 func (g *GpgCLI) CanExec() (bool, error) {
-	if _, err := g.Configure(); err != nil {
+	if err := g.Configure(); err != nil {
 		if oerr, ok := err.(*exec.Error); ok {
 			if oerr.Err == exec.ErrNotFound {
 				return false, nil
@@ -109,7 +98,7 @@ type RunGpgRes struct {
 	Wait  func() error
 }
 
-func (g *GpgCLI) ImportKey(secret bool, fp PGPFingerprint) (ret *PGPKeyBundle, err error) {
+func (g *GpgCLI) ImportKey(secret bool, fp PGPFingerprint) (*PGPKeyBundle, error) {
 	var cmd string
 	if secret {
 		cmd = "--export-secret-key"
@@ -131,7 +120,7 @@ func (g *GpgCLI) ImportKey(secret bool, fp PGPFingerprint) (ret *PGPKeyBundle, e
 	buf.ReadFrom(res.Stdout)
 	armored := buf.String()
 
-	if err = res.Wait(); err != nil {
+	if err := res.Wait(); err != nil {
 		return nil, err
 	}
 
@@ -139,7 +128,23 @@ func (g *GpgCLI) ImportKey(secret bool, fp PGPFingerprint) (ret *PGPKeyBundle, e
 		return nil, NoKeyError{fmt.Sprintf("No key found for %s", fp)}
 	}
 
-	return ReadOneKeyFromString(armored)
+	bundle, err := ReadOneKeyFromString(armored)
+	if err != nil {
+		return nil, err
+	}
+
+	// For secret keys, *also* import the key in public mode, and then grab the
+	// ArmoredPublicKey from that. That's because the public import goes out of
+	// its way to preserve the exact armored string from GPG.
+	if secret {
+		publicBundle, err := g.ImportKey(false, fp)
+		if err != nil {
+			return nil, err
+		}
+		bundle.ArmoredPublicKey = publicBundle.ArmoredPublicKey
+	}
+
+	return bundle, nil
 }
 
 func (g *GpgCLI) ExportKey(k PGPKeyBundle) (err error) {
@@ -230,7 +235,7 @@ func (g *GpgCLI) Run2(arg RunGpg2Arg) (res RunGpg2Res) {
 	if !arg.Stderr {
 		out++
 		go func() {
-			ch <- DrainPipe(stderr, func(s string) { g.logUI.Warning(s) })
+			ch <- DrainPipe(stderr, func(s string) { g.logUI.Info(s) })
 		}()
 	} else {
 		res.Stderr = stderr

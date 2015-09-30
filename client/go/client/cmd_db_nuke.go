@@ -21,16 +21,22 @@ func (c *CmdDbNuke) Run() error {
 		err = GlobUI.PromptForConfirmation("Really blast away your local database?")
 	}
 	if err == nil {
-		err = G.LocalDb.Nuke()
+		cli, err := GetCtlClient()
+		if err != nil {
+			return err
+		}
+		if err = RegisterProtocols(nil); err != nil {
+			return err
+		}
+		return cli.DbNuke(0)
 	}
 	return err
 }
 
 func NewCmdDbNuke(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "nuke",
-		Usage:       "keybase db nuke",
-		Description: "Delete the local database.",
+		Name:  "nuke",
+		Usage: "Delete the local database",
 		Action: func(c *cli.Context) {
 			cl.ChooseCommand(&CmdDbNuke{}, "nuke", c)
 		},
@@ -45,9 +51,8 @@ func NewCmdDbNuke(cl *libcmdline.CommandLine) cli.Command {
 
 func NewCmdDb(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "db",
-		Usage:       "keybase db [...]",
-		Description: "Manage the local database.",
+		Name:  "db",
+		Usage: "Manage the local database",
 		Subcommands: []cli.Command{
 			NewCmdDbNuke(cl),
 		},

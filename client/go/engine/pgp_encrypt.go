@@ -131,7 +131,7 @@ func (e *PGPEncrypt) Run(ctx *Context) error {
 		writer = aw
 	}
 
-	var recipients []*libkb.PGPKeyBundle
+	ks := newKeyset()
 	if !e.arg.NoSelf {
 		if mykey == nil {
 			// need to load the public key for the logged in user
@@ -143,14 +143,17 @@ func (e *PGPEncrypt) Run(ctx *Context) error {
 
 		// mykey could still be nil
 		if mykey != nil {
-			recipients = append(recipients, mykey)
+			ks.Add(mykey)
 		}
 	}
 
 	for _, up := range uplus {
-		recipients = append(recipients, up.Keys...)
+		for _, k := range up.Keys {
+			ks.Add(k)
+		}
 	}
 
+	recipients := ks.Sorted()
 	if err := libkb.PGPEncrypt(e.arg.Source, writer, signer, recipients); err != nil {
 		return err
 	}
@@ -171,4 +174,35 @@ func (e *PGPEncrypt) loadSelfKey() (*libkb.PGPKeyBundle, error) {
 		return nil, libkb.NoKeyError{Msg: "No PGP key found for encrypting for self"}
 	}
 	return keys[0], nil
+}
+
+// keyset maintains a set of pgp keys, preserving insertion order.
+type keyset struct {
+	index []keybase1.KID
+	keys  map[keybase1.KID]*libkb.PGPKeyBundle
+}
+
+// newKeyset creates an empty keyset.
+func newKeyset() *keyset {
+	return &keyset{keys: make(map[keybase1.KID]*libkb.PGPKeyBundle)}
+}
+
+// Add adds bundle to the keyset.  If a key already exists, it
+// will be ignored.
+func (k *keyset) Add(bundle *libkb.PGPKeyBundle) {
+	kid := bundle.GetKID()
+	if _, ok := k.keys[kid]; ok {
+		return
+	}
+	k.keys[kid] = bundle
+	k.index = append(k.index, kid)
+}
+
+// Sorted returns the unique keys in insertion order.
+func (k *keyset) Sorted() []*libkb.PGPKeyBundle {
+	var sorted []*libkb.PGPKeyBundle
+	for _, kid := range k.index {
+		sorted = append(sorted, k.keys[kid])
+	}
+	return sorted
 }

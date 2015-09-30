@@ -180,16 +180,16 @@ func (s *CmdSigsList) Run() error {
 
 func NewCmdSigsList(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "list",
-		Usage:       "keybase sigs list",
-		Description: "List signatures.",
+		Name:         "list",
+		Usage:        "List signatures",
+		ArgumentHelp: "[username]",
 		Action: func(c *cli.Context) {
 			cl.ChooseCommand(&CmdSigsList{}, "list", c)
 		},
 		Flags: []cli.Flag{
 			cli.BoolFlag{
 				Name:  "r, revoked",
-				Usage: "Show revoked signatures.",
+				Usage: "Include revoked signatures.",
 			},
 			cli.BoolFlag{
 				Name:  "j, json",

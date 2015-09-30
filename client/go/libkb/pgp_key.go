@@ -140,8 +140,8 @@ func (k *PGPKeyBundle) StoreToLocalDb() error {
 		return err
 	}
 	val := jsonw.NewString(s)
-	G.Log.Debug("| Storing Key (fp=%s, kid=%s) to Local DB", k.GetFingerprint(), k.GetKID())
-	return G.LocalDb.Put(DbKey{Typ: DBPGPKey, Key: k.GetFingerprint().String()}, []DbKey{}, val)
+	G.Log.Debug("| Storing Key (kid=%s) to Local DB", k.GetKID())
+	return G.LocalDb.Put(DbKey{Typ: DBPGPKey, Key: k.GetKID().String()}, []DbKey{}, val)
 }
 
 func (p PGPFingerprint) Eq(p2 PGPFingerprint) bool {
@@ -569,8 +569,7 @@ func (k PGPKeyBundle) VerifyString(sig string, msg []byte) (id keybase1.SigID, e
 
 func IsPGPAlgo(algo AlgoType) bool {
 	switch algo {
-	case KIDPGPRsa, KIDPGPElgamal,
-		KIDPGPDsa, KIDPGPEcdh, KIDPGPEcdsa:
+	case KIDPGPRsa, KIDPGPElgamal, KIDPGPDsa, KIDPGPEcdh, KIDPGPEcdsa, KIDPGPBase:
 		return true
 	}
 	return false

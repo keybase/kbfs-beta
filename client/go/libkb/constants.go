@@ -32,14 +32,10 @@ var ServerLookup = map[RunMode]string{
 	ProductionRunMode: ProductionServerURI,
 }
 
-const DefaultRunMode = DevelRunMode
-
 const (
 	ConfigFile  = "config.json"
 	SessionFile = "session.json"
 	DBFile      = "keybase.leveldb"
-	SocketFile  = "keybased.sock"
-	PIDFile     = "keybased.pid"
 
 	SecretKeyringTemplate = "secretkeys.%u.mpack"
 
@@ -103,6 +99,7 @@ const (
 	SCGeneric                = 218
 	SCAlreadyLoggedIn        = 235
 	SCCanceled               = 237
+	SCReloginRequired        = 274
 	SCBadSignupUsernameTaken = 701
 	SCKeyNotFound            = 901
 	SCKeyInUse               = 907
@@ -116,6 +113,9 @@ const (
 	SCKeyNoEldest            = 920
 	SCKeyDuplicateUpdate     = 921
 	SCBadTrackSession        = 1301
+	SCDeviceNotFound         = 1409
+	SCDeviceMismatch         = 1410
+	SCDeviceRequired         = 1411
 	SCStreamExists           = 1501
 	SCStreamNotFound         = 1502
 	SCStreamWrongKind        = 1503
@@ -125,6 +125,7 @@ const (
 	SCProofError             = 1701
 	SCIdentificationExpired  = 1702
 	SCSelfNotFound           = 1703
+	SCBadKexPhrase           = 1704
 )
 
 const (

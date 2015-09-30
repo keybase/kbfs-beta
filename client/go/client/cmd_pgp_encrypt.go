@@ -12,9 +12,9 @@ import (
 
 func NewCmdPGPEncrypt(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "encrypt",
-		Usage:       "keybase pgp encrypt <usernames>",
-		Description: "PGP encrypt messages or files for keybase users.",
+		Name:         "encrypt",
+		ArgumentHelp: "<usernames...>",
+		Usage:        "PGP encrypt messages or files for keybase users",
 		Action: func(c *cli.Context) {
 			cl.ChooseCommand(&CmdPGPEncrypt{}, "encrypt", c)
 		},
@@ -60,6 +60,9 @@ func NewCmdPGPEncrypt(cl *libcmdline.CommandLine) cli.Command {
 				Usage: "Specify an outfile (stdout by default).",
 			},
 		},
+		Description : `If encrypting with signatures, "keybase pgp encrypt" requires an
+   imported PGP private key, and accesses the local Keybase keyring when producing
+   the signature.`,
 	}
 }
 
@@ -81,7 +84,7 @@ func (c *CmdPGPEncrypt) Run() error {
 	protocols := []rpc2.Protocol{
 		NewStreamUIProtocol(),
 		NewSecretUIProtocol(),
-		NewIdentifyUIProtocol(),
+		NewIdentifyTrackUIProtocol(),
 	}
 	if err := RegisterProtocols(protocols); err != nil {
 		return err

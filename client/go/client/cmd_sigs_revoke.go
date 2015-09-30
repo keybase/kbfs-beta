@@ -33,7 +33,6 @@ func (c *CmdSigsRevoke) Run() error {
 	}
 
 	protocols := []rpc2.Protocol{
-		NewLogUIProtocol(),
 		NewSecretUIProtocol(),
 	}
 	if err = RegisterProtocols(protocols); err != nil {
@@ -47,9 +46,9 @@ func (c *CmdSigsRevoke) Run() error {
 
 func NewCmdSigsRevoke(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "revoke",
-		Usage:       "keybase sigs revoke <id>",
-		Description: "Revoke signature.",
+		Name:         "revoke",
+		ArgumentHelp: "<id>",
+		Usage:        "Revoke signature",
 		Action: func(c *cli.Context) {
 			cl.ChooseCommand(&CmdSigsRevoke{}, "revoke", c)
 		},

@@ -9,9 +9,8 @@ import (
 
 func NewCmdPaperKey(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "paperkey",
-		Usage:       "keybase paperkey",
-		Description: "Generate paper keys for recovering your account.",
+		Name:  "paperkey",
+		Usage: "Generate paper keys for recovering your account",
 		Action: func(c *cli.Context) {
 			cl.ChooseCommand(&CmdPaperKey{}, "paperkey", c)
 		},
@@ -27,7 +26,6 @@ func (c *CmdPaperKey) Run() error {
 		return err
 	}
 	protocols := []rpc2.Protocol{
-		NewLogUIProtocol(),
 		NewLoginUIProtocol(),
 		NewSecretUIProtocol(),
 	}

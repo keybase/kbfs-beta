@@ -29,7 +29,6 @@ func (c *CmdRevoke) Run() (err error) {
 	}
 
 	protocols := []rpc2.Protocol{
-		NewLogUIProtocol(),
 		NewSecretUIProtocol(),
 	}
 	if err = RegisterProtocols(protocols); err != nil {
@@ -43,10 +42,10 @@ func (c *CmdRevoke) Run() (err error) {
 
 func NewCmdRevoke(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "revoke",
-		Usage:       "keybase revoke <key-id>",
-		Description: "Revoke a key.",
-		Flags:       []cli.Flag{},
+		Name:         "revoke",
+		ArgumentHelp: "<key-id>",
+		Usage:        "Revoke a key",
+		Flags:        []cli.Flag{},
 		Action: func(c *cli.Context) {
 			cl.ChooseCommand(&CmdRevoke{}, "revoke", c)
 		},

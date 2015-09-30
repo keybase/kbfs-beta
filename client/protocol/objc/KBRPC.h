@@ -102,6 +102,10 @@ typedef NS_ENUM (NSInteger, KBRLogLevel) {
 @property NSData *publicKey;
 @end
 
+@interface KBRFirstStepResult : KBRObject
+@property NSInteger valPlusTwo;
+@end
+
 typedef NS_ENUM (NSInteger, KBRDoctorFixType) {
 	KBRDoctorFixTypeNone = 0,
 	KBRDoctorFixTypeAddEldestDevice = 1,
@@ -638,8 +642,33 @@ typedef NS_ENUM (NSInteger, KBRPromptDefault) {
 @property NSData *peersPublicKey;
 @property NSString *reason;
 @end
+@interface KBRStopRequestParams : KBRRequestParams
+@property NSInteger sessionID;
+@end
+@interface KBRLogRotateRequestParams : KBRRequestParams
+@property NSInteger sessionID;
+@end
 @interface KBRSetLogLevelRequestParams : KBRRequestParams
+@property NSInteger sessionID;
 @property KBRLogLevel level;
+@end
+@interface KBRReloadRequestParams : KBRRequestParams
+@property NSInteger sessionID;
+@end
+@interface KBRDbNukeRequestParams : KBRRequestParams
+@property NSInteger sessionID;
+@end
+@interface KBRFirstStepRequestParams : KBRRequestParams
+@property NSInteger sessionID;
+@property NSInteger val;
+@end
+@interface KBRSecondStepRequestParams : KBRRequestParams
+@property NSInteger sessionID;
+@property NSInteger val;
+@end
+@interface KBRIncrementRequestParams : KBRRequestParams
+@property NSInteger sessionID;
+@property NSInteger val;
 @end
 @interface KBRDeviceListRequestParams : KBRRequestParams
 @property NSInteger sessionID;
@@ -828,6 +857,7 @@ typedef NS_ENUM (NSInteger, KBRPromptDefault) {
 @end
 @interface KBRPutMetadataRequestParams : KBRRequestParams
 @property NSData *mdBlock;
+@property KBRmap *logTags;
 @end
 @interface KBRGetMetadataRequestParams : KBRRequestParams
 @property NSString *folderID;
@@ -835,19 +865,24 @@ typedef NS_ENUM (NSInteger, KBRPromptDefault) {
 @property BOOL unmerged;
 @property long startRevision;
 @property long stopRevision;
+@property KBRmap *logTags;
 @end
 @interface KBRRegisterForUpdatesRequestParams : KBRRequestParams
 @property NSString *folderID;
 @property long currRevision;
+@property KBRmap *logTags;
 @end
 @interface KBRPruneUnmergedRequestParams : KBRRequestParams
 @property NSString *folderID;
+@property KBRmap *logTags;
 @end
 @interface KBRPutKeysRequestParams : KBRRequestParams
 @property NSArray *keyHalves;
+@property KBRmap *logTags;
 @end
 @interface KBRGetKeyRequestParams : KBRRequestParams
 @property NSData *keyHalfID;
+@property KBRmap *logTags;
 @end
 @interface KBRTruncateLockRequestParams : KBRRequestParams
 @property NSString *folderID;
@@ -1013,6 +1048,9 @@ typedef NS_ENUM (NSInteger, KBRPromptDefault) {
 @property NSString *username;
 @end
 @interface KBRCurrentSessionRequestParams : KBRRequestParams
+@property NSInteger sessionID;
+@end
+@interface KBRCurrentUIDRequestParams : KBRRequestParams
 @property NSInteger sessionID;
 @end
 @interface KBRCheckUsernameAvailableRequestParams : KBRRequestParams
@@ -1197,6 +1235,24 @@ typedef NS_ENUM (NSInteger, KBRPromptDefault) {
 - (void)setLogLevelWithLevel:(KBRLogLevel)level completion:(void (^)(NSError *error))completion;
 
 - (void)reload:(void (^)(NSError *error))completion;
+
+- (void)dbNuke:(void (^)(NSError *error))completion;
+
+@end
+
+@interface KBRDebuggingRequest : KBRRequest
+
+- (void)firstStep:(KBRFirstStepRequestParams *)params completion:(void (^)(NSError *error, KBRFirstStepResult *firstStepResult))completion;
+
+- (void)firstStepWithVal:(NSInteger)val completion:(void (^)(NSError *error, KBRFirstStepResult *firstStepResult))completion;
+
+- (void)secondStep:(KBRSecondStepRequestParams *)params completion:(void (^)(NSError *error, NSInteger n))completion;
+
+- (void)secondStepWithVal:(NSInteger)val completion:(void (^)(NSError *error, NSInteger n))completion;
+
+- (void)increment:(KBRIncrementRequestParams *)params completion:(void (^)(NSError *error, NSInteger n))completion;
+
+- (void)incrementWithVal:(NSInteger)val completion:(void (^)(NSError *error, NSInteger n))completion;
 
 @end
 
@@ -1401,33 +1457,33 @@ typedef NS_ENUM (NSInteger, KBRPromptDefault) {
 
 @interface KBRMetadataRequest : KBRRequest
 
-- (void)authenticate:(KBRAuthenticateRequestParams *)params completion:(void (^)(NSError *error))completion;
+- (void)authenticate:(KBRAuthenticateRequestParams *)params completion:(void (^)(NSError *error, NSInteger n))completion;
 
-- (void)authenticateWithUser:(NSString *)user deviceKID:(NSString *)deviceKID sid:(NSString *)sid completion:(void (^)(NSError *error))completion;
+- (void)authenticateWithUser:(NSString *)user deviceKID:(NSString *)deviceKID sid:(NSString *)sid completion:(void (^)(NSError *error, NSInteger n))completion;
 
 - (void)putMetadata:(KBRPutMetadataRequestParams *)params completion:(void (^)(NSError *error))completion;
 
-- (void)putMetadataWithMdBlock:(NSData *)mdBlock completion:(void (^)(NSError *error))completion;
+- (void)putMetadataWithMdBlock:(NSData *)mdBlock logTags:(KBRmap *)logTags completion:(void (^)(NSError *error))completion;
 
 - (void)getMetadata:(KBRGetMetadataRequestParams *)params completion:(void (^)(NSError *error, KBRMetadataResponse *metadataResponse))completion;
 
-- (void)getMetadataWithFolderID:(NSString *)folderID folderHandle:(NSData *)folderHandle unmerged:(BOOL)unmerged startRevision:(long)startRevision stopRevision:(long)stopRevision completion:(void (^)(NSError *error, KBRMetadataResponse *metadataResponse))completion;
+- (void)getMetadataWithFolderID:(NSString *)folderID folderHandle:(NSData *)folderHandle unmerged:(BOOL)unmerged startRevision:(long)startRevision stopRevision:(long)stopRevision logTags:(KBRmap *)logTags completion:(void (^)(NSError *error, KBRMetadataResponse *metadataResponse))completion;
 
 - (void)registerForUpdates:(KBRRegisterForUpdatesRequestParams *)params completion:(void (^)(NSError *error))completion;
 
-- (void)registerForUpdatesWithFolderID:(NSString *)folderID currRevision:(long)currRevision completion:(void (^)(NSError *error))completion;
+- (void)registerForUpdatesWithFolderID:(NSString *)folderID currRevision:(long)currRevision logTags:(KBRmap *)logTags completion:(void (^)(NSError *error))completion;
 
 - (void)pruneUnmerged:(KBRPruneUnmergedRequestParams *)params completion:(void (^)(NSError *error))completion;
 
-- (void)pruneUnmergedWithFolderID:(NSString *)folderID completion:(void (^)(NSError *error))completion;
+- (void)pruneUnmergedWithFolderID:(NSString *)folderID logTags:(KBRmap *)logTags completion:(void (^)(NSError *error))completion;
 
 - (void)putKeys:(KBRPutKeysRequestParams *)params completion:(void (^)(NSError *error))completion;
 
-- (void)putKeysWithKeyHalves:(NSArray *)keyHalves completion:(void (^)(NSError *error))completion;
+- (void)putKeysWithKeyHalves:(NSArray *)keyHalves logTags:(KBRmap *)logTags completion:(void (^)(NSError *error))completion;
 
 - (void)getKey:(KBRGetKeyRequestParams *)params completion:(void (^)(NSError *error, NSData *bytes))completion;
 
-- (void)getKeyWithKeyHalfID:(NSData *)keyHalfID completion:(void (^)(NSError *error, NSData *bytes))completion;
+- (void)getKeyWithKeyHalfID:(NSData *)keyHalfID logTags:(KBRmap *)logTags completion:(void (^)(NSError *error, NSData *bytes))completion;
 
 - (void)truncateLock:(KBRTruncateLockRequestParams *)params completion:(void (^)(NSError *error, BOOL b))completion;
 
@@ -1436,6 +1492,8 @@ typedef NS_ENUM (NSInteger, KBRPromptDefault) {
 - (void)truncateUnlock:(KBRTruncateUnlockRequestParams *)params completion:(void (^)(NSError *error, BOOL b))completion;
 
 - (void)truncateUnlockWithFolderID:(NSString *)folderID completion:(void (^)(NSError *error, BOOL b))completion;
+
+- (void)ping:(void (^)(NSError *error))completion;
 
 @end
 
@@ -1596,6 +1654,8 @@ typedef NS_ENUM (NSInteger, KBRPromptDefault) {
 @interface KBRSessionRequest : KBRRequest
 
 - (void)currentSession:(void (^)(NSError *error, KBRSession *session))completion;
+
+- (void)currentUID:(void (^)(NSError *error, NSString *uID))completion;
 
 @end
 

@@ -31,7 +31,6 @@ func (c *CmdBTC) Run() (err error) {
 	}
 
 	protocols := []rpc2.Protocol{
-		NewLogUIProtocol(),
 		NewSecretUIProtocol(),
 	}
 	if err = RegisterProtocols(protocols); err != nil {
@@ -46,9 +45,9 @@ func (c *CmdBTC) Run() (err error) {
 
 func NewCmdBTC(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "btc",
-		Usage:       "keybase btc <address>",
-		Description: "Claim a bitcoin address.",
+		Name:         "btc",
+		Usage:        "Claim a bitcoin address",
+		ArgumentHelp: "<address>",
 		Flags: []cli.Flag{
 			cli.BoolFlag{
 				Name:  "f, force",

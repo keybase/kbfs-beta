@@ -26,7 +26,6 @@ func (v *CmdPGPUpdate) Run() (err error) {
 	}
 
 	protocols := []rpc2.Protocol{
-		NewLogUIProtocol(),
 		NewSecretUIProtocol(),
 	}
 	if err = RegisterProtocols(protocols); err != nil {
@@ -41,9 +40,9 @@ func (v *CmdPGPUpdate) Run() (err error) {
 
 func NewCmdPGPUpdate(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "update",
-		Usage:       "keybase pgp update",
-		Description: "Update PGP keys.",
+		Name:         "update",
+		ArgumentHelp: "[fingerprints...]",
+		Usage:        "Update your public PGP keys on keybase with those exported from the local GPG keyring",
 		Flags: []cli.Flag{
 			cli.BoolFlag{
 				Name:  "all",
@@ -53,6 +52,14 @@ func NewCmdPGPUpdate(cl *libcmdline.CommandLine) cli.Command {
 		Action: func(c *cli.Context) {
 			cl.ChooseCommand(&CmdPGPUpdate{}, "update", c)
 		},
+		Description : `'keybase pgp update' pushed updated PGP public keys to the server.
+   Public PGP keys are exported from your local GPG keyring and sent
+   to the Keybase server, where they will supersede PGP keys that have been
+   previously updated. This feature is for updating PGP subkeys, identities,
+   and signatures, but cannot be used to change PGP primary keys.
+
+   Only keys with the specified PGP fingerprints will be updated, unless the
+   '--all' flag is specified, in which case all PGP keys will be updated.`,
 	}
 }
 

@@ -14,9 +14,8 @@ import (
 
 func NewCmdPGPImport(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "import",
-		Usage:       "keybase pgp import",
-		Description: "Import a PGP key into keybase.",
+		Name:  "import",
+		Usage: "Import a PGP key into keybase",
 		Action: func(c *cli.Context) {
 			cl.ChooseCommand(&CmdPGPImport{}, "import", c)
 		},
@@ -30,6 +29,17 @@ func NewCmdPGPImport(cl *libcmdline.CommandLine) cli.Command {
 				Usage: "Push an encrypted copy of the secret key to the server.",
 			},
 		},
+		Description : `"keybase pgp import" imports a PGP secret key for use with Keybase.
+   It accepts that secret key via file (with the "--infile" flag) or
+   otherwise via standard input. The secret key is used to sign the
+   public PGP key into the user's Keybase sigchain. The secret key
+   is also imported into the local Keybase keyring and encrypted with
+   the local key security protocol.
+
+   If (and only if) the "--push-secret" flag is specified, this command
+   pushes the PGP secret key to the Keybase server, encrypted with the
+   user's passphrase. The server, in this case, could theoretically
+   recover the PGP secret key by cracking the user's passphrase.`,
 	}
 }
 
@@ -55,7 +65,6 @@ func (s *CmdPGPImport) Run() error {
 	}
 
 	protocols := []rpc2.Protocol{
-		NewLogUIProtocol(),
 		NewSecretUIProtocol(),
 	}
 

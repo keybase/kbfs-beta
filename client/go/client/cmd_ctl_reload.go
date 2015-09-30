@@ -8,9 +8,8 @@ import (
 
 func NewCmdCtlReload(cl *libcmdline.CommandLine) cli.Command {
 	return cli.Command{
-		Name:        "reload",
-		Usage:       "keybase ctl reload",
-		Description: "Reload config file.",
+		Name:  "reload",
+		Usage: "Reload config file",
 		Action: func(c *cli.Context) {
 			cl.ChooseCommand(&CmdCtlReload{}, "reload", c)
 			cl.SetForkCmd(libcmdline.NoFork)
@@ -30,7 +29,7 @@ func (s *CmdCtlReload) Run() (err error) {
 	if err != nil {
 		return err
 	}
-	return cli.Reload()
+	return cli.Reload(0)
 }
 
 func (s *CmdCtlReload) GetUsage() libkb.Usage {
