@@ -1,0 +1,23 @@
+{
+  "protocol" : "account",
+  "namespace" : "keybase.1",
+  "types" : [ ],
+  "messages" : {
+    "passphraseChange" : {
+      "request" : [ {
+        "name" : "sessionID",
+        "type" : "int"
+      }, {
+        "name" : "oldPassphrase",
+        "type" : "string"
+      }, {
+        "name" : "passphrase",
+        "type" : "string"
+      }, {
+        "name" : "force",
+        "type" : "boolean"
+      } ],
+      "response" : "null"
+    }
+  }
+}

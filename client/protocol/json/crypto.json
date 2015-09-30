@@ -1,0 +1,73 @@
+{
+  "protocol" : "crypto",
+  "namespace" : "keybase.1",
+  "types" : [ {
+    "type" : "fixed",
+    "name" : "ED25519PublicKey",
+    "size" : 32
+  }, {
+    "type" : "fixed",
+    "name" : "ED25519Signature",
+    "size" : 64
+  }, {
+    "type" : "record",
+    "name" : "ED25519SignatureInfo",
+    "fields" : [ {
+      "name" : "sig",
+      "type" : "ED25519Signature"
+    }, {
+      "name" : "publicKey",
+      "type" : "ED25519PublicKey"
+    } ]
+  }, {
+    "type" : "fixed",
+    "name" : "Bytes32",
+    "size" : 32
+  }, {
+    "type" : "fixed",
+    "name" : "EncryptedBytes32",
+    "size" : 48
+  }, {
+    "type" : "fixed",
+    "name" : "BoxNonce",
+    "size" : 24
+  }, {
+    "type" : "fixed",
+    "name" : "BoxPublicKey",
+    "size" : 32
+  } ],
+  "messages" : {
+    "signED25519" : {
+      "request" : [ {
+        "name" : "sessionID",
+        "type" : "int"
+      }, {
+        "name" : "msg",
+        "type" : "bytes"
+      }, {
+        "name" : "reason",
+        "type" : "string"
+      } ],
+      "response" : "ED25519SignatureInfo"
+    },
+    "unboxBytes32" : {
+      "request" : [ {
+        "name" : "sessionID",
+        "type" : "int"
+      }, {
+        "name" : "encryptedBytes32",
+        "type" : "EncryptedBytes32"
+      }, {
+        "name" : "nonce",
+        "type" : "BoxNonce"
+      }, {
+        "name" : "peersPublicKey",
+        "type" : "BoxPublicKey"
+      }, {
+        "name" : "reason",
+        "type" : "string"
+      } ],
+      "response" : "Bytes32"
+    }
+  }
+}

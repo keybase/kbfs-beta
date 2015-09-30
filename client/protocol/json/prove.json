@@ -1,0 +1,354 @@
+{
+  "protocol" : "prove",
+  "namespace" : "keybase.1",
+  "types" : [ {
+    "type" : "record",
+    "name" : "Time",
+    "fields" : [ ],
+    "typedef" : "long"
+  }, {
+    "type" : "record",
+    "name" : "StringKVPair",
+    "fields" : [ {
+      "name" : "key",
+      "type" : "string"
+    }, {
+      "name" : "value",
+      "type" : "string"
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "Status",
+    "fields" : [ {
+      "name" : "code",
+      "type" : "int"
+    }, {
+      "name" : "name",
+      "type" : "string"
+    }, {
+      "name" : "desc",
+      "type" : "string"
+    }, {
+      "name" : "fields",
+      "type" : {
+        "type" : "array",
+        "items" : "StringKVPair"
+      }
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "UID",
+    "fields" : [ ],
+    "typedef" : "string"
+  }, {
+    "type" : "record",
+    "name" : "DeviceID",
+    "fields" : [ ],
+    "typedef" : "string"
+  }, {
+    "type" : "record",
+    "name" : "SigID",
+    "fields" : [ ],
+    "typedef" : "string"
+  }, {
+    "type" : "record",
+    "name" : "KID",
+    "fields" : [ ],
+    "typedef" : "string"
+  }, {
+    "type" : "record",
+    "name" : "Text",
+    "fields" : [ {
+      "name" : "data",
+      "type" : "string"
+    }, {
+      "name" : "markup",
+      "type" : "boolean"
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "PGPIdentity",
+    "fields" : [ {
+      "name" : "username",
+      "type" : "string"
+    }, {
+      "name" : "comment",
+      "type" : "string"
+    }, {
+      "name" : "email",
+      "type" : "string"
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "PublicKey",
+    "fields" : [ {
+      "name" : "KID",
+      "type" : "KID"
+    }, {
+      "name" : "PGPFingerprint",
+      "type" : "string"
+    }, {
+      "name" : "PGPIdentities",
+      "type" : {
+        "type" : "array",
+        "items" : "PGPIdentity"
+      }
+    }, {
+      "name" : "isSibkey",
+      "type" : "boolean"
+    }, {
+      "name" : "isEldest",
+      "type" : "boolean"
+    }, {
+      "name" : "parentID",
+      "type" : "string"
+    }, {
+      "name" : "deviceID",
+      "type" : "DeviceID"
+    }, {
+      "name" : "deviceDescription",
+      "type" : "string"
+    }, {
+      "name" : "deviceType",
+      "type" : "string"
+    }, {
+      "name" : "cTime",
+      "type" : "Time"
+    }, {
+      "name" : "eTime",
+      "type" : "Time"
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "User",
+    "fields" : [ {
+      "name" : "uid",
+      "type" : "UID"
+    }, {
+      "name" : "username",
+      "type" : "string"
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "Device",
+    "fields" : [ {
+      "name" : "type",
+      "type" : "string"
+    }, {
+      "name" : "name",
+      "type" : "string"
+    }, {
+      "name" : "deviceID",
+      "type" : "DeviceID"
+    }, {
+      "name" : "cTime",
+      "type" : "Time"
+    }, {
+      "name" : "mTime",
+      "type" : "Time"
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "Stream",
+    "fields" : [ {
+      "name" : "fd",
+      "type" : "int"
+    } ]
+  }, {
+    "type" : "enum",
+    "name" : "LogLevel",
+    "symbols" : [ "NONE_0", "DEBUG_1", "INFO_2", "NOTICE_3", "WARN_4", "ERROR_5", "CRITICAL_6", "FATAL_7" ]
+  }, {
+    "type" : "enum",
+    "name" : "ProofState",
+    "symbols" : [ "NONE_0", "OK_1", "TEMP_FAILURE_2", "PERM_FAILURE_3", "LOOKING_4", "SUPERSEDED_5", "POSTED_6", "REVOKED_7" ]
+  }, {
+    "type" : "enum",
+    "name" : "ProofStatus",
+    "doc" : "3: It's been found in the hunt, but not proven yet\n    1xx: Retryable soft errors\n    2xx: Will likely result in a hard error, if repeated enough\n    3xx: Hard final errors",
+    "symbols" : [ "NONE_0", "OK_1", "LOCAL_2", "FOUND_3", "BASE_ERROR_100", "HOST_UNREACHABLE_101", "PERMISSION_DENIED_103", "FAILED_PARSE_106", "DNS_ERROR_107", "AUTH_FAILED_108", "HTTP_500_150", "TIMEOUT_160", "INTERNAL_ERROR_170", "BASE_HARD_ERROR_200", "NOT_FOUND_201", "CONTENT_FAILURE_202", "BAD_USERNAME_203", "BAD_REMOTE_ID_204", "TEXT_NOT_FOUND_205", "BAD_ARGS_206", "CONTENT_MISSING_207", "TITLE_NOT_FOUND_208", "SERVICE_ERROR_209", "TOR_SKIPPED_210", "TOR_INCOMPATIBLE_211", "HTTP_300_230", "HTTP_400_240", "HTTP_OTHER_260", "EMPTY_JSON_270", "DELETED_301", "SERVICE_DEAD_302", "BAD_SIGNATURE_303", "BAD_API_URL_304", "UNKNOWN_TYPE_305", "NO_HINT_306", "BAD_HINT_TEXT_307" ]
+  }, {
+    "type" : "enum",
+    "name" : "ProofType",
+    "symbols" : [ "NONE_0", "KEYBASE_1", "TWITTER_2", "GITHUB_3", "REDDIT_4", "COINBASE_5", "HACKERNEWS_6", "GENERIC_WEB_SITE_1000", "DNS_1001", "ROOTER_100001" ]
+  }, {
+    "type" : "enum",
+    "name" : "TrackDiffType",
+    "symbols" : [ "NONE_0", "ERROR_1", "CLASH_2", "REVOKED_3", "UPGRADED_4", "NEW_5", "REMOTE_FAIL_6", "REMOTE_WORKING_7", "REMOTE_CHANGED_8" ]
+  }, {
+    "type" : "record",
+    "name" : "TrackDiff",
+    "fields" : [ {
+      "name" : "type",
+      "type" : "TrackDiffType"
+    }, {
+      "name" : "displayMarkup",
+      "type" : "string"
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "TrackSummary",
+    "fields" : [ {
+      "name" : "username",
+      "type" : "string"
+    }, {
+      "name" : "time",
+      "type" : "Time"
+    }, {
+      "name" : "isRemote",
+      "type" : "boolean"
+    } ]
+  }, {
+    "type" : "enum",
+    "name" : "TrackStatus",
+    "symbols" : [ "NEW_OK_1", "NEW_ZERO_PROOFS_2", "NEW_FAIL_PROOFS_3", "UPDATE_BROKEN_4", "UPDATE_NEW_PROOFS_5", "UPDATE_OK_6" ]
+  }, {
+    "type" : "record",
+    "name" : "TrackOptions",
+    "fields" : [ {
+      "name" : "localOnly",
+      "type" : "boolean"
+    }, {
+      "name" : "bypassConfirm",
+      "type" : "boolean"
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "IdentifyOutcome",
+    "fields" : [ {
+      "name" : "username",
+      "type" : "string"
+    }, {
+      "name" : "status",
+      "type" : [ "null", "Status" ]
+    }, {
+      "name" : "warnings",
+      "type" : {
+        "type" : "array",
+        "items" : "string"
+      }
+    }, {
+      "name" : "trackUsed",
+      "type" : [ "null", "TrackSummary" ]
+    }, {
+      "name" : "trackStatus",
+      "type" : "TrackStatus"
+    }, {
+      "name" : "numTrackFailures",
+      "type" : "int"
+    }, {
+      "name" : "numTrackChanges",
+      "type" : "int"
+    }, {
+      "name" : "numProofFailures",
+      "type" : "int"
+    }, {
+      "name" : "numRevoked",
+      "type" : "int"
+    }, {
+      "name" : "numProofSuccesses",
+      "type" : "int"
+    }, {
+      "name" : "revoked",
+      "type" : {
+        "type" : "array",
+        "items" : "TrackDiff"
+      }
+    }, {
+      "name" : "trackOptions",
+      "type" : "TrackOptions"
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "IdentifyRes",
+    "fields" : [ {
+      "name" : "user",
+      "type" : [ "null", "User" ]
+    }, {
+      "name" : "publicKeys",
+      "type" : {
+        "type" : "array",
+        "items" : "PublicKey"
+      }
+    }, {
+      "name" : "outcome",
+      "type" : "IdentifyOutcome"
+    }, {
+      "name" : "trackToken",
+      "type" : "string"
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "RemoteProof",
+    "fields" : [ {
+      "name" : "proofType",
+      "type" : "ProofType"
+    }, {
+      "name" : "key",
+      "type" : "string"
+    }, {
+      "name" : "value",
+      "type" : "string"
+    }, {
+      "name" : "displayMarkup",
+      "type" : "string"
+    }, {
+      "name" : "sigID",
+      "type" : "SigID"
+    }, {
+      "name" : "mTime",
+      "type" : "Time"
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "CheckProofStatus",
+    "fields" : [ {
+      "name" : "found",
+      "type" : "boolean"
+    }, {
+      "name" : "status",
+      "type" : "ProofStatus"
+    }, {
+      "name" : "proofText",
+      "type" : "string"
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "StartProofResult",
+    "fields" : [ {
+      "name" : "sigID",
+      "type" : "SigID"
+    } ]
+  } ],
+  "messages" : {
+    "startProof" : {
+      "request" : [ {
+        "name" : "sessionID",
+        "type" : "int"
+      }, {
+        "name" : "service",
+        "type" : "string"
+      }, {
+        "name" : "username",
+        "type" : "string"
+      }, {
+        "name" : "force",
+        "type" : "boolean"
+      }, {
+        "name" : "promptPosted",
+        "type" : "boolean"
+      } ],
+      "response" : "StartProofResult"
+    },
+    "checkProof" : {
+      "request" : [ {
+        "name" : "sessionID",
+        "type" : "int"
+      }, {
+        "name" : "sigID",
+        "type" : "SigID"
+      } ],
+      "response" : "CheckProofStatus"
+    }
+  }
+}
