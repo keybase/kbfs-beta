@@ -14,7 +14,7 @@ import (
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
-	keybase1 "github.com/keybase/client/protocol/go"
+	keybase1 "github.com/keybase/client/go/protocol"
 	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
 )
 
@@ -339,6 +339,9 @@ func (c *CmdStress) SelectKeyAndPushOption(arg keybase1.SelectKeyAndPushOptionAr
 	return
 }
 func (c *CmdStress) WantToAddGPGKey(dummy int) (bool, error) {
+	return false, nil
+}
+func (c *CmdStress) ConfirmDuplicateKeyChosen(dummy int) (bool, error) {
 	return false, nil
 }
 

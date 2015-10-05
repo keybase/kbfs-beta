@@ -2,7 +2,7 @@ package engine
 
 import (
 	"github.com/keybase/client/go/libkb"
-	keybase1 "github.com/keybase/client/protocol/go"
+	keybase1 "github.com/keybase/client/go/protocol"
 )
 
 type UntrackEngineArg struct {
@@ -182,7 +182,7 @@ func (e *UntrackEngine) storeRemoteUntrack(them *libkb.User, ctx *Context) (err 
 		KeyType: libkb.DeviceSigningKeyType,
 	}
 	var signingKeyPriv libkb.GenericKey
-	if signingKeyPriv, _, err = e.G().Keyrings.GetSecretKeyWithPrompt(ctx.LoginContext, arg, ctx.SecretUI, "untracking signature"); err != nil {
+	if signingKeyPriv, err = e.G().Keyrings.GetSecretKeyWithPrompt(ctx.LoginContext, arg, ctx.SecretUI, "untracking signature"); err != nil {
 		return
 	}
 

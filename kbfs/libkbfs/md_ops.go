@@ -79,14 +79,19 @@ func (md *MDOpsStandard) processMetadata(ctx context.Context,
 	return nil
 }
 
-func (md *MDOpsStandard) getForHandle(ctx context.Context, handle *TlfHandle, Unmerged bool) (
+func (md *MDOpsStandard) getForHandle(ctx context.Context, handle *TlfHandle,
+	mStatus MergeStatus) (
 	*RootMetadata, error) {
 	mdserv := md.config.MDServer()
-	id, rmds, err := mdserv.GetForHandle(ctx, handle, Unmerged)
+	id, rmds, err := mdserv.GetForHandle(ctx, handle, mStatus)
 	if err != nil {
 		return nil, err
 	}
 	if rmds == nil {
+		if mStatus == Unmerged {
+			// don't automatically create unmerged MDs
+			return nil, nil
+		}
 		// create one if it doesn't exist
 		rmd := NewRootMetadata(handle, id)
 		rmds = &RootMetadataSigned{MD: *rmd}
@@ -112,13 +117,13 @@ func (md *MDOpsStandard) getForHandle(ctx context.Context, handle *TlfHandle, Un
 // GetForHandle implements the MDOps interface for MDOpsStandard.
 func (md *MDOpsStandard) GetForHandle(ctx context.Context, handle *TlfHandle) (
 	*RootMetadata, error) {
-	return md.getForHandle(ctx, handle, false)
+	return md.getForHandle(ctx, handle, Merged)
 }
 
 // GetUnmergedForHandle implements the MDOps interface for MDOpsStandard.
 func (md *MDOpsStandard) GetUnmergedForHandle(ctx context.Context, handle *TlfHandle) (
 	*RootMetadata, error) {
-	return md.getForHandle(ctx, handle, true)
+	return md.getForHandle(ctx, handle, Unmerged)
 }
 
 func (md *MDOpsStandard) processMetadataWithID(ctx context.Context,
@@ -134,14 +139,14 @@ func (md *MDOpsStandard) processMetadataWithID(ctx context.Context,
 	return md.processMetadata(ctx, rmds.MD.GetTlfHandle(), rmds)
 }
 
-func (md *MDOpsStandard) getForTLF(ctx context.Context, id TlfID, Unmerged bool) (
-	*RootMetadata, error) {
-	rmds, err := md.config.MDServer().GetForTLF(ctx, id, Unmerged)
+func (md *MDOpsStandard) getForTLF(ctx context.Context, id TlfID,
+	mStatus MergeStatus) (*RootMetadata, error) {
+	rmds, err := md.config.MDServer().GetForTLF(ctx, id, mStatus)
 	if err != nil {
 		return nil, err
 	}
 	if rmds == nil {
-		// Possible if unmerged is true.
+		// Possible if mStatus is Unmerged
 		return nil, nil
 	}
 	err = md.processMetadataWithID(ctx, id, rmds)
@@ -154,13 +159,13 @@ func (md *MDOpsStandard) getForTLF(ctx context.Context, id TlfID, Unmerged bool)
 // GetForTLF implements the MDOps interface for MDOpsStandard.
 func (md *MDOpsStandard) GetForTLF(ctx context.Context, id TlfID) (
 	*RootMetadata, error) {
-	return md.getForTLF(ctx, id, false)
+	return md.getForTLF(ctx, id, Merged)
 }
 
 // GetUnmergedForTLF implements the MDOps interface for MDOpsStandard.
 func (md *MDOpsStandard) GetUnmergedForTLF(ctx context.Context, id TlfID) (
 	*RootMetadata, error) {
-	return md.getForTLF(ctx, id, true)
+	return md.getForTLF(ctx, id, Unmerged)
 }
 
 func (md *MDOpsStandard) processRange(ctx context.Context, id TlfID,
@@ -216,9 +221,10 @@ func (md *MDOpsStandard) processRange(ctx context.Context, id TlfID,
 	return rmd, nil
 }
 
-func (md *MDOpsStandard) getRange(ctx context.Context, id TlfID, Unmerged bool,
-	start, stop MetadataRevision) ([]*RootMetadata, error) {
-	rmds, err := md.config.MDServer().GetRange(ctx, id, Unmerged, start, stop)
+func (md *MDOpsStandard) getRange(ctx context.Context, id TlfID,
+	mStatus MergeStatus, start, stop MetadataRevision) (
+	[]*RootMetadata, error) {
+	rmds, err := md.config.MDServer().GetRange(ctx, id, mStatus, start, stop)
 	if err != nil {
 		return nil, err
 	}
@@ -232,13 +238,13 @@ func (md *MDOpsStandard) getRange(ctx context.Context, id TlfID, Unmerged bool,
 // GetRange implements the MDOps interface for MDOpsStandard.
 func (md *MDOpsStandard) GetRange(ctx context.Context, id TlfID,
 	start, stop MetadataRevision) ([]*RootMetadata, error) {
-	return md.getRange(ctx, id, false, start, stop)
+	return md.getRange(ctx, id, Merged, start, stop)
 }
 
 // GetUnmergedRange implements the MDOps interface for MDOpsStandard.
 func (md *MDOpsStandard) GetUnmergedRange(ctx context.Context, id TlfID,
 	start, stop MetadataRevision) ([]*RootMetadata, error) {
-	return md.getRange(ctx, id, true, start, stop)
+	return md.getRange(ctx, id, Unmerged, start, stop)
 }
 
 func (md *MDOpsStandard) readyMD(ctx context.Context, rmd *RootMetadata) (

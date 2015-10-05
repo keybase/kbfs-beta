@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"time"
 
-	keybase1 "github.com/keybase/client/protocol/go"
+	keybase1 "github.com/keybase/client/go/protocol"
 )
 
 const (
@@ -36,6 +36,8 @@ const (
 	ConfigFile  = "config.json"
 	SessionFile = "session.json"
 	DBFile      = "keybase.leveldb"
+	SocketFile  = "keybased.sock"
+	PIDFile     = "keybased.pid"
 
 	SecretKeyringTemplate = "secretkeys.%u.mpack"
 
@@ -46,7 +48,7 @@ const (
 	IdentifyAs       = GoClientID + " v" + Version + " " + runtime.GOOS
 )
 
-var UserAgent = "Keybase-Go-CLI/" + Version + " (" + runtime.Version() + " on " + runtime.GOOS + ")"
+var UserAgent = "Keybase/" + Version + " (" + runtime.Version() + " on " + runtime.GOOS + ")"
 
 const (
 	PermFile          os.FileMode = 0600
@@ -112,6 +114,7 @@ const (
 	SCKeyBadEldest           = 919
 	SCKeyNoEldest            = 920
 	SCKeyDuplicateUpdate     = 921
+	SCSibkeyAlreadyExists    = 922
 	SCBadTrackSession        = 1301
 	SCDeviceNotFound         = 1409
 	SCDeviceMismatch         = 1410

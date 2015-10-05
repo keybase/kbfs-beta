@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
-	keybase1 "github.com/keybase/client/protocol/go"
+	keybase1 "github.com/keybase/client/go/protocol"
 	"golang.org/x/net/context"
 )
 
@@ -75,6 +75,12 @@ func kbfsOpsInit(t *testing.T, changeMd bool) (mockCtrl *gomock.Controller,
 		config.mockCrypto.EXPECT().MakeMdID(gomock.Any()).AnyTimes().
 			Return(fakeMdID(1), nil)
 	}
+
+	// These tests don't rely on external notifications at all, so ignore any
+	// goroutine attempting to register:
+	c := make(chan error, 1)
+	config.mockMdserv.EXPECT().RegisterForUpdate(gomock.Any(),
+		gomock.Any(), gomock.Any()).AnyTimes().Return(c, nil)
 
 	// make the context identifiable, to verify that it is passed
 	// correctly to the observer
@@ -385,13 +391,11 @@ func TestKBFSOpsGetRootMDForHandleExisting(t *testing.T) {
 		Ctime: 2,
 	}
 
+	config.mockMdops.EXPECT().GetUnmergedForHandle(gomock.Any(), h).Return(
+		nil, nil)
 	config.mockMdops.EXPECT().GetForHandle(gomock.Any(), h).Return(rmd, nil)
 	ops := getOps(config, id)
 	ops.head = rmd
-
-	c := make(chan error, 1)
-	config.mockMdserv.EXPECT().RegisterForUpdate(gomock.Any(),
-		gomock.Any(), gomock.Any()).AnyTimes().Return(c, nil)
 
 	n, de, err :=
 		config.KBFSOps().GetOrCreateRootNodeForHandle(ctx, h, MasterBranch)

@@ -5,7 +5,7 @@ import (
 	"io"
 
 	"github.com/keybase/client/go/libkb"
-	keybase1 "github.com/keybase/client/protocol/go"
+	keybase1 "github.com/keybase/client/go/protocol"
 
 	"golang.org/x/crypto/openpgp"
 	"golang.org/x/crypto/openpgp/clearsign"
@@ -81,7 +81,7 @@ func (p *PGPSignEngine) Run(ctx *Context) (err error) {
 		KeyQuery: p.arg.Opts.KeyQuery,
 	}
 
-	key, _, err = p.G().Keyrings.GetSecretKeyWithPrompt(ctx.LoginContext, ska, ctx.SecretUI, "command-line signature")
+	key, err = p.G().Keyrings.GetSecretKeyWithPrompt(ctx.LoginContext, ska, ctx.SecretUI, "command-line signature")
 
 	if err != nil {
 		return

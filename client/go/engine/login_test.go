@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/keybase/client/go/libkb"
-	keybase1 "github.com/keybase/client/protocol/go"
+	keybase1 "github.com/keybase/client/go/protocol"
 )
 
 // Test login switching between two different users.
@@ -222,7 +222,7 @@ func TestLoginPGPMultSignNewDevice(t *testing.T) {
 	ctx := &Context{
 		LogUI:       tc2.G.UI.GetLogUI(),
 		LocksmithUI: docui,
-		GPGUI:       &gpgtestui{1},
+		GPGUI:       &gpgtestui{1, 0},
 		SecretUI:    secui,
 		LoginUI:     &libkb.TestLoginUI{Username: u1.Username},
 	}

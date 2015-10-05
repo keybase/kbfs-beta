@@ -1,7 +1,7 @@
 package service
 
 import (
-	keybase1 "github.com/keybase/client/protocol/go"
+	keybase1 "github.com/keybase/client/go/protocol"
 	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
 )
 
@@ -29,4 +29,8 @@ func (r *RemoteGPGUI) SelectKeyAndPushOption(arg keybase1.SelectKeyAndPushOption
 
 func (r *RemoteGPGUI) WantToAddGPGKey(int) (bool, error) {
 	return r.uicli.WantToAddGPGKey(r.sessionID)
+}
+
+func (r *RemoteGPGUI) ConfirmDuplicateKeyChosen(int) (bool, error) {
+	return r.uicli.ConfirmDuplicateKeyChosen(r.sessionID)
 }

@@ -9,7 +9,7 @@ import (
 	"fmt"
 
 	"github.com/keybase/client/go/libkb"
-	keybase1 "github.com/keybase/client/protocol/go"
+	keybase1 "github.com/keybase/client/go/protocol"
 )
 
 type queryType int
@@ -125,7 +125,7 @@ func (e *PGPKeyExportEngine) exportSecret(ctx *Context) error {
 		ExactMatch: e.arg.ExactMatch,
 	}
 
-	key, skb, err := e.G().Keyrings.GetSecretKeyWithPrompt(ctx.LoginContext, ska, ctx.SecretUI, "key export")
+	key, skb, err := e.G().Keyrings.GetSecretKeyAndSKBWithPrompt(ctx.LoginContext, ska, ctx.SecretUI, "key export")
 	if err != nil {
 		if _, ok := err.(libkb.NoSecretKeyError); ok {
 			// if no secret key found, don't return an error, just let

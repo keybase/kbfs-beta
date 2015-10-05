@@ -7,7 +7,7 @@ import (
 
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/logger"
-	keybase1 "github.com/keybase/client/protocol/go"
+	keybase1 "github.com/keybase/client/go/protocol"
 	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
 	metrics "github.com/rcrowley/go-metrics"
 	"golang.org/x/net/context"
@@ -645,18 +645,19 @@ type MDServer interface {
 	// the logged-in user has read permission on the folder.  It
 	// creates the folder if one doesn't exist yet, and the logged-in
 	// user has permission to do so.
-	GetForHandle(ctx context.Context, handle *TlfHandle, isUnmerged bool) (
+	GetForHandle(ctx context.Context, handle *TlfHandle, mStatus MergeStatus) (
 		TlfID, *RootMetadataSigned, error)
 
 	// GetForTLF returns the current (signed/encrypted) metadata object
 	// corresponding to the given top-level folder, if the logged-in
 	// user has read permission on the folder.
-	GetForTLF(ctx context.Context, id TlfID, isUnmerged bool) (
+	GetForTLF(ctx context.Context, id TlfID, mStatus MergeStatus) (
 		*RootMetadataSigned, error)
 
 	// GetRange returns a range of (signed/encrypted) metadata objects
 	// corresponding to the passed revision numbers (inclusive).
-	GetRange(ctx context.Context, id TlfID, isUnmerged bool, start, stop MetadataRevision) (
+	GetRange(ctx context.Context, id TlfID, mStatus MergeStatus,
+		start, stop MetadataRevision) (
 		[]*RootMetadataSigned, error)
 
 	// Put stores the (signed/encrypted) metadata object for the given

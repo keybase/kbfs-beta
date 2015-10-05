@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/keybase/client/go/logger"
-	keybase1 "github.com/keybase/client/protocol/go"
+	keybase1 "github.com/keybase/client/go/protocol"
 	"golang.org/x/net/context"
 )
 
@@ -103,8 +103,12 @@ func (b *BlockServerRemote) OnDisconnected() {
 }
 
 // ShouldThrottle implements the ConnectionHandler interface.
-func (b *BlockServerRemote) ShouldThrottle(error) bool {
-	return false
+func (b *BlockServerRemote) ShouldThrottle(err error) bool {
+	if err == nil {
+		return false
+	}
+	_, shouldThrottle := err.(BServerErrorThrottle)
+	return shouldThrottle
 }
 
 // Helper to call an rpc command.

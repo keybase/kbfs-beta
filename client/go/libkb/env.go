@@ -1,7 +1,6 @@
 package libkb
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	keybase1 "github.com/keybase/client/protocol/go"
+	keybase1 "github.com/keybase/client/go/protocol"
 )
 
 type NullConfiguration struct{}
@@ -155,6 +154,10 @@ func (e *Env) SetConfigWriter(writer ConfigWriter) {
 }
 
 func NewEnv(cmd CommandLine, config ConfigReader) *Env {
+	return newEnv(cmd, config, runtime.GOOS)
+}
+
+func newEnv(cmd CommandLine, config ConfigReader, osname string) *Env {
 	if cmd == nil {
 		cmd = NullConfiguration{}
 	}
@@ -165,7 +168,7 @@ func NewEnv(cmd CommandLine, config ConfigReader) *Env {
 
 	e.homeFinder = NewHomeFinder("keybase",
 		func() string { return e.getHomeFromCmdOrConfig() },
-		runtime.GOOS,
+		osname,
 		func() RunMode { return e.GetRunMode() })
 	return &e
 }
@@ -403,8 +406,7 @@ func (e *Env) GetSocketFile() (ret string, err error) {
 		func() string { return e.config.GetSocketFile() },
 	)
 	if len(ret) == 0 {
-		filename := fmt.Sprintf("keybased-%s.sock", e.GetRunMode())
-		ret = filepath.Join(e.GetRuntimeDir(), filename)
+		ret = filepath.Join(e.GetRuntimeDir(), SocketFile)
 	}
 	return
 }
@@ -416,8 +418,7 @@ func (e *Env) GetPidFile() (ret string, err error) {
 		func() string { return e.config.GetPidFile() },
 	)
 	if len(ret) == 0 {
-		filename := fmt.Sprintf("keybased-%s.pid", e.GetRunMode())
-		ret = filepath.Join(e.GetRuntimeDir(), filename)
+		ret = filepath.Join(e.GetRuntimeDir(), PIDFile)
 	}
 	return
 }
@@ -680,4 +681,29 @@ func (e *Env) GetStoredSecretServiceName() string {
 		serviceName = serviceName + "-test"
 	}
 	return serviceName
+}
+
+type AppConfig struct {
+	NullConfiguration
+	HomeDir       string
+	RunMode       RunMode
+	Debug         bool
+	LocalRPCDebug string
+	ServerURI     string
+}
+
+func (c AppConfig) GetDebug() (bool, bool) {
+	return c.Debug, c.Debug
+}
+
+func (c AppConfig) GetLocalRPCDebug() string {
+	return c.LocalRPCDebug
+}
+
+func (c AppConfig) GetRunMode() (RunMode, error) {
+	return c.RunMode, nil
+}
+
+func (c AppConfig) GetHome() string {
+	return c.HomeDir
 }

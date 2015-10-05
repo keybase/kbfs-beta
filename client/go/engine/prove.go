@@ -2,7 +2,7 @@ package engine
 
 import (
 	libkb "github.com/keybase/client/go/libkb"
-	keybase1 "github.com/keybase/client/protocol/go"
+	keybase1 "github.com/keybase/client/go/protocol"
 	jsonw "github.com/keybase/go-jsonw"
 )
 
@@ -168,7 +168,7 @@ func (p *Prove) generateProof(ctx *Context) (err error) {
 		Me:      p.me,
 		KeyType: libkb.DeviceSigningKeyType,
 	}
-	seckey, locked, err := p.G().Keyrings.GetSecretKeyWithPrompt(
+	seckey, locked, err := p.G().Keyrings.GetSecretKeyAndSKBWithPrompt(
 		ctx.LoginContext, ska, ctx.SecretUI, "proof signature")
 	if err != nil {
 		return

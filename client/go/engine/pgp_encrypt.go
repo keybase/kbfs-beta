@@ -5,7 +5,7 @@ import (
 	"io"
 
 	"github.com/keybase/client/go/libkb"
-	keybase1 "github.com/keybase/client/protocol/go"
+	keybase1 "github.com/keybase/client/go/protocol"
 	"golang.org/x/crypto/openpgp/armor"
 )
 
@@ -90,7 +90,7 @@ func (e *PGPEncrypt) Run(ctx *Context) error {
 			KeyType:  libkb.PGPKeyType,
 			KeyQuery: e.arg.KeyQuery,
 		}
-		key, _, err := e.G().Keyrings.GetSecretKeyWithPrompt(ctx.LoginContext, ska, ctx.SecretUI, "command-line signature")
+		key, err := e.G().Keyrings.GetSecretKeyWithPrompt(ctx.LoginContext, ska, ctx.SecretUI, "command-line signature")
 		if err != nil {
 			return err
 		}

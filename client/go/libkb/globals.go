@@ -22,7 +22,7 @@ import (
 
 	"github.com/keybase/client/go/cache/favcache"
 	"github.com/keybase/client/go/logger"
-	keybase1 "github.com/keybase/client/protocol/go"
+	keybase1 "github.com/keybase/client/go/protocol"
 )
 
 type ShutdownHook func() error
@@ -248,13 +248,17 @@ func (u Usage) UseKeyring() bool {
 	return u.KbKeyring || u.GpgKeyring
 }
 
-func (g *GlobalContext) ConfigureAll(line CommandLine, cmd Command) error {
-
-	g.SetCommandLine(line)
-
-	g.ConfigureLogging()
-
+func (g *GlobalContext) ConfigureCommand(line CommandLine, cmd Command) error {
 	usage := cmd.GetUsage()
+	return g.Configure(line, usage)
+}
+
+func (g *GlobalContext) Configure(line CommandLine, usage Usage) error {
+	g.SetCommandLine(line)
+	err := g.ConfigureLogging()
+	if err != nil {
+		return err
+	}
 	return g.ConfigureUsage(usage)
 }
 

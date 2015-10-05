@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/keybase/client/go/libkb"
-	keybase1 "github.com/keybase/client/protocol/go"
+	keybase1 "github.com/keybase/client/go/protocol"
 )
 
 type RevokeMode int
@@ -116,7 +116,7 @@ func (e *RevokeEngine) Run(ctx *Context) error {
 		ctx.LogUI.Info("  %s", kid)
 	}
 
-	sigKey, _, err := e.G().Keyrings.GetSecretKeyWithPrompt(ctx.LoginContext, libkb.SecretKeyArg{
+	sigKey, err := e.G().Keyrings.GetSecretKeyWithPrompt(ctx.LoginContext, libkb.SecretKeyArg{
 		Me:      me,
 		KeyType: libkb.DeviceSigningKeyType,
 	}, ctx.SecretUI, "to revoke another key")
