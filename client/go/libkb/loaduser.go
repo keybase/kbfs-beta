@@ -302,3 +302,48 @@ func LookupMerkleLeaf(uid keybase1.UID, local *User) (f *MerkleUserLeaf, err err
 	}
 	return
 }
+
+func LoadUserPlusKeys(g *GlobalContext, uid keybase1.UID, cacheOK bool) (keybase1.UserPlusKeys, error) {
+	var up keybase1.UserPlusKeys
+	if uid.IsNil() {
+		return up, fmt.Errorf("Nil UID")
+	}
+
+	if cacheOK {
+		up, err := g.UserCache.Get(uid)
+		if err == nil {
+			return *up, nil
+		}
+		if err != nil {
+			// not going to bail on cache error, just log it:
+			if _, ok := err.(NotFoundError); !ok {
+				g.Log.Debug("UserCache Get error: %s", err)
+			}
+		}
+	}
+
+	arg := NewLoadUserArg(g)
+	arg.UID = uid
+	arg.PublicKeyOptional = true
+	u, err := LoadUser(arg)
+	if err != nil {
+		return up, err
+	}
+	if u == nil {
+		return up, fmt.Errorf("Nil user, nil error from LoadUser")
+	}
+
+	// export user to UserPlusKeys
+	up.Uid = u.GetUID()
+	up.Username = u.GetNormalizedName().String()
+	if u.GetComputedKeyFamily() != nil {
+		up.DeviceKeys = u.GetComputedKeyFamily().ExportDeviceKeys()
+	}
+
+	err = g.UserCache.Insert(&up)
+	if err != nil {
+		g.Log.Debug("UserCache Set error: %s", err)
+	}
+
+	return up, nil
+}

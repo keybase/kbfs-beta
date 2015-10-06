@@ -234,6 +234,13 @@ type KeybaseDaemon interface {
 	// otherwise.
 	Identify(ctx context.Context, assertion string) (UserInfo, error)
 
+	// LoadUserPlusKeys returns a UserInfo struct for a
+	// user with the specified UID.
+	// If you have the UID for a user and don't require Identify to
+	// validate an assertion or the identity of a user, use this to
+	// get UserInfo structs as it is much cheaper than Identify.
+	LoadUserPlusKeys(ctx context.Context, uid keybase1.UID) (UserInfo, error)
+
 	// CurrentUID returns the UID of the current session, or an
 	// error otherwise. This should be faster than calling
 	// CurrentSession.
