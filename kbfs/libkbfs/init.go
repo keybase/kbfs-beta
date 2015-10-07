@@ -206,7 +206,11 @@ func Init(localUser libkb.NormalizedUsername, serverRootDir *string, cpuProfileP
 	config.SetKeyServer(keyServer)
 
 	client.InitUI()
-	libkb.G.UI.Configure()
+	if err := client.GlobUI.Configure(); err != nil {
+		lg := logger.NewWithCallDepth("", 1)
+		lg.Warning("problem configuring UI: %s", err)
+		lg.Warning("ignoring for now...")
+	}
 
 	daemon, err := makeKeybaseDaemon(serverRootDir, localUser, config.Codec(), config.MakeLogger(""))
 	if err != nil {

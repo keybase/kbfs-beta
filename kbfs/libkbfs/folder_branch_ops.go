@@ -1606,25 +1606,10 @@ func (fbo *FolderBranchOps) CreateLink(
 	return fbo.createLinkLocked(ctx, dir, fromName, toPath)
 }
 
-// writerLock must be taken by caller.
-func (fbo *FolderBranchOps) removeEntryLocked(ctx context.Context,
-	md *RootMetadata, dir path, name string) error {
-	pblock, err := func() (*DirBlock, error) {
-		fbo.blockLock.RLock()
-		defer fbo.blockLock.RUnlock()
-		return fbo.getDirLocked(ctx, md, dir, write)
-	}()
-	if err != nil {
-		return err
-	}
-
-	// make sure the entry exists
-	de, ok := pblock.Children[name]
-	if !ok {
-		return NoSuchNameError{name}
-	}
-
-	md.AddOp(newRmOp(name, dir.tailPointer()))
+// unrefEntry modifies md to unreference all relevant blocks for the
+// given entry.
+func (fbo *FolderBranchOps) unrefEntry(ctx context.Context,
+	md *RootMetadata, dir path, de DirEntry, name string) error {
 	md.AddUnrefBlock(de.BlockInfo)
 	// construct a path for the child so we can unlink with it.
 	childPath := *dir.ChildPathNoPtr(name)
@@ -1653,6 +1638,32 @@ func (fbo *FolderBranchOps) removeEntryLocked(ctx context.Context,
 			}
 		}
 	}
+	return nil
+}
+
+// writerLock must be taken by caller.
+func (fbo *FolderBranchOps) removeEntryLocked(ctx context.Context,
+	md *RootMetadata, dir path, name string) error {
+	pblock, err := func() (*DirBlock, error) {
+		fbo.blockLock.RLock()
+		defer fbo.blockLock.RUnlock()
+		return fbo.getDirLocked(ctx, md, dir, write)
+	}()
+	if err != nil {
+		return err
+	}
+
+	// make sure the entry exists
+	de, ok := pblock.Children[name]
+	if !ok {
+		return NoSuchNameError{name}
+	}
+
+	md.AddOp(newRmOp(name, dir.tailPointer()))
+	err = fbo.unrefEntry(ctx, md, dir, de, name)
+	if err != nil {
+		return err
+	}
 
 	// the actual unlink
 	delete(pblock.Children, name)
@@ -1664,7 +1675,6 @@ func (fbo *FolderBranchOps) removeEntryLocked(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	fbo.nodeCache.Unlink(de.BlockPointer, childPath)
 	return nil
 }
 
@@ -1766,13 +1776,14 @@ func (fbo *FolderBranchOps) renameLocked(
 	if err != nil {
 		return err
 	}
-	// does name exist?
-	if _, ok := oldPBlock.Children[oldName]; !ok {
+	newDe, ok := oldPBlock.Children[oldName]
+	// does the name exist?
+	if !ok {
 		return NoSuchNameError{oldName}
 	}
 
 	md.AddOp(newRenameOp(oldName, oldParent.tailPointer(), newName,
-		newParent.tailPointer()))
+		newParent.tailPointer(), newDe.BlockPointer))
 
 	lbc := make(localBcache)
 	// look up in the old path
@@ -1815,11 +1826,20 @@ func (fbo *FolderBranchOps) renameLocked(
 	fbo.blockLock.RUnlock()
 
 	// does name exist?
-	if _, ok := newPBlock.Children[newName]; ok {
-		// TODO: delete the old block pointed to by this direntry
+	if de, ok := newPBlock.Children[newName]; ok {
+		if de.Type == Dir {
+			fbo.log.CWarningf(ctx, "Renaming over a directory (%s/%s) is not "+
+				"allowed.", newParent, newName)
+			return NotFileError{*newParent.ChildPathNoPtr(newName)}
+		}
+
+		// Delete the old block pointed to by this direntry.
+		err := fbo.unrefEntry(ctx, md, newParent, de, newName)
+		if err != nil {
+			return err
+		}
 	}
 
-	newDe := oldPBlock.Children[oldName]
 	// only the ctime changes
 	newDe.Ctime = time.Now().UnixNano()
 	newPBlock.Children[newName] = newDe
@@ -3014,49 +3034,119 @@ func (fbo *FolderBranchOps) notifyBatch(ctx context.Context, md *RootMetadata) {
 	fbo.notifyOneOp(ctx, lastOp, md)
 }
 
-// searchForNodeInDirLocked recursively tries to find a path, and
+// searchForNodesInDirLocked recursively tries to find a path, and
 // ultimately a node, to ptr, given the set of pointers that were
-// updated in a particular operation.
+// updated in a particular operation.  The keys in nodeMap make up the
+// set of BlockPointers that are being searched for, and nodeMap is
+// updated in place to include the corresponding discovered nodes.
+//
+// Returns the number of nodes found by this invocation.
 //
 // blockLock must be taken for reading
-func (fbo *FolderBranchOps) searchForNodeInDirLocked(ctx context.Context,
-	ptr BlockPointer, newPtrs map[BlockPointer]bool,
-	md *RootMetadata, currDir path) (Node, error) {
+func (fbo *FolderBranchOps) searchForNodesInDirLocked(ctx context.Context,
+	cache NodeCache, newPtrs map[BlockPointer]bool, md *RootMetadata,
+	currDir path, nodeMap map[BlockPointer]Node, numNodesFoundSoFar int) (
+	int, error) {
 	dirBlock, err := fbo.getDirLocked(ctx, md, currDir, read)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 
-	err = NodeNotFoundError{ptr}
+	if numNodesFoundSoFar >= len(nodeMap) {
+		return 0, nil
+	}
+
+	numNodesFound := 0
 	for name, de := range dirBlock.Children {
-		if de.BlockPointer == ptr {
+		if _, ok := nodeMap[de.BlockPointer]; ok {
 			childPath := currDir.ChildPathNoPtr(name)
-			childPath.path[len(childPath.path)-1].BlockPointer = ptr
+			childPath.path[len(childPath.path)-1].BlockPointer = de.BlockPointer
 			// make a node for every pathnode
 			var n Node
 			for _, pn := range childPath.path {
-				n, err = fbo.nodeCache.GetOrCreate(pn.BlockPointer, pn.Name, n)
+				n, err = cache.GetOrCreate(pn.BlockPointer, pn.Name, n)
 				if err != nil {
-					return nil, err
+					return 0, err
 				}
 			}
-			return n, nil
+			nodeMap[de.BlockPointer] = n
+			numNodesFound++
+			if numNodesFoundSoFar+numNodesFound >= len(nodeMap) {
+				return numNodesFound, nil
+			}
 		}
 
 		// otherwise, recurse if this represents an updated block
 		if _, ok := newPtrs[de.BlockPointer]; ok {
 			childPath := *currDir.ChildPathNoPtr(name)
 			childPath.path[len(childPath.path)-1].BlockPointer = de.BlockPointer
-			var n Node
-			n, err =
-				fbo.searchForNodeInDirLocked(ctx, ptr, newPtrs, md, childPath)
-			if n != nil && err == nil {
-				return n, nil
+			n, err := fbo.searchForNodesInDirLocked(ctx, cache, newPtrs, md,
+				childPath, nodeMap, numNodesFoundSoFar+numNodesFound)
+			if err != nil {
+				return 0, err
+			}
+			numNodesFound += n
+			if numNodesFoundSoFar+numNodesFound >= len(nodeMap) {
+				return numNodesFound, nil
 			}
 		}
 	}
 
-	return nil, err
+	return numNodesFound, nil
+}
+
+// searchForNodes tries to resolve all the given pointers to a Node
+// object, using only the updated pointers specified in newPtrs.  Does
+// an error if any subset of the pointer paths do not exist; it is the
+// caller's responsibility to decide to error on particular unresolved
+// nodes.
+func (fbo *FolderBranchOps) searchForNodes(ctx context.Context,
+	cache NodeCache, ptrs []BlockPointer, newPtrs map[BlockPointer]bool,
+	md *RootMetadata) (map[BlockPointer]Node, error) {
+	fbo.blockLock.RLock()
+	defer fbo.blockLock.RUnlock()
+
+	nodeMap := make(map[BlockPointer]Node)
+	for _, ptr := range ptrs {
+		nodeMap[ptr] = nil
+	}
+
+	if len(ptrs) == 0 {
+		return nodeMap, nil
+	}
+
+	// Start with the root node
+	rootPtr := md.data.Dir.BlockPointer
+	node := cache.Get(rootPtr)
+	if node == nil {
+		return nil, fmt.Errorf("Cannot find root node corresponding to %v",
+			rootPtr)
+	}
+
+	// are they looking for the root directory?
+	numNodesFound := 0
+	if _, ok := nodeMap[rootPtr]; ok {
+		nodeMap[rootPtr] = node
+		numNodesFound++
+		if numNodesFound >= len(nodeMap) {
+			return nodeMap, nil
+		}
+	}
+
+	rootPath := cache.PathFromNode(node)
+	if len(rootPath.path) != 1 {
+		return nil, fmt.Errorf("Invalid root path for %v: %s",
+			md.data.Dir.BlockPointer, rootPath)
+	}
+
+	_, err := fbo.searchForNodesInDirLocked(ctx, cache, newPtrs, md, rootPath,
+		nodeMap, numNodesFound)
+	if err != nil {
+		return nil, err
+	}
+
+	// Return the whole map even if some nodes weren't found.
+	return nodeMap, nil
 }
 
 // searchForNode tries to figure out the path to the given
@@ -3064,9 +3154,6 @@ func (fbo *FolderBranchOps) searchForNodeInDirLocked(ctx context.Context,
 // a given MD update operation.
 func (fbo *FolderBranchOps) searchForNode(ctx context.Context,
 	ptr BlockPointer, op op, md *RootMetadata) (Node, error) {
-	fbo.blockLock.RLock()
-	defer fbo.blockLock.RUnlock()
-
 	// Record which pointers are new to this update, and thus worth
 	// searching.
 	newPtrs := make(map[BlockPointer]bool)
@@ -3074,20 +3161,33 @@ func (fbo *FolderBranchOps) searchForNode(ctx context.Context,
 		newPtrs[update.Ref] = true
 	}
 
-	// Start with the root node
-	node := fbo.nodeCache.Get(md.data.Dir.BlockPointer)
-	if node == nil {
-		return nil, fmt.Errorf("Cannot find root node corresponding to %v",
-			md.data.Dir.BlockPointer)
+	nodeMap, err := fbo.searchForNodes(ctx, fbo.nodeCache, []BlockPointer{ptr},
+		newPtrs, md)
+	if err != nil {
+		return nil, err
 	}
 
-	rootPath := fbo.nodeCache.PathFromNode(node)
-	if len(rootPath.path) != 1 {
-		return nil, fmt.Errorf("Invalid root path for %v: %s",
-			md.data.Dir.BlockPointer, rootPath)
+	n, ok := nodeMap[ptr]
+	if !ok {
+		return nil, NodeNotFoundError{ptr}
 	}
 
-	return fbo.searchForNodeInDirLocked(ctx, ptr, newPtrs, md, rootPath)
+	return n, nil
+}
+
+func (fbo *FolderBranchOps) unlinkFromCache(op op, oldDir BlockPointer,
+	node Node, name string) {
+	// The entry could be under any one of the unref'd blocks, and
+	// it's safe to perform this when the pointer isn't real, so just
+	// try them all to avoid the overhead of looking up the right
+	// pointer in the old version of the block.
+	childPath := fbo.nodeCache.PathFromNode(node).ChildPathNoPtr(name)
+	// revert the parent pointer
+	childPath.path[len(childPath.path)-2].BlockPointer = oldDir
+	for _, ptr := range op.Unrefs() {
+		childPath.path[len(childPath.path)-1].BlockPointer = ptr
+		fbo.nodeCache.Unlink(ptr, *childPath)
+	}
 }
 
 func (fbo *FolderBranchOps) notifyOneOp(ctx context.Context, op op,
@@ -3123,6 +3223,10 @@ func (fbo *FolderBranchOps) notifyOneOp(ctx context.Context, op op,
 			Node:       node,
 			DirUpdated: []string{realOp.OldName},
 		})
+
+		// If this node exists, then the child node might exist too,
+		// and we need to unlink it in the node cache.
+		fbo.unlinkFromCache(op, realOp.Dir.Unref, node, realOp.OldName)
 	case *renameOp:
 		oldNode := fbo.nodeCache.Get(realOp.OldDir.Ref)
 		if oldNode != nil {
@@ -3150,34 +3254,20 @@ func (fbo *FolderBranchOps) notifyOneOp(ctx context.Context, op op,
 		}
 
 		if oldNode != nil {
-			fbo.log.CDebugf(ctx, "notifyOneOp: rename %s/%p to %s/%p",
-				realOp.OldName, oldNode, realOp.NewName, newNode)
-			oldPath := *fbo.nodeCache.PathFromNode(oldNode).
-				ChildPathNoPtr(realOp.OldName)
-			// we want the non-updated old path, so we can look up the old name
-			oldPath.path[len(oldPath.path)-2].BlockPointer = realOp.OldDir.Unref
-			// find the node for the actual change; requires looking up
-			// the directory entry to get the BlockPointer, unfortunately.
-			var de DirEntry
-			var err error
-			func() {
-				fbo.blockLock.RLock()
-				defer fbo.blockLock.RUnlock()
-				_, de, err = fbo.getEntryLocked(ctx, md, oldPath)
-			}()
-			if err != nil {
-				return
-			}
+			fbo.log.CDebugf(ctx, "notifyOneOp: rename %v from %s/%p to %s/%p",
+				realOp.Renamed, realOp.OldName, oldNode, realOp.NewName,
+				newNode)
 
 			if newNode == nil {
 				if childNode :=
-					fbo.nodeCache.Get(de.BlockPointer); childNode != nil {
+					fbo.nodeCache.Get(realOp.Renamed); childNode != nil {
 					// if the childNode exists, we still have to update
 					// its path to go through the new node.  That means
 					// creating nodes for all the intervening paths.
 					// Unfortunately we don't have enough information to
 					// know what the newPath is; we have to guess it from
 					// the updates.
+					var err error
 					newNode, err =
 						fbo.searchForNode(ctx, realOp.NewDir.Ref, realOp, md)
 					if newNode == nil {
@@ -3188,9 +3278,17 @@ func (fbo *FolderBranchOps) notifyOneOp(ctx context.Context, op op,
 			}
 
 			if newNode != nil {
-				// if new node exists as well, move the node
-				err =
-					fbo.nodeCache.Move(de.BlockPointer, newNode, realOp.NewName)
+				// If new node exists as well, unlink any previously
+				// existing entry and move the node.
+				var unrefPtr BlockPointer
+				if oldNode != newNode {
+					unrefPtr = realOp.NewDir.Unref
+				} else {
+					unrefPtr = realOp.OldDir.Unref
+				}
+				fbo.unlinkFromCache(op, unrefPtr, newNode, realOp.NewName)
+				err :=
+					fbo.nodeCache.Move(realOp.Renamed, newNode, realOp.NewName)
 				if err != nil {
 					return
 				}
