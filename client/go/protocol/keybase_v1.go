@@ -1415,6 +1415,99 @@ func (c IdentifyUiClient) Finish(sessionID int) (err error) {
 	return
 }
 
+type PassphraseStream struct {
+	PassphraseStream []byte `codec:"passphraseStream" json:"passphraseStream"`
+	Generation       int    `codec:"generation" json:"generation"`
+}
+
+type SessionToken string
+type HelloRes string
+type HelloArg struct {
+	Uid     UID              `codec:"uid" json:"uid"`
+	Token   SessionToken     `codec:"token" json:"token"`
+	Pps     PassphraseStream `codec:"pps" json:"pps"`
+	SigBody string           `codec:"sigBody" json:"sigBody"`
+}
+
+type DidCounterSignArg struct {
+	Sig []byte `codec:"sig" json:"sig"`
+}
+
+type Kex2ProvisioneeInterface interface {
+	Hello(HelloArg) (HelloRes, error)
+	DidCounterSign([]byte) error
+}
+
+func Kex2ProvisioneeProtocol(i Kex2ProvisioneeInterface) rpc2.Protocol {
+	return rpc2.Protocol{
+		Name: "keybase.1.Kex2Provisionee",
+		Methods: map[string]rpc2.ServeHook{
+			"hello": func(nxt rpc2.DecodeNext) (ret interface{}, err error) {
+				args := make([]HelloArg, 1)
+				if err = nxt(&args); err == nil {
+					ret, err = i.Hello(args[0])
+				}
+				return
+			},
+			"didCounterSign": func(nxt rpc2.DecodeNext) (ret interface{}, err error) {
+				args := make([]DidCounterSignArg, 1)
+				if err = nxt(&args); err == nil {
+					err = i.DidCounterSign(args[0].Sig)
+				}
+				return
+			},
+		},
+	}
+
+}
+
+type Kex2ProvisioneeClient struct {
+	Cli GenericClient
+}
+
+func (c Kex2ProvisioneeClient) Hello(__arg HelloArg) (res HelloRes, err error) {
+	err = c.Cli.Call("keybase.1.Kex2Provisionee.hello", []interface{}{__arg}, &res)
+	return
+}
+
+func (c Kex2ProvisioneeClient) DidCounterSign(sig []byte) (err error) {
+	__arg := DidCounterSignArg{Sig: sig}
+	err = c.Cli.Call("keybase.1.Kex2Provisionee.didCounterSign", []interface{}{__arg}, nil)
+	return
+}
+
+type KexStartArg struct {
+}
+
+type Kex2ProvisionerInterface interface {
+	KexStart() error
+}
+
+func Kex2ProvisionerProtocol(i Kex2ProvisionerInterface) rpc2.Protocol {
+	return rpc2.Protocol{
+		Name: "keybase.1.Kex2Provisioner",
+		Methods: map[string]rpc2.ServeHook{
+			"kexStart": func(nxt rpc2.DecodeNext) (ret interface{}, err error) {
+				args := make([]KexStartArg, 1)
+				if err = nxt(&args); err == nil {
+					err = i.KexStart()
+				}
+				return
+			},
+		},
+	}
+
+}
+
+type Kex2ProvisionerClient struct {
+	Cli GenericClient
+}
+
+func (c Kex2ProvisionerClient) KexStart() (err error) {
+	err = c.Cli.Call("keybase.1.Kex2Provisioner.kexStart", []interface{}{KexStartArg{}}, nil)
+	return
+}
+
 type DeviceSignerKind int
 
 const (
@@ -2707,7 +2800,7 @@ func (c ProveUiClient) DisplayRecheckWarning(__arg DisplayRecheckWarningArg) (er
 	return
 }
 
-type SessionToken struct {
+type VerifySessionRes struct {
 	Uid       UID    `codec:"uid" json:"uid"`
 	Sid       string `codec:"sid" json:"sid"`
 	Generated int    `codec:"generated" json:"generated"`
@@ -2719,7 +2812,7 @@ type VerifySessionArg struct {
 }
 
 type QuotaInterface interface {
-	VerifySession(string) (SessionToken, error)
+	VerifySession(string) (VerifySessionRes, error)
 }
 
 func QuotaProtocol(i QuotaInterface) rpc2.Protocol {
@@ -2742,7 +2835,7 @@ type QuotaClient struct {
 	Cli GenericClient
 }
 
-func (c QuotaClient) VerifySession(session string) (res SessionToken, err error) {
+func (c QuotaClient) VerifySession(session string) (res VerifySessionRes, err error) {
 	__arg := VerifySessionArg{Session: session}
 	err = c.Cli.Call("keybase.1.quota.verifySession", []interface{}{__arg}, &res)
 	return
