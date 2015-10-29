@@ -4,36 +4,46 @@ import (
 	"os"
 	"path/filepath"
 
+	"golang.org/x/net/context"
+
 	"github.com/keybase/client/go/engine"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
 )
 
 type ConfigHandler struct {
-	xp *rpc2.Transport
+	libkb.Contextified
+	xp rpc.Transporter
 }
 
-func (h ConfigHandler) GetCurrentStatus(sessionID int) (res keybase1.GetCurrentStatusRes, err error) {
+func NewConfigHandler(xp rpc.Transporter, g *libkb.GlobalContext) *ConfigHandler {
+	return &ConfigHandler{
+		Contextified: libkb.NewContextified(g),
+		xp:           xp,
+	}
+}
+
+func (h ConfigHandler) GetCurrentStatus(_ context.Context, sessionID int) (res keybase1.GetCurrentStatusRes, err error) {
 	var cs libkb.CurrentStatus
-	if cs, err = libkb.GetCurrentStatus(); err == nil {
+	if cs, err = libkb.GetCurrentStatus(h.G()); err == nil {
 		res = cs.Export()
 	}
 	return
 }
 
-func (h ConfigHandler) GetConfig(sessionID int) (keybase1.Config, error) {
+func (h ConfigHandler) GetConfig(_ context.Context, sessionID int) (keybase1.Config, error) {
 	var c keybase1.Config
 
-	c.ServerURI = G.Env.GetServerURI()
-	c.RunMode = string(G.Env.GetRunMode())
+	c.ServerURI = h.G().Env.GetServerURI()
+	c.RunMode = string(h.G().Env.GetRunMode())
 	var err error
-	c.SocketFile, err = G.Env.GetSocketFile()
+	c.SocketFile, err = h.G().Env.GetSocketFile()
 	if err != nil {
 		return c, err
 	}
 
-	gpg := G.GetGpgClient()
+	gpg := h.G().GetGpgClient()
 	canExec, err := gpg.CanExec()
 	if err == nil {
 		c.GpgExists = canExec
@@ -47,17 +57,17 @@ func (h ConfigHandler) GetConfig(sessionID int) (keybase1.Config, error) {
 		c.Path = dir
 	}
 
-	c.ConfigPath = G.Env.GetConfigFilename()
-	c.Label = G.Env.GetLabel()
+	c.ConfigPath = h.G().Env.GetConfigFilename()
+	c.Label = h.G().Env.GetLabel()
 
 	return c, nil
 }
 
-func (h ConfigHandler) SetUserConfig(arg keybase1.SetUserConfigArg) (err error) {
+func (h ConfigHandler) SetUserConfig(_ context.Context, arg keybase1.SetUserConfigArg) (err error) {
 	eng := engine.NewUserConfigEngine(&engine.UserConfigEngineArg{
 		Key:   arg.Key,
 		Value: arg.Value,
-	}, G)
+	}, h.G())
 
 	ctx := &engine.Context{}
 	err = engine.RunEngine(eng, ctx)

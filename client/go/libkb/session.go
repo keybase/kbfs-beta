@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"runtime/debug"
 	"time"
 
 	keybase1 "github.com/keybase/client/go/protocol"
@@ -52,13 +51,16 @@ func (s *Session) IsLoggedInAndProvisioned() bool {
 		return false
 	}
 	if len(s.deviceID) == 0 {
+		s.G().Log.Warning("no device id in session")
 		return false
 	}
 	envid := s.G().Env.GetDeviceID()
 	if envid.IsNil() {
+		s.G().Log.Warning("no device id in env")
 		return false
 	}
 	if s.deviceID != envid {
+		s.G().Log.Warning("device id mismatch session <-> env")
 		return false
 	}
 
@@ -231,7 +233,6 @@ func (s *Session) IsRecent() bool {
 }
 
 func (s *Session) check() error {
-	debug.PrintStack()
 	s.G().Log.Debug("+ Checking session")
 	if s.IsRecent() && s.checked {
 		s.G().Log.Debug("- session is recent, short-circuiting")

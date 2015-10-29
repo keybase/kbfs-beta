@@ -15,28 +15,27 @@ import (
 	triplesec "github.com/keybase/go-triplesec"
 )
 
-func clientInfo() *jsonw.Wrapper {
+func clientInfo(g *GlobalContext) *jsonw.Wrapper {
 	ret := jsonw.NewDictionary()
 	ret.SetKey("version", jsonw.NewString(Version))
 	ret.SetKey("name", jsonw.NewString(GoClientID))
 	return ret
 }
 
-func merkleRootInfo() (ret *jsonw.Wrapper) {
-	if mc := G.MerkleClient; mc != nil {
+func merkleRootInfo(g *GlobalContext) (ret *jsonw.Wrapper) {
+	if mc := g.MerkleClient; mc != nil {
 		ret, _ = mc.LastRootToSigJSON()
 	}
 	return ret
 }
 
 type KeySection struct {
-	Me             *User
 	Key            GenericKey
 	EldestKID      keybase1.KID
 	ParentKID      keybase1.KID
 	HasRevSig      bool
 	RevSig         string
-	SigningUser    *User
+	SigningUser    UserBasic
 	IncludePGPHash bool
 }
 
@@ -65,8 +64,8 @@ func (arg KeySection) ToJSON() (*jsonw.Wrapper, error) {
 
 	if arg.SigningUser != nil {
 		ret.SetKey("host", jsonw.NewString(CanonicalHost))
-		ret.SetKey("uid", UIDWrapper(arg.SigningUser.id))
-		ret.SetKey("username", jsonw.NewString(arg.SigningUser.name))
+		ret.SetKey("uid", UIDWrapper(arg.SigningUser.GetUID()))
+		ret.SetKey("username", jsonw.NewString(arg.SigningUser.GetName()))
 	}
 
 	if pgp, ok := arg.Key.(*PGPKeyBundle); ok {
@@ -220,6 +219,9 @@ func remoteProofToTrackingStatement(s RemoteProofChainLink, base *jsonw.Wrapper)
 
 type ProofMetadata struct {
 	Me             *User
+	SigningUser    UserBasic
+	LastSeqno      Seqno
+	PrevLinkID     LinkID
 	LinkType       LinkType
 	SigningKey     GenericKey
 	Eldest         keybase1.KID
@@ -228,21 +230,28 @@ type ProofMetadata struct {
 	IncludePGPHash bool
 }
 
-func (arg ProofMetadata) ToJSON() (ret *jsonw.Wrapper, err error) {
+func (arg ProofMetadata) ToJSON(g *GlobalContext) (ret *jsonw.Wrapper, err error) {
+	// if only Me exists, then that is the signing user too
+	if arg.SigningUser == nil && arg.Me != nil {
+		arg.SigningUser = arg.Me
+	}
 
 	var seqno int
-	var prevS string
-	var key, prev *jsonw.Wrapper
+	var prev *jsonw.Wrapper
 
-	lastSeqno := arg.Me.sigChain().GetLastKnownSeqno()
-	lastLink := arg.Me.sigChain().GetLastKnownID()
-	if lastLink == nil {
-		seqno = 1
-		prev = jsonw.NewNil()
+	if arg.LastSeqno > 0 {
+		seqno = int(arg.LastSeqno) + 1
+		prev = jsonw.NewString(arg.PrevLinkID.String())
 	} else {
-		seqno = int(lastSeqno) + 1
-		prevS = lastLink.String()
-		prev = jsonw.NewString(prevS)
+		lastSeqno := arg.Me.sigChain().GetLastKnownSeqno()
+		lastLink := arg.Me.sigChain().GetLastKnownID()
+		if lastLink == nil {
+			seqno = 1
+			prev = jsonw.NewNil()
+		} else {
+			seqno = int(lastSeqno) + 1
+			prev = jsonw.NewString(lastLink.String())
+		}
 	}
 
 	ctime := arg.CreationTime
@@ -272,16 +281,14 @@ func (arg ProofMetadata) ToJSON() (ret *jsonw.Wrapper, err error) {
 	body.SetKey("version", jsonw.NewInt(KeybaseSignatureV1))
 	body.SetKey("type", jsonw.NewString(string(arg.LinkType)))
 
-	key, err = KeySection{
-		Me:             arg.Me,
+	key, err := KeySection{
 		Key:            arg.SigningKey,
 		EldestKID:      eldest,
-		SigningUser:    arg.Me,
+		SigningUser:    arg.SigningUser,
 		IncludePGPHash: arg.IncludePGPHash,
 	}.ToJSON()
 	if err != nil {
-		ret = nil
-		return
+		return nil, err
 	}
 	body.SetKey("key", key)
 
@@ -289,8 +296,10 @@ func (arg ProofMetadata) ToJSON() (ret *jsonw.Wrapper, err error) {
 
 	// Capture the most recent Merkle Root and also what kind of client
 	// we're running.
-	ret.SetKey("client", clientInfo())
-	ret.SetKey("merkle_root", merkleRootInfo())
+	ret.SetKey("client", clientInfo(g))
+	if mr := merkleRootInfo(g); mr != nil {
+		ret.SetKey("merkle_root", mr)
+	}
 
 	return
 }
@@ -300,7 +309,7 @@ func (u *User) TrackingProofFor(signingKey GenericKey, u2 *User, outcome *Identi
 		Me:         u,
 		LinkType:   TrackType,
 		SigningKey: signingKey,
-	}.ToJSON()
+	}.ToJSON(u.G())
 	if err == nil {
 		err = u2.ToTrackingStatement(ret.AtKey("body"), outcome)
 	}
@@ -312,20 +321,22 @@ func (u *User) UntrackingProofFor(signingKey GenericKey, u2 *User) (ret *jsonw.W
 		Me:         u,
 		LinkType:   UntrackType,
 		SigningKey: signingKey,
-	}.ToJSON()
+	}.ToJSON(u.G())
 	if err == nil {
 		err = u2.ToUntrackingStatement(ret.AtKey("body"))
 	}
 	return
 }
 
-func (u *User) KeyProof(arg Delegator) (ret *jsonw.Wrapper, err error) {
+// arg.Me user is used to get the last known seqno in ProofMetadata.
+// If arg.Me == nil, set arg.LastSeqno.
+func KeyProof(arg Delegator) (ret *jsonw.Wrapper, err error) {
 	var kp *jsonw.Wrapper
 	includePGPHash := false
 
 	if arg.DelegationType == EldestType {
 		includePGPHash = true
-	} else {
+	} else if arg.NewKey != nil {
 		keySection := KeySection{
 			Key: arg.NewKey,
 		}
@@ -345,14 +356,18 @@ func (u *User) KeyProof(arg Delegator) (ret *jsonw.Wrapper, err error) {
 	}
 
 	ret, err = ProofMetadata{
-		Me:             u,
+		Me:             arg.Me,
+		SigningUser:    arg.SigningUser,
 		LinkType:       LinkType(arg.DelegationType),
 		ExpireIn:       arg.Expire,
 		SigningKey:     arg.GetSigningKey(),
 		Eldest:         arg.EldestKID,
 		CreationTime:   arg.Ctime,
 		IncludePGPHash: includePGPHash,
-	}.ToJSON()
+		LastSeqno:      arg.LastSeqno,
+		PrevLinkID:     arg.PrevLinkID,
+	}.ToJSON(arg.G())
+
 	if err != nil {
 		return
 	}
@@ -382,7 +397,7 @@ func (u *User) ServiceProof(signingKey GenericKey, typ ServiceType, remotename s
 		Me:         u,
 		LinkType:   WebServiceBindingType,
 		SigningKey: signingKey,
-	}.ToJSON()
+	}.ToJSON(u.G())
 	if err != nil {
 		return
 	}
@@ -410,7 +425,7 @@ func (u *User) AuthenticationProof(key GenericKey, session string, ei int) (ret 
 		LinkType:   AuthenticationType,
 		ExpireIn:   ei,
 		SigningKey: key,
-	}.ToJSON()); err != nil {
+	}.ToJSON(u.G())); err != nil {
 		return
 	}
 	body := ret.AtKey("body")
@@ -431,7 +446,7 @@ func (u *User) RevokeKeysProof(key GenericKey, kidsToRevoke []keybase1.KID, devi
 		Me:         u,
 		LinkType:   RevokeType,
 		SigningKey: key,
-	}.ToJSON()
+	}.ToJSON(u.G())
 	if err != nil {
 		return nil, err
 	}
@@ -458,7 +473,7 @@ func (u *User) RevokeSigsProof(key GenericKey, sigIDsToRevoke []keybase1.SigID) 
 		Me:         u,
 		LinkType:   RevokeType,
 		SigningKey: key,
-	}.ToJSON()
+	}.ToJSON(u.G())
 	if err != nil {
 		return nil, err
 	}
@@ -478,7 +493,7 @@ func (u *User) CryptocurrencySig(key GenericKey, address string, sigToRevoke key
 		Me:         u,
 		LinkType:   CryptocurrencyType,
 		SigningKey: key,
-	}.ToJSON()
+	}.ToJSON(u.G())
 	if err != nil {
 		return nil, err
 	}
@@ -500,7 +515,7 @@ func (u *User) UpdatePassphraseProof(key GenericKey, pwh string, ppGen Passphras
 		Me:         u,
 		LinkType:   UpdatePassphraseType,
 		SigningKey: key,
-	}.ToJSON()
+	}.ToJSON(u.G())
 	if err != nil {
 		return nil, err
 	}

@@ -6,6 +6,8 @@ import (
 	"io"
 	"strconv"
 
+	"golang.org/x/net/context"
+
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
@@ -122,7 +124,7 @@ func (v *CmdConfigInfo) Run() error {
 	configFile := G.Env.GetConfigFilename()
 	fmt.Fprintf(v.writer, "File: %s\n\n", configFile)
 
-	cli, err := GetConfigClient()
+	cli, err := GetConfigClient(G)
 	if err != nil {
 		return err
 	}
@@ -130,7 +132,7 @@ func (v *CmdConfigInfo) Run() error {
 		return err
 	}
 
-	config, err := cli.GetConfig(0)
+	config, err := cli.GetConfig(context.TODO(), 0)
 	if err != nil {
 		return err
 	}

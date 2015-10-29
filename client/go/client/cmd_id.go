@@ -3,12 +3,14 @@ package client
 import (
 	"fmt"
 
+	"golang.org/x/net/context"
+
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/engine"
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
 )
 
 type CmdID struct {
@@ -38,7 +40,7 @@ func (v *CmdID) makeArg() *engine.IDEngineArg {
 
 func (v *CmdID) Run() error {
 	var cli keybase1.IdentifyClient
-	protocols := []rpc2.Protocol{
+	protocols := []rpc.Protocol{
 		NewIdentifyUIProtocol(),
 	}
 	cli, err := GetIdentifyClient()
@@ -50,7 +52,7 @@ func (v *CmdID) Run() error {
 	}
 
 	arg := v.makeArg()
-	_, err = cli.Identify(arg.Export())
+	_, err = cli.Identify(context.TODO(), arg.Export())
 	if _, ok := err.(libkb.SelfNotFoundError); ok {
 		GlobUI.Println("Could not find UID or username for you on this device.")
 		GlobUI.Println("You can either specify a user to id:  keybase id <username>")

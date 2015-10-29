@@ -4,24 +4,31 @@ import (
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
+	"golang.org/x/net/context"
 )
 
-type CmdLogout struct{}
+type CmdLogout struct {
+	libkb.Contextified
+}
+
+func NewCmdLogoutRunner(g *libkb.GlobalContext) *CmdLogout {
+	return &CmdLogout{Contextified: libkb.NewContextified(g)}
+}
 
 func (v *CmdLogout) Run() error {
-	cli, err := GetLoginClient()
+	cli, err := GetLoginClient(v.G())
 	if err != nil {
 		return err
 	}
-	return cli.Logout(0)
+	return cli.Logout(context.TODO(), 0)
 }
 
-func NewCmdLogout(cl *libcmdline.CommandLine) cli.Command {
+func NewCmdLogout(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.Command {
 	return cli.Command{
 		Name:  "logout",
 		Usage: "Logout and remove session information",
 		Action: func(c *cli.Context) {
-			cl.ChooseCommand(&CmdLogout{}, "logout", c)
+			cl.ChooseCommand(NewCmdLogoutRunner(g), "logout", c)
 		},
 	}
 }

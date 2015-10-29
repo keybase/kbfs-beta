@@ -115,6 +115,7 @@ const (
 	SCKeyNoEldest            = 920
 	SCKeyDuplicateUpdate     = 921
 	SCSibkeyAlreadyExists    = 922
+	SCDecryptionKeyNotFound  = 924
 	SCBadTrackSession        = 1301
 	SCDeviceNotFound         = 1409
 	SCDeviceMismatch         = 1410
@@ -232,7 +233,8 @@ var RemoteServiceOrder = []keybase1.ProofType{
 const CanonicalHost = "keybase.io"
 
 const (
-	HTTPDefaultTimeout = 10 * time.Second
+	HTTPDefaultTimeout = 60 * time.Second
+	HTTPPollMaximum    = 5 * time.Second
 )
 
 // Packet tags for OpenPGP and also Keybase packets
@@ -306,14 +308,31 @@ const (
 )
 
 const (
+	Kex2PhraseEntropy = 88
+	Kex2ScryptCost    = 1 << 17
+	Kex2ScryptR       = 8
+	Kex2ScryptP       = 1
+	Kex2ScryptKeylen  = 32
+)
+
+const (
 	PaperKeyScryptCost    = 32768
 	PaperKeyScryptR       = 8
 	PaperKeyScryptP       = 1
 	PaperKeyScryptKeylen  = 128
-	PaperKeyPhraseEntropy = 144
+	PaperKeySecretEntropy = 117
+	PaperKeyIDBits        = 22
+	PaperKeyVersionBits   = 4
 	PaperKeyVersion       = 0
 )
 
 const UserSummaryLimit = 500 // max number of user summaries in one request
 
 const MinPassphraseLength = 12
+
+type KexRole int
+
+const (
+	KexRoleProvisioner KexRole = iota
+	KexRoleProvisionee
+)

@@ -48,6 +48,9 @@ func (g *GpgCLI) Configure() (err error) {
 			prog, err = exec.LookPath("gpg")
 		}
 	}
+	if err != nil {
+		return err
+	}
 
 	g.logUI.Debug("| configured GPG w/ path: %s", prog)
 
@@ -95,8 +98,10 @@ type RunGpgRes struct {
 
 func (g *GpgCLI) ImportKey(secret bool, fp PGPFingerprint) (*PGPKeyBundle, error) {
 	var cmd string
+	var which string
 	if secret {
 		cmd = "--export-secret-key"
+		which = "secret "
 	} else {
 		cmd = "--export"
 	}
@@ -115,12 +120,15 @@ func (g *GpgCLI) ImportKey(secret bool, fp PGPFingerprint) (*PGPKeyBundle, error
 	buf.ReadFrom(res.Stdout)
 	armored := buf.String()
 
+	// Convert to posix style on windows
+	armored = PosixLineEndings(armored)
+
 	if err := res.Wait(); err != nil {
 		return nil, err
 	}
 
 	if len(armored) == 0 {
-		return nil, NoKeyError{fmt.Sprintf("No key found for %s", fp)}
+		return nil, NoKeyError{fmt.Sprintf("No %skey found for fingerprint %s", which, fp)}
 	}
 
 	bundle, err := ReadOneKeyFromString(armored)

@@ -9,6 +9,8 @@ import (
 	"runtime/debug"
 	"time"
 
+	"golang.org/x/net/context"
+
 	keybase1 "github.com/keybase/client/go/protocol"
 	triplesec "github.com/keybase/go-triplesec"
 )
@@ -144,9 +146,13 @@ func (s *LoginState) LoginWithKey(lctx LoginContext, user *User, key GenericKey,
 }
 
 func (s *LoginState) Logout() error {
-	return s.loginHandle(func(a LoginContext) error {
+	err := s.loginHandle(func(a LoginContext) error {
 		return s.logout(a)
 	}, nil, "logout")
+	if err == nil {
+		s.G().NotifyRouter.HandleLogout()
+	}
+	return err
 }
 
 // ExternalFunc is for having the LoginState handler call a
@@ -182,26 +188,29 @@ func (s *LoginState) Shutdown() error {
 // GetPassphraseStream either returns a cached, verified passphrase stream
 // (maybe from a previous login) or generates a new one via Login. It will
 // return the current Passphrase stream on success or an error on failure.
-func (s *LoginState) GetPassphraseStream(ui SecretUI) (ret *PassphraseStream, err error) {
-	ret, err = s.PassphraseStream()
+func (s *LoginState) GetPassphraseStream(ui SecretUI) (pps *PassphraseStream, err error) {
+	s.G().Log.Debug("+ GetPassphraseStream() called")
+	defer func() { s.G().Log.Debug("- GetPassphraseStream() -> %s", ErrToOk(err)) }()
+
+	pps, err = s.PassphraseStream()
 	if err != nil {
-		return
+		return nil, err
 	}
-	if ret != nil {
-		return
+	if pps != nil {
+		return pps, nil
 	}
 	if err = s.verifyPassphraseWithServer(ui); err != nil {
-		return
+		return nil, err
 	}
-	ret, err = s.PassphraseStream()
+	pps, err = s.PassphraseStream()
 	if err != nil {
-		return
+		return nil, err
 	}
-	if ret != nil {
-		return
+	if pps != nil {
+		return pps, nil
 	}
 	err = InternalError{"No cached keystream data after login attempt"}
-	return
+	return nil, err
 }
 
 // GetVerifiedTripleSec either returns a cached, verified Triplesec
@@ -507,7 +516,7 @@ func (s *LoginState) getEmailOrUsername(lctx LoginContext, username *string, log
 	}
 
 	if loginUI != nil {
-		if *username, err = loginUI.GetEmailOrUsername(0); err != nil {
+		if *username, err = loginUI.GetEmailOrUsername(context.TODO(), 0); err != nil {
 			*username = ""
 			return
 		}
@@ -752,7 +761,11 @@ func (s *LoginState) loginWithStoredSecret(lctx LoginContext, username string) e
 			Me:      me,
 			KeyType: DeviceSigningKeyType,
 		}
-		return keyrings.GetSecretKeyWithStoredSecret(lctx, ska, me, secretRetriever)
+		key, err := keyrings.GetSecretKeyWithStoredSecret(lctx, ska, me, secretRetriever)
+		if err != nil {
+			return nil, SecretStoreError{Msg: err.Error()}
+		}
+		return key, nil
 	}
 	return s.pubkeyLoginHelper(lctx, username, getSecretKeyFn)
 }
@@ -773,7 +786,11 @@ func (s *LoginState) loginWithPassphrase(lctx LoginContext, username, passphrase
 		if storeSecret {
 			secretStorer = NewSecretStore(me.GetNormalizedName())
 		}
-		return keyrings.GetSecretKeyWithPassphrase(lctx, me, passphrase, secretStorer)
+		key, err := keyrings.GetSecretKeyWithPassphrase(lctx, me, passphrase, secretStorer)
+		if err != nil {
+			return nil, SecretStoreError{Msg: err.Error()}
+		}
+		return key, nil
 	}
 	if loggedIn, err := s.tryPubkeyLoginHelper(lctx, username, getSecretKeyFn); err != nil {
 		return err

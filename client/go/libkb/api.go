@@ -18,6 +18,7 @@ import (
 
 // Shared code across Internal and External APIs
 type BaseAPIEngine struct {
+	Contextified
 	config    *ClientConfig
 	clientsMu sync.Mutex
 	clients   map[int]*Client
@@ -42,14 +43,31 @@ type Requester interface {
 
 // Make a new InternalApiEngine and a new ExternalApiEngine, which share the
 // same network config (i.e., TOR and Proxy parameters)
-func NewAPIEngines(e *Env) (*InternalAPIEngine, *ExternalAPIEngine, error) {
-	config, err := e.GenClientConfig()
+func NewAPIEngines(e *Env, g *GlobalContext) (*InternalAPIEngine, *ExternalAPIEngine, error) {
+	cliConfig, err := e.GenClientConfigForInternalAPI()
 	if err != nil {
 		return nil, nil, err
 	}
 
-	i := &InternalAPIEngine{BaseAPIEngine{config: config, clients: make(map[int]*Client)}}
-	x := &ExternalAPIEngine{BaseAPIEngine{clients: make(map[int]*Client)}}
+	i := &InternalAPIEngine{
+		BaseAPIEngine{
+			config:       cliConfig,
+			clients:      make(map[int]*Client),
+			Contextified: NewContextified(g),
+		},
+	}
+	scraperConfig, err := e.GenClientConfigForScrapers()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	x := &ExternalAPIEngine{
+		BaseAPIEngine{
+			config:       scraperConfig,
+			clients:      make(map[int]*Client),
+			Contextified: NewContextified(g),
+		},
+	}
 	return i, x, nil
 }
 
@@ -265,7 +283,7 @@ func (a *InternalAPIEngine) sessionArgs(arg APIArg) (tok, csrf string) {
 	if arg.SessionR != nil {
 		return arg.SessionR.APIArgs()
 	}
-	arg.G().LoginState().LocalSession(func(s *Session) {
+	a.G().LoginState().LocalSession(func(s *Session) {
 		tok, csrf = s.APIArgs()
 	}, "sessionArgs")
 	return

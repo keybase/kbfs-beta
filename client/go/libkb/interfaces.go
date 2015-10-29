@@ -10,9 +10,12 @@ package libkb
  */
 
 import (
+	"io"
 	"net/http"
 	"net/url"
 	"time"
+
+	"golang.org/x/net/context"
 
 	"github.com/PuerkitoBio/goquery"
 	keybase1 "github.com/keybase/client/go/protocol"
@@ -40,7 +43,6 @@ type CommandLine interface {
 	GetSecretKeyringTemplate() string
 	GetSocketFile() string
 	GetPidFile() string
-	GetDaemonPort() (int, bool)
 	GetStandalone() (bool, bool)
 	GetAutoFork() (bool, bool)
 	GetNoAutoFork() (bool, bool)
@@ -49,6 +51,9 @@ type CommandLine interface {
 	GetSplitLogOutput() (bool, bool)
 	GetLogFile() string
 	GetRunMode() (RunMode, error)
+
+	GetScraperTimeout() (time.Duration, bool)
+	GetAPITimeout() (time.Duration, bool)
 
 	// Lower-level functions
 	GetGString(string) string
@@ -109,7 +114,6 @@ type ConfigReader interface {
 	GetSalt() []byte
 	GetSocketFile() string
 	GetPidFile() string
-	GetDaemonPort() (int, bool)
 	GetStandalone() (bool, bool)
 	GetLocalRPCDebug() string
 	GetTimers() string
@@ -121,6 +125,9 @@ type ConfigReader interface {
 	GetSplitLogOutput() (bool, bool)
 	GetLogFile() string
 	GetRunMode() (RunMode, error)
+	GetScraperTimeout() (time.Duration, bool)
+	GetAPITimeout() (time.Duration, bool)
+	GetSecurityAccessGroupOverride() (bool, bool)
 }
 
 type ConfigWriter interface {
@@ -244,13 +251,13 @@ type LoginUI interface {
 }
 
 type ProveUI interface {
-	PromptOverwrite(keybase1.PromptOverwriteArg) (bool, error)
-	PromptUsername(keybase1.PromptUsernameArg) (string, error)
-	OutputPrechecks(keybase1.OutputPrechecksArg) error
-	PreProofWarning(keybase1.PreProofWarningArg) (bool, error)
-	OutputInstructions(keybase1.OutputInstructionsArg) error
-	OkToCheck(keybase1.OkToCheckArg) (bool, error)
-	DisplayRecheckWarning(keybase1.DisplayRecheckWarningArg) error
+	PromptOverwrite(context.Context, keybase1.PromptOverwriteArg) (bool, error)
+	PromptUsername(context.Context, keybase1.PromptUsernameArg) (string, error)
+	OutputPrechecks(context.Context, keybase1.OutputPrechecksArg) error
+	PreProofWarning(context.Context, keybase1.PreProofWarningArg) (bool, error)
+	OutputInstructions(context.Context, keybase1.OutputInstructionsArg) error
+	OkToCheck(context.Context, keybase1.OkToCheckArg) (bool, error)
+	DisplayRecheckWarning(context.Context, keybase1.DisplayRecheckWarningArg) error
 }
 
 type SecretUI interface {
@@ -278,9 +285,32 @@ type GPGUI interface {
 }
 
 type DoctorUI interface {
-	LoginSelect(currentUser string, otherUsers []string) (string, error)
-	DisplayStatus(status keybase1.DoctorStatus) (bool, error)
-	DisplayResult(msg string) error
+	LoginSelect(ctx context.Context, currentUser string, otherUsers []string) (string, error)
+	DisplayStatus(ctx context.Context, status keybase1.DoctorStatus) (bool, error)
+	DisplayResult(ctx context.Context, msg string) error
+}
+
+type ProvisionUI interface {
+	keybase1.ProvisionUiInterface
+}
+
+type PromptDefault int
+
+const (
+	PromptDefaultNo PromptDefault = iota
+	PromptDefaultYes
+	PromptDefaultNeither
+)
+
+type PromptDescriptor int
+
+type TerminalUI interface {
+	OutputWriter() io.Writer
+	Output(string) error
+	Printf(fmt string, args ...interface{}) (int, error)
+	PromptYesNo(PromptDescriptor, string, PromptDefault) (bool, error)
+	Prompt(PromptDescriptor, string) (string, error)
+	PromptPassword(PromptDescriptor, string) (string, error)
 }
 
 type UI interface {
@@ -289,11 +319,12 @@ type UI interface {
 	GetIdentifyTrackUI(strict bool) IdentifyUI
 	GetLoginUI() LoginUI
 	GetSecretUI() SecretUI
+	GetTerminalUI() TerminalUI
 	GetProveUI() ProveUI
 	GetLogUI() LogUI
 	GetGPGUI() GPGUI
 	GetLocksmithUI() LocksmithUI
-	Prompt(string, bool, Checker) (string, error)
+	GetProvisionUI(role KexRole) ProvisionUI
 	Configure() error
 	Shutdown() error
 }

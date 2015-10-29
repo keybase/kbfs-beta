@@ -97,7 +97,7 @@ func (t HackerNewsServiceType) AllStringKeys() []string     { return t.BaseAllSt
 func (t HackerNewsServiceType) PrimaryStringKeys() []string { return t.BasePrimaryStringKeys(t) }
 
 func (t HackerNewsServiceType) CheckUsername(s string) (err error) {
-	if regexp.MustCompile(`^@?(?i:[a-z0-9_-]{2,15})$`).MatchString(s) {
+	if !regexp.MustCompile(`^@?(?i:[a-z0-9_-]{2,15})$`).MatchString(s) {
 		err = BadUsernameError{s}
 	}
 	return
@@ -128,7 +128,7 @@ following text. Click here: https://news.ycombinator.com/user?id=` + un)
 func (t HackerNewsServiceType) DisplayName(un string) string { return "HackerNews" }
 func (t HackerNewsServiceType) GetTypeName() string          { return "hackernews" }
 
-func (t HackerNewsServiceType) RecheckProofPosting(tryNumber int, status keybase1.ProofStatus) (warning *Markup, err error) {
+func (t HackerNewsServiceType) RecheckProofPosting(tryNumber int, status keybase1.ProofStatus, _ string) (warning *Markup, err error) {
 	warning = FmtMarkup(`<p>We couldn't find a posted proof...<strong>yet</strong></p>`)
 	if tryNumber < 3 {
 		warning.Append(`<p>HackerNews's API is slow to update, so be patient...try again?</p>`)

@@ -3,20 +3,21 @@ package service
 import (
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
+	"golang.org/x/net/context"
 )
 
 type BaseHandler struct {
-	xp        *rpc2.Transport
-	cli       *rpc2.Client
+	xp        rpc.Transporter
+	cli       *rpc.Client
 	loginCli  *keybase1.LoginUiClient
 	secretCli *keybase1.SecretUiClient
 	logCli    *keybase1.LogUiClient
 }
 
-func NewBaseHandler(xp *rpc2.Transport) *BaseHandler {
+func NewBaseHandler(xp rpc.Transporter) *BaseHandler {
 	h := &BaseHandler{xp: xp}
-	h.cli = rpc2.NewClient(h.xp, libkb.UnwrapError)
+	h.cli = rpc.NewClient(h.xp, libkb.ErrorUnwrapper{})
 	h.loginCli = &keybase1.LoginUiClient{Cli: h.cli}
 	h.secretCli = &keybase1.SecretUiClient{Cli: h.cli}
 	h.logCli = &keybase1.LogUiClient{Cli: h.cli}
@@ -29,23 +30,23 @@ type LoginUI struct {
 	cli       *keybase1.LoginUiClient
 }
 
-func (u *LoginUI) GetEmailOrUsername(dummy int) (string, error) {
-	return u.cli.GetEmailOrUsername(u.sessionID)
+func (u *LoginUI) GetEmailOrUsername(ctx context.Context, _ int) (string, error) {
+	return u.cli.GetEmailOrUsername(ctx, u.sessionID)
 }
 
-func (u *LoginUI) PromptRevokePaperKeys(arg keybase1.PromptRevokePaperKeysArg) (bool, error) {
+func (u *LoginUI) PromptRevokePaperKeys(ctx context.Context, arg keybase1.PromptRevokePaperKeysArg) (bool, error) {
 	arg.SessionID = u.sessionID
-	return u.cli.PromptRevokePaperKeys(arg)
+	return u.cli.PromptRevokePaperKeys(ctx, arg)
 }
 
-func (u *LoginUI) DisplayPaperKeyPhrase(arg keybase1.DisplayPaperKeyPhraseArg) error {
+func (u *LoginUI) DisplayPaperKeyPhrase(ctx context.Context, arg keybase1.DisplayPaperKeyPhraseArg) error {
 	arg.SessionID = u.sessionID
-	return u.cli.DisplayPaperKeyPhrase(arg)
+	return u.cli.DisplayPaperKeyPhrase(ctx, arg)
 }
 
-func (u *LoginUI) DisplayPrimaryPaperKey(arg keybase1.DisplayPrimaryPaperKeyArg) error {
+func (u *LoginUI) DisplayPrimaryPaperKey(ctx context.Context, arg keybase1.DisplayPrimaryPaperKeyArg) error {
 	arg.SessionID = u.sessionID
-	return u.cli.DisplayPrimaryPaperKey(arg)
+	return u.cli.DisplayPrimaryPaperKey(ctx, arg)
 }
 
 type SecretUI struct {
@@ -55,30 +56,30 @@ type SecretUI struct {
 
 // GetSecret gets a free-form secret from a pinentry
 func (l *SecretUI) GetSecret(pinentry keybase1.SecretEntryArg, terminal *keybase1.SecretEntryArg) (*keybase1.SecretEntryRes, error) {
-	res, err := l.cli.GetSecret(keybase1.GetSecretArg{SessionID: l.sessionID, Pinentry: pinentry, Terminal: terminal})
+	res, err := l.cli.GetSecret(context.TODO(), keybase1.GetSecretArg{SessionID: l.sessionID, Pinentry: pinentry, Terminal: terminal})
 	return &res, err
 }
 
 // GetNewPassphrase gets a new passphrase from pinentry
 func (l *SecretUI) GetNewPassphrase(arg keybase1.GetNewPassphraseArg) (keybase1.GetNewPassphraseRes, error) {
 	arg.SessionID = l.sessionID
-	return l.cli.GetNewPassphrase(arg)
+	return l.cli.GetNewPassphrase(context.TODO(), arg)
 }
 
 // GetKeybasePassphrase gets the current keybase passphrase from pinentry.
 func (l *SecretUI) GetKeybasePassphrase(arg keybase1.GetKeybasePassphraseArg) (string, error) {
 	arg.SessionID = l.sessionID
-	return l.cli.GetKeybasePassphrase(arg)
+	return l.cli.GetKeybasePassphrase(context.TODO(), arg)
 }
 
 // GetPaperKeyPassphrase gets a paper key passphrase from pinentry (if
 // possible).
 func (l *SecretUI) GetPaperKeyPassphrase(arg keybase1.GetPaperKeyPassphraseArg) (string, error) {
 	arg.SessionID = l.sessionID
-	return l.cli.GetPaperKeyPassphrase(arg)
+	return l.cli.GetPaperKeyPassphrase(context.TODO(), arg)
 }
 
-func (h *BaseHandler) rpcClient() *rpc2.Client {
+func (h *BaseHandler) rpcClient() *rpc.Client {
 	return h.cli
 }
 
@@ -114,6 +115,10 @@ func (h *BaseHandler) getLogUI(sessionID int) libkb.LogUI {
 	return &LogUI{sessionID, h.getLogUICli()}
 }
 
+func (h *BaseHandler) getProvisionUI(sessionID int) libkb.ProvisionUI {
+	return NewRemoteProvisionUI(sessionID, h.rpcClient())
+}
+
 func (h *BaseHandler) getStreamUICli() *keybase1.StreamUiClient {
 	return &keybase1.StreamUiClient{Cli: h.rpcClient()}
 }
@@ -127,17 +132,18 @@ func (h *BaseHandler) NewRemoteSelfIdentifyUI(sessionID int) *RemoteSelfIdentify
 	}}
 }
 
-func (h *BaseHandler) NewRemoteIdentifyUI(sessionID int) *RemoteIdentifyUI {
+func (h *BaseHandler) NewRemoteIdentifyUI(sessionID int, g *libkb.GlobalContext) *RemoteIdentifyUI {
 	c := h.rpcClient()
 	return &RemoteIdentifyUI{RemoteBaseIdentifyUI{
-		sessionID: sessionID,
-		uicli:     keybase1.IdentifyUiClient{Cli: c},
-		logUI:     h.getLogUI(sessionID),
+		sessionID:    sessionID,
+		uicli:        keybase1.IdentifyUiClient{Cli: c},
+		logUI:        h.getLogUI(sessionID),
+		Contextified: libkb.NewContextified(g),
 	}}
 }
 
-func (h *BaseHandler) NewRemoteSkipPromptIdentifyUI(sessionID int) *RemoteIdentifyUI {
-	c := h.NewRemoteIdentifyUI(sessionID)
+func (h *BaseHandler) NewRemoteSkipPromptIdentifyUI(sessionID int, g *libkb.GlobalContext) *RemoteIdentifyUI {
+	c := h.NewRemoteIdentifyUI(sessionID, g)
 	c.skipPrompt = true
 	return c
 }

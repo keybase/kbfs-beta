@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"strings"
 
+	"golang.org/x/net/context"
+
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
 )
 
 // doctor ui rpc protocol
-func NewDoctorUIProtocol() rpc2.Protocol {
+func NewDoctorUIProtocol() rpc.Protocol {
 	return keybase1.DoctorUiProtocol(&DoctorUIServer{GlobUI.GetDoctorUI()})
 }
 
@@ -21,16 +23,16 @@ type DoctorUIServer struct {
 	ui libkb.DoctorUI
 }
 
-func (d *DoctorUIServer) LoginSelect(arg keybase1.LoginSelectArg) (string, error) {
-	return d.ui.LoginSelect(arg.CurrentUser, arg.OtherUsers)
+func (d *DoctorUIServer) LoginSelect(ctx context.Context, arg keybase1.LoginSelectArg) (string, error) {
+	return d.ui.LoginSelect(ctx, arg.CurrentUser, arg.OtherUsers)
 }
 
-func (d *DoctorUIServer) DisplayStatus(arg keybase1.DisplayStatusArg) (bool, error) {
-	return d.ui.DisplayStatus(arg.Status)
+func (d *DoctorUIServer) DisplayStatus(ctx context.Context, arg keybase1.DisplayStatusArg) (bool, error) {
+	return d.ui.DisplayStatus(ctx, arg.Status)
 }
 
-func (d *DoctorUIServer) DisplayResult(arg keybase1.DisplayResultArg) error {
-	return d.ui.DisplayResult(arg.Message)
+func (d *DoctorUIServer) DisplayResult(ctx context.Context, arg keybase1.DisplayResultArg) error {
+	return d.ui.DisplayResult(ctx, arg.Message)
 }
 
 // the actual ui
@@ -38,7 +40,7 @@ type DoctorUI struct {
 	parent *UI
 }
 
-func (d DoctorUI) LoginSelect(currentUser string, otherUsers []string) (string, error) {
+func (d DoctorUI) LoginSelect(_ context.Context, currentUser string, otherUsers []string) (string, error) {
 	d.parent.Output("In order to run the doctor command, you need to login.\n\n")
 	if len(currentUser) == 0 && len(otherUsers) == 0 {
 		return "", errors.New("no users provided to LoginSelect")
@@ -51,7 +53,7 @@ func (d DoctorUI) LoginSelect(currentUser string, otherUsers []string) (string, 
 	d.parent.Printf("The last account you used on this device was %s.\n\n", ColorString("bold", currentUser))
 	d.parent.Printf("Other accounts you have used: %s\n\n", strings.Join(otherUsers, ", "))
 	allusers := append([]string{currentUser}, otherUsers...)
-	selection, err := d.parent.Prompt("Which account would you like to check?", false, libkb.CheckMember{Set: allusers}.Checker())
+	selection, err := PromptWithChecker(PromptDescriptorDoctorWhichAccount, d.parent, "Which account would you like to check?", false, libkb.CheckMember{Set: allusers}.Checker())
 	if err != nil {
 		return "", err
 	}
@@ -59,7 +61,7 @@ func (d DoctorUI) LoginSelect(currentUser string, otherUsers []string) (string, 
 	return selection, nil
 }
 
-func (d DoctorUI) DisplayStatus(status keybase1.DoctorStatus) (bool, error) {
+func (d DoctorUI) DisplayStatus(_ context.Context, status keybase1.DoctorStatus) (bool, error) {
 	if len(status.Devices) > 0 {
 		d.parent.Output("All devices:\n")
 		for _, dev := range status.Devices {
@@ -100,10 +102,10 @@ func (d DoctorUI) DisplayStatus(status keybase1.DoctorStatus) (bool, error) {
 		d.parent.Output(signout + "\n")
 	}
 
-	return d.parent.PromptYesNo("Proceed?", PromptDefaultYes)
+	return d.parent.PromptYesNo(PromptDescriptorDoctorSignOK, "Proceed?", libkb.PromptDefaultYes)
 }
 
-func (d DoctorUI) DisplayResult(msg string) error {
+func (d DoctorUI) DisplayResult(_ context.Context, msg string) error {
 	d.parent.Output(msg + "\n")
 	return nil
 }

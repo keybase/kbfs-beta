@@ -4,39 +4,44 @@ import (
 	"github.com/keybase/client/go/engine"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
+	"golang.org/x/net/context"
 )
 
 type PGPHandler struct {
 	*BaseHandler
+	libkb.Contextified
 }
 
-func NewPGPHandler(xp *rpc2.Transport) *PGPHandler {
-	return &PGPHandler{BaseHandler: NewBaseHandler(xp)}
+func NewPGPHandler(xp rpc.Transporter, g *libkb.GlobalContext) *PGPHandler {
+	return &PGPHandler{
+		BaseHandler:  NewBaseHandler(xp),
+		Contextified: libkb.NewContextified(g),
+	}
 }
 
-func (h *PGPHandler) PGPSign(arg keybase1.PGPSignArg) (err error) {
+func (h *PGPHandler) PGPSign(_ context.Context, arg keybase1.PGPSignArg) (err error) {
 	cli := h.getStreamUICli()
 	src := libkb.NewRemoteStreamBuffered(arg.Source, cli, arg.SessionID)
 	snk := libkb.NewRemoteStreamBuffered(arg.Sink, cli, arg.SessionID)
 	earg := engine.PGPSignArg{Sink: snk, Source: src, Opts: arg.Opts}
 	ctx := engine.Context{SecretUI: h.getSecretUI(arg.SessionID)}
-	eng := engine.NewPGPSignEngine(&earg, G)
+	eng := engine.NewPGPSignEngine(&earg, h.G())
 	return engine.RunEngine(eng, &ctx)
 }
 
-func (h *PGPHandler) PGPPull(arg keybase1.PGPPullArg) error {
+func (h *PGPHandler) PGPPull(_ context.Context, arg keybase1.PGPPullArg) error {
 	earg := engine.PGPPullEngineArg{
 		UserAsserts: arg.UserAsserts,
 	}
 	ctx := engine.Context{
 		LogUI: h.getLogUI(arg.SessionID),
 	}
-	eng := engine.NewPGPPullEngine(&earg, G)
+	eng := engine.NewPGPPullEngine(&earg, h.G())
 	return engine.RunEngine(eng, &ctx)
 }
 
-func (h *PGPHandler) PGPEncrypt(arg keybase1.PGPEncryptArg) error {
+func (h *PGPHandler) PGPEncrypt(_ context.Context, arg keybase1.PGPEncryptArg) error {
 	cli := h.getStreamUICli()
 	src := libkb.NewRemoteStreamBuffered(arg.Source, cli, arg.SessionID)
 	snk := libkb.NewRemoteStreamBuffered(arg.Sink, cli, arg.SessionID)
@@ -51,14 +56,14 @@ func (h *PGPHandler) PGPEncrypt(arg keybase1.PGPEncryptArg) error {
 		TrackOptions: arg.Opts.TrackOptions,
 	}
 	ctx := &engine.Context{
-		IdentifyUI: h.NewRemoteIdentifyUI(arg.SessionID),
+		IdentifyUI: h.NewRemoteIdentifyUI(arg.SessionID, h.G()),
 		SecretUI:   h.getSecretUI(arg.SessionID),
 	}
-	eng := engine.NewPGPEncrypt(earg, G)
+	eng := engine.NewPGPEncrypt(earg, h.G())
 	return engine.RunEngine(eng, ctx)
 }
 
-func (h *PGPHandler) PGPDecrypt(arg keybase1.PGPDecryptArg) (keybase1.PGPSigVerification, error) {
+func (h *PGPHandler) PGPDecrypt(_ context.Context, arg keybase1.PGPDecryptArg) (keybase1.PGPSigVerification, error) {
 	cli := h.getStreamUICli()
 	src := libkb.NewRemoteStreamBuffered(arg.Source, cli, arg.SessionID)
 	snk := libkb.NewRemoteStreamBuffered(arg.Sink, cli, arg.SessionID)
@@ -71,10 +76,10 @@ func (h *PGPHandler) PGPDecrypt(arg keybase1.PGPDecryptArg) (keybase1.PGPSigVeri
 	}
 	ctx := &engine.Context{
 		SecretUI:   h.getSecretUI(arg.SessionID),
-		IdentifyUI: h.NewRemoteSkipPromptIdentifyUI(arg.SessionID),
+		IdentifyUI: h.NewRemoteSkipPromptIdentifyUI(arg.SessionID, h.G()),
 		LogUI:      h.getLogUI(arg.SessionID),
 	}
-	eng := engine.NewPGPDecrypt(earg, G)
+	eng := engine.NewPGPDecrypt(earg, h.G())
 	err := engine.RunEngine(eng, ctx)
 	if err != nil {
 		return keybase1.PGPSigVerification{}, err
@@ -83,7 +88,7 @@ func (h *PGPHandler) PGPDecrypt(arg keybase1.PGPDecryptArg) (keybase1.PGPSigVeri
 	return sigVer(eng.SignatureStatus(), eng.Owner()), nil
 }
 
-func (h *PGPHandler) PGPVerify(arg keybase1.PGPVerifyArg) (keybase1.PGPSigVerification, error) {
+func (h *PGPHandler) PGPVerify(_ context.Context, arg keybase1.PGPVerifyArg) (keybase1.PGPSigVerification, error) {
 	cli := h.getStreamUICli()
 	src := libkb.NewRemoteStreamBuffered(arg.Source, cli, arg.SessionID)
 	earg := &engine.PGPVerifyArg{
@@ -94,10 +99,10 @@ func (h *PGPHandler) PGPVerify(arg keybase1.PGPVerifyArg) (keybase1.PGPSigVerifi
 	}
 	ctx := &engine.Context{
 		SecretUI:   h.getSecretUI(arg.SessionID),
-		IdentifyUI: h.NewRemoteIdentifyUI(arg.SessionID),
+		IdentifyUI: h.NewRemoteIdentifyUI(arg.SessionID, h.G()),
 		LogUI:      h.getLogUI(arg.SessionID),
 	}
-	eng := engine.NewPGPVerify(earg, G)
+	eng := engine.NewPGPVerify(earg, h.G())
 	err := engine.RunEngine(eng, ctx)
 	if err != nil {
 		return keybase1.PGPSigVerification{}, err
@@ -125,7 +130,7 @@ func sigVer(ss *libkb.SignatureStatus, owner *libkb.User) keybase1.PGPSigVerific
 	return res
 }
 
-func (h *PGPHandler) PGPImport(arg keybase1.PGPImportArg) error {
+func (h *PGPHandler) PGPImport(_ context.Context, arg keybase1.PGPImportArg) error {
 	ctx := &engine.Context{
 		SecretUI: h.getSecretUI(arg.SessionID),
 		LogUI:    h.getLogUI(arg.SessionID),
@@ -154,19 +159,18 @@ func (h *PGPHandler) export(sessionID int, ex exporter) ([]keybase1.KeyInfo, err
 	return ex.Results(), nil
 }
 
-func (h *PGPHandler) PGPExport(arg keybase1.PGPExportArg) (ret []keybase1.KeyInfo, err error) {
-	return h.export(arg.SessionID, engine.NewPGPKeyExportEngine(arg, G))
+func (h *PGPHandler) PGPExport(_ context.Context, arg keybase1.PGPExportArg) (ret []keybase1.KeyInfo, err error) {
+	return h.export(arg.SessionID, engine.NewPGPKeyExportEngine(arg, h.G()))
 }
 
-func (h *PGPHandler) PGPExportByKID(arg keybase1.PGPExportByKIDArg) (ret []keybase1.KeyInfo, err error) {
-	return h.export(arg.SessionID, engine.NewPGPKeyExportByKIDEngine(arg, G))
+func (h *PGPHandler) PGPExportByKID(_ context.Context, arg keybase1.PGPExportByKIDArg) (ret []keybase1.KeyInfo, err error) {
+	return h.export(arg.SessionID, engine.NewPGPKeyExportByKIDEngine(arg, h.G()))
 }
 
-func (h *PGPHandler) PGPExportByFingerprint(arg keybase1.PGPExportByFingerprintArg) (ret []keybase1.KeyInfo, err error) {
-	return h.export(arg.SessionID, engine.NewPGPKeyExportByFingerprintEngine(arg, G))
+func (h *PGPHandler) PGPExportByFingerprint(_ context.Context, arg keybase1.PGPExportByFingerprintArg) (ret []keybase1.KeyInfo, err error) {
+	return h.export(arg.SessionID, engine.NewPGPKeyExportByFingerprintEngine(arg, h.G()))
 }
-
-func (h *PGPHandler) PGPKeyGen(arg keybase1.PGPKeyGenArg) (err error) {
+func (h *PGPHandler) PGPKeyGen(_ context.Context, arg keybase1.PGPKeyGenArg) (err error) {
 	earg := engine.ImportPGPKeyImportEngineArg(arg)
 	return h.keygen(arg.SessionID, earg, true)
 }
@@ -179,7 +183,7 @@ func (h *PGPHandler) keygen(sessionID int, earg engine.PGPKeyImportEngineArg, do
 	return err
 }
 
-func (h *PGPHandler) PGPKeyGenDefault(arg keybase1.PGPKeyGenDefaultArg) (err error) {
+func (h *PGPHandler) PGPKeyGenDefault(_ context.Context, arg keybase1.PGPKeyGenDefaultArg) (err error) {
 	earg := engine.PGPKeyImportEngineArg{
 		Gen: &libkb.PGPGenArg{
 			Ids:         libkb.ImportPGPIdentities(arg.CreateUids.Ids),
@@ -189,18 +193,18 @@ func (h *PGPHandler) PGPKeyGenDefault(arg keybase1.PGPKeyGenDefaultArg) (err err
 	return h.keygen(arg.SessionID, earg, false)
 }
 
-func (h *PGPHandler) PGPDeletePrimary(sessionID int) (err error) {
+func (h *PGPHandler) PGPDeletePrimary(_ context.Context, sessionID int) (err error) {
 	return libkb.DeletePrimary()
 }
 
-func (h *PGPHandler) PGPSelect(sarg keybase1.PGPSelectArg) error {
+func (h *PGPHandler) PGPSelect(_ context.Context, sarg keybase1.PGPSelectArg) error {
 	arg := engine.GPGImportKeyArg{
 		Query:      sarg.FingerprintQuery,
 		AllowMulti: sarg.AllowMulti,
 		SkipImport: sarg.SkipImport,
 		OnlyImport: sarg.OnlyImport,
 	}
-	gpg := engine.NewGPGImportKeyEngine(&arg, G)
+	gpg := engine.NewGPGImportKeyEngine(&arg, h.G())
 	ctx := &engine.Context{
 		GPGUI:    h.getGPGUI(sarg.SessionID),
 		SecretUI: h.getSecretUI(sarg.SessionID),
@@ -210,11 +214,11 @@ func (h *PGPHandler) PGPSelect(sarg keybase1.PGPSelectArg) error {
 	return engine.RunEngine(gpg, ctx)
 }
 
-func (h *PGPHandler) PGPUpdate(arg keybase1.PGPUpdateArg) error {
+func (h *PGPHandler) PGPUpdate(_ context.Context, arg keybase1.PGPUpdateArg) error {
 	ctx := engine.Context{
 		LogUI:    h.getLogUI(arg.SessionID),
 		SecretUI: h.getSecretUI(arg.SessionID),
 	}
-	eng := engine.NewPGPUpdateEngine(arg.Fingerprints, arg.All, G)
+	eng := engine.NewPGPUpdateEngine(arg.Fingerprints, arg.All, h.G())
 	return engine.RunEngine(eng, &ctx)
 }

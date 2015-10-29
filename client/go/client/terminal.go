@@ -32,17 +32,21 @@ func (t Terminal) Write(s string) error {
 }
 
 func (t Terminal) Prompt(s string) (string, error) {
-	return t.engine.Prompt(s)
+	s, err := t.engine.Prompt(s)
+	if err == minterm.ErrPromptInterrupted {
+		err = libkb.CanceledError{M: "input canceled"}
+	}
+	return s, err
 }
 
-func (t Terminal) PromptYesNo(p string, def PromptDefault) (ret bool, err error) {
+func (t Terminal) PromptYesNo(p string, def libkb.PromptDefault) (ret bool, err error) {
 	var ch string
 	switch def {
-	case PromptDefaultNeither:
+	case libkb.PromptDefaultNeither:
 		ch = "[y/n]"
-	case PromptDefaultYes:
+	case libkb.PromptDefaultYes:
 		ch = "[Y/n]"
-	case PromptDefaultNo:
+	case libkb.PromptDefaultNo:
 		ch = "[y/N]"
 	}
 	prompt := p + " " + ch + " "
@@ -57,10 +61,10 @@ func (t Terminal) PromptYesNo(p string, def PromptDefault) (ret bool, err error)
 			ret = false
 			done = true
 		} else if libkb.IsEmpty(s) {
-			if def == PromptDefaultNo {
+			if def == libkb.PromptDefaultNo {
 				ret = false
 				done = true
-			} else if def == PromptDefaultYes {
+			} else if def == libkb.PromptDefaultYes {
 				ret = true
 				done = true
 			}
@@ -103,7 +107,7 @@ func (t Terminal) GetSecret(arg *keybase1.SecretEntryArg) (res *keybase1.SecretE
 	if arg.UseSecretStore && !canceled && err == nil {
 		// TODO: Default to 'No' and dismiss the question for
 		// about a day if 'No' is selected.
-		res.StoreSecret, err = t.PromptYesNo(libkb.GetTerminalPrompt(), PromptDefaultYes)
+		res.StoreSecret, err = t.PromptYesNo(libkb.GetTerminalPrompt(), libkb.PromptDefaultYes)
 		if err != nil {
 			return
 		}

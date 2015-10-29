@@ -3,6 +3,21 @@
 	"ignore": "test",
 	"package": [
 		{
+			"path": "code.google.com/p/rsc/gf256",
+			"revision": "2d8aa6027fab",
+			"revisionTime": "2014-11-30T16:07:12-05:00"
+		},
+		{
+			"path": "code.google.com/p/rsc/qr",
+			"revision": "2d8aa6027fab",
+			"revisionTime": "2014-11-30T16:07:12-05:00"
+		},
+		{
+			"path": "code.google.com/p/rsc/qr/coding",
+			"revision": "2d8aa6027fab",
+			"revisionTime": "2014-11-30T16:07:12-05:00"
+		},
+		{
 			"path": "github.com/PuerkitoBio/goquery",
 			"revision": "b4440419d81240f8451a505b2f806c853bc2befc",
 			"revisionTime": "2015-06-05T22:16:32-04:00"
@@ -53,9 +68,59 @@
 			"revisionTime": "2015-09-21T11:51:56-05:00"
 		},
 		{
+			"path": "github.com/keybase/go-crypto/openpgp",
+			"revision": "67d171e99a58463b40209d86a5438f5b708d8ad0",
+			"revisionTime": "2015-10-12T10:46:00-04:00"
+		},
+		{
+			"path": "github.com/keybase/go-crypto/openpgp/armor",
+			"revision": "67d171e99a58463b40209d86a5438f5b708d8ad0",
+			"revisionTime": "2015-10-12T10:46:00-04:00"
+		},
+		{
+			"path": "github.com/keybase/go-crypto/openpgp/clearsign",
+			"revision": "67d171e99a58463b40209d86a5438f5b708d8ad0",
+			"revisionTime": "2015-10-12T10:46:00-04:00"
+		},
+		{
+			"path": "github.com/keybase/go-crypto/openpgp/elgamal",
+			"revision": "67d171e99a58463b40209d86a5438f5b708d8ad0",
+			"revisionTime": "2015-10-12T10:46:00-04:00"
+		},
+		{
+			"path": "github.com/keybase/go-crypto/openpgp/errors",
+			"revision": "67d171e99a58463b40209d86a5438f5b708d8ad0",
+			"revisionTime": "2015-10-12T10:46:00-04:00"
+		},
+		{
+			"path": "github.com/keybase/go-crypto/openpgp/packet",
+			"revision": "67d171e99a58463b40209d86a5438f5b708d8ad0",
+			"revisionTime": "2015-10-12T10:46:00-04:00"
+		},
+		{
+			"path": "github.com/keybase/go-crypto/openpgp/s2k",
+			"revision": "67d171e99a58463b40209d86a5438f5b708d8ad0",
+			"revisionTime": "2015-10-12T10:46:00-04:00"
+		},
+		{
+			"path": "github.com/keybase/go-framed-msgpack-rpc",
+			"revision": "5cf1d55c5a7b4eb5da99e9f118b3d23848191a18",
+			"revisionTime": "2015-10-27T16:30:52-05:00"
+		},
+		{
 			"path": "github.com/keybase/go-jsonw",
 			"revision": "8b210ebd44e383ee4c61a58284a478f1a50787e4",
 			"revisionTime": "2015-06-24T12:59:21-04:00"
+		},
+		{
+			"path": "github.com/keybase/go-keychain",
+			"revision": "041360662df035870dc6cafa8bbb357265d0da98",
+			"revisionTime": "2015-09-29T12:22:00-07:00"
+		},
+		{
+			"path": "github.com/keybase/go-logging",
+			"revision": "5bdfcf4cc17c3cefffc209f5780a259bafcd057e",
+			"revisionTime": "2015-10-15T11:08:39-07:00"
 		},
 		{
 			"path": "github.com/keybase/go-osxkeychain",
@@ -79,13 +144,13 @@
 		},
 		{
 			"path": "github.com/keybase/keybase-test-vectors/go",
-			"revision": "fc833da23dfb352183cf36abd061c26ac3ea3c6e",
-			"revisionTime": "2015-10-02T19:11:52-04:00"
+			"revision": "a5147a659b4a69f77e027e301e726e05492474d6",
+			"revisionTime": "2015-10-20T11:39:53-04:00"
 		},
 		{
 			"path": "github.com/keybase/miniline",
-			"revision": "7b05931ce7f81b8e11f7480c5490707b0d9c4644",
-			"revisionTime": "2015-09-21T15:02:06-04:00"
+			"revision": "52e080cafce9259a7343c686aee3254637482472",
+			"revisionTime": "2015-10-05T10:18:12-07:00"
 		},
 		{
 			"path": "github.com/kr/pty",
@@ -98,19 +163,9 @@
 			"revisionTime": "2015-05-20T12:37:12-04:00"
 		},
 		{
-			"path": "github.com/maxtaco/go-framed-msgpack-rpc",
-			"revision": "5bc8b1e1cabf1c2eaf81a19d82562df4cf6a2352",
-			"revisionTime": "2015-10-05T22:14:12-04:00"
-		},
-		{
-			"path": "github.com/maxtaco/go-framed-msgpack-rpc/rpc2",
-			"revision": "5bc8b1e1cabf1c2eaf81a19d82562df4cf6a2352",
-			"revisionTime": "2015-10-05T22:14:12-04:00"
-		},
-		{
-			"path": "github.com/op/go-logging",
-			"revision": "e8d5414f0947014548c2334044a0fac13187dfee",
-			"revisionTime": "2015-05-25T13:26:48+02:00"
+			"path": "github.com/natefinch/npipe",
+			"revision": "0938d701e50e580f5925c773055eb6d6b32a0cbc",
+			"revisionTime": "2014-10-08T16:43:58+02:00"
 		},
 		{
 			"path": "github.com/syndtr/goleveldb/leveldb",

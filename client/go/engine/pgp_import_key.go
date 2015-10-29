@@ -104,7 +104,7 @@ func (e *PGPKeyImportEngine) saveLKS(ctx *Context) (err error) {
 			return err
 		}
 	}
-	_, err = libkb.WriteLksSKBToKeyring(e.bundle, lks, ctx.LogUI, ctx.LoginContext)
+	_, err = libkb.WriteLksSKBToKeyring(e.bundle, lks, ctx.LoginContext)
 	return
 }
 
@@ -253,6 +253,7 @@ func (e *PGPKeyImportEngine) loadDelegator(ctx *Context) (err error) {
 		Me:             e.me,
 		Expire:         libkb.KeyExpireIn,
 		DelegationType: libkb.SibkeyType,
+		Contextified:   libkb.NewContextified(e.G()),
 	}
 
 	return e.del.LoadSigningKey(ctx.LoginContext, ctx.SecretUI)

@@ -564,11 +564,11 @@ func (e NoUsernameError) Error() string {
 //=============================================================================
 
 type UnmarshalError struct {
-	t string
+	T string
 }
 
 func (u UnmarshalError) Error() string {
-	return "Bad " + u.t + " packet"
+	return "Bad " + u.T + " packet"
 }
 
 type VerificationError struct{}
@@ -1000,11 +1000,11 @@ func (e APINetError) Error() string {
 
 //=============================================================================
 
-type PGPDecError struct {
+type PGPNoDecryptionKeyError struct {
 	Msg string
 }
 
-func (e PGPDecError) Error() string {
+func (e PGPNoDecryptionKeyError) Error() string {
 	return fmt.Sprintf("pgp decrypt error: %s", e.Msg)
 }
 
@@ -1114,4 +1114,33 @@ type PIDFileLockError struct {
 
 func (e PIDFileLockError) Error() string {
 	return fmt.Sprintf("error locking %s: server already running", e.Filename)
+}
+
+type SecretStoreError struct {
+	Msg string
+}
+
+func (e SecretStoreError) Error() string {
+	return "Secret store error: " + e.Msg
+}
+
+type PassphraseProvisionImpossibleError struct{}
+
+func (e PassphraseProvisionImpossibleError) Error() string {
+	return "Passphrase provision is not possible since you have at least one provisioned device or pgp key already"
+}
+
+type InvalidArgumentError struct {
+	Msg string
+}
+
+func (e InvalidArgumentError) Error() string {
+	return fmt.Sprintf("invalid argument: %s", e.Msg)
+}
+
+type RetryExhaustedError struct {
+}
+
+func (e RetryExhaustedError) Error() string {
+	return "Prompt attempts exhausted."
 }

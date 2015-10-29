@@ -1,8 +1,9 @@
-// +build !release
+// +build !production
 
 package libkb
 
 import (
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -22,18 +23,28 @@ func NewRooterChecker(p RemoteProofChainLink) (*RooterChecker, ProofError) {
 	return &RooterChecker{p}, nil
 }
 
-func (rc *RooterChecker) CheckHint(h SigHint) ProofError {
-	wantedURL := G.Env.GetServerURI() + APIURIPathPrefix + "/rooter/" + strings.ToLower(rc.proof.GetRemoteUsername()) + "/"
-	wantedMedID := rc.proof.GetSigID().ToMediumID()
-	if !strings.HasPrefix(strings.ToLower(h.apiURL), wantedURL) {
-		return NewProofError(keybase1.ProofStatus_BAD_API_URL,
-			"Bad hint from server; URL should start with '%s'", wantedURL)
-	} else if !strings.Contains(h.checkText, wantedMedID) {
-		return NewProofError(keybase1.ProofStatus_BAD_SIGNATURE,
-			"Bad proof-check text from server; need '%s' as a substring", wantedMedID)
-	} else {
-		return nil
+func (rc *RooterChecker) CheckHint(h SigHint) (err ProofError) {
+	G.Log.Debug("+ Rooter check hint: %v", h)
+	defer func() {
+		G.Log.Debug("- Rooter check hint: %v", err)
+	}()
+
+	u, perr := url.Parse(strings.ToLower(h.apiURL))
+	if perr != nil {
+		err = NewProofError(keybase1.ProofStatus_BAD_API_URL,
+			"Bad hint from server (%s): %v", h.apiURL, perr)
+		return
 	}
+	wantedMedID := rc.proof.GetSigID().ToMediumID()
+	wantedPathPrefix := APIURIPathPrefix + "/rooter/" + strings.ToLower(rc.proof.GetRemoteUsername()) + "/"
+	if !strings.HasPrefix(u.Path, wantedPathPrefix) {
+		err = NewProofError(keybase1.ProofStatus_BAD_API_URL,
+			"Bad hint from server; URL should have path prefix '%s'; got %v", wantedPathPrefix, u)
+	} else if !strings.Contains(h.checkText, wantedMedID) {
+		err = NewProofError(keybase1.ProofStatus_BAD_SIGNATURE,
+			"Bad proof-check text from server; need '%s' as a substring", wantedMedID)
+	}
+	return err
 }
 
 func (rc *RooterChecker) ScreenNameCompare(s1, s2 string) bool {
@@ -88,20 +99,54 @@ func (rc *RooterChecker) UnpackData(inp *jsonw.Wrapper) (string, ProofError) {
 
 }
 
-func (rc *RooterChecker) CheckStatus(h SigHint) ProofError {
+func (rc *RooterChecker) rewriteURL(s string) (string, error) {
+	u1, err := url.Parse(s)
+	if err != nil {
+		return "", err
+	}
+	u2, err := url.Parse(G.Env.GetServerURI())
+	if err != nil {
+		return "", err
+	}
+
+	u3 := url.URL{
+		Host:     u2.Host,
+		Scheme:   u2.Scheme,
+		Path:     u1.Path,
+		Fragment: u1.Fragment,
+	}
+
+	return u3.String(), nil
+}
+
+func (rc *RooterChecker) CheckStatus(h SigHint) (perr ProofError) {
+
+	G.Log.Debug("+ Checking rooter at API=%s", h.apiURL)
+	defer func() {
+		G.Log.Debug("- Rooter -> %v", perr)
+	}()
+
+	url, err := rc.rewriteURL(h.apiURL)
+	if err != nil {
+		return XapiError(err, url)
+	}
+	G.Log.Debug("| URL after rewriter is: %s", url)
+
 	res, err := G.XAPI.Get(APIArg{
-		Endpoint:    h.apiURL,
+		Endpoint:    url,
 		NeedSession: false,
 	})
 	if err != nil {
-		return XapiError(err, h.apiURL)
+		perr = XapiError(err, url)
+		return perr
 	}
 	dat, perr := rc.UnpackData(res.Body)
 	if perr != nil {
 		return perr
 	}
 
-	return rc.CheckData(h, dat)
+	perr = rc.CheckData(h, dat)
+	return perr
 }
 
 //
@@ -144,7 +189,7 @@ func (t RooterServiceType) PostInstructions(un string) *Markup {
 
 func (t RooterServiceType) DisplayName(un string) string { return "Rooter" }
 func (t RooterServiceType) GetTypeName() string          { return "rooter" }
-func (t RooterServiceType) RecheckProofPosting(tryNumber int, status keybase1.ProofStatus) (warning *Markup, err error) {
+func (t RooterServiceType) RecheckProofPosting(tryNumber int, status keybase1.ProofStatus, _ string) (warning *Markup, err error) {
 	return t.BaseRecheckProofPosting(tryNumber, status)
 }
 func (t RooterServiceType) GetProofType() string { return "test.web_service_binding.rooter" }

@@ -3,20 +3,13 @@ package logger
 import (
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	keybase1 "github.com/keybase/client/go/protocol"
-	logging "github.com/op/go-logging"
+	logging "github.com/keybase/go-logging"
 	"golang.org/x/net/context"
-)
-
-const (
-	fancyFormat   = "%{color}%{time:15:04:05.000000} ▶ [%{level:.4s} %{module} %{shortfile}] %{id:03x}%{color:reset} %{message}"
-	plainFormat   = "[%{level:.4s}] %{id:03x} %{message}"
-	fileFormat    = "%{time:15:04:05.000000} ▶ [%{level:.4s} %{module} %{shortfile}] %{id:03x} %{message}"
-	defaultFormat = "%{color}▶ %{level} %{message}%{color:reset}"
 )
 
 const permDir os.FileMode = 0700
@@ -274,7 +267,7 @@ func FileExists(path string) (bool, error) {
 }
 
 func MakeParentDirs(filename string) error {
-	dir, _ := path.Split(filename)
+	dir, _ := filepath.Split(filename)
 	exists, err := FileExists(dir)
 	if err != nil {
 		return err

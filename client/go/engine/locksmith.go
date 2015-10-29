@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 
+	"golang.org/x/net/context"
+
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/libkb/kex"
 	keybase1 "github.com/keybase/client/go/protocol"
@@ -14,13 +16,14 @@ type Locksmith struct {
 	libkb.Contextified
 	arg *LocksmithArg
 
-	status     LocksmithStatus
-	signingKey libkb.GenericKey
-	devName    string
-	lks        *libkb.LKSec
-	kexMu      sync.Mutex
-	kex        *KexNewDevice
-	canceled   chan struct{}
+	status            LocksmithStatus
+	signingKey        libkb.GenericKey
+	devName           string
+	lks               *libkb.LKSec
+	kexMu             sync.Mutex
+	kex               *KexNewDevice
+	canceled          chan struct{}
+	provisionRequired bool
 }
 
 type LocksmithArg struct {
@@ -153,7 +156,16 @@ func (d *Locksmith) fix(ctx *Context) error {
 		panic(err)
 	}
 
-	return d.checkKeys(ctx)
+	if err := d.checkKeys(ctx); err != nil {
+		return err
+	}
+
+	if d.provisionRequired {
+		// checkKeys provisioned a device, so inform the user:
+		return ctx.LocksmithUI.DisplayProvisionSuccess(context.TODO(), keybase1.DisplayProvisionSuccessArg{Username: d.arg.User.GetName()})
+	}
+
+	return nil
 }
 
 func (d *Locksmith) Cancel() error {
@@ -202,8 +214,13 @@ func (d *Locksmith) checkKeys(ctx *Context) error {
 	if d.arg.User.HasDeviceInCurrentInstall() {
 		// they have a device sibkey for this device
 		d.G().Log.Debug("| User has a device in the current install; all done")
+		// no device provisioning performed:
+		d.provisionRequired = false
 		return nil
 	}
+
+	// a new device will be provisioned below, so set this here.
+	d.provisionRequired = true
 
 	// make sure secretsyncer loaded --- likely not needed since we
 	// already did this above
@@ -250,6 +267,9 @@ func (d *Locksmith) addBasicKeys(ctx *Context) error {
 		return err
 	}
 
+	// a new device was provisioned:
+	d.provisionRequired = true
+
 	return nil
 }
 
@@ -275,6 +295,7 @@ func (d *Locksmith) addDeviceKeyWithSigner(ctx *Context, signer libkb.GenericKey
 	args := &DeviceWrapArgs{
 		Me:         d.arg.User,
 		DeviceName: devname,
+		DeviceType: libkb.DeviceTypeDesktop,
 		Lks:        d.lks,
 		IsEldest:   false,
 		Signer:     signer,
@@ -302,7 +323,7 @@ func (d *Locksmith) deviceSign(ctx *Context, withPGPOption bool) error {
 		return err
 	}
 
-	devFilter := map[string]bool{
+	devFilter := libkb.DeviceTypeSet{
 		libkb.DeviceTypeDesktop: true,
 		libkb.DeviceTypeMobile:  true,
 		libkb.DeviceTypePaper:   true,
@@ -329,7 +350,6 @@ func (d *Locksmith) deviceSign(ctx *Context, withPGPOption bool) error {
 			return d.deviceSignPGP(ctx)
 		}
 	}
-
 	var arg keybase1.SelectSignerArg
 	for k, v := range devs {
 		if v.Type != libkb.DeviceTypePaper {
@@ -350,7 +370,7 @@ func (d *Locksmith) deviceSign(ctx *Context, withPGPOption bool) error {
 		errCh := make(chan error)
 
 		go func() {
-			res, err := ctx.LocksmithUI.SelectSigner(arg)
+			res, err := ctx.LocksmithUI.SelectSigner(context.TODO(), arg)
 			if err != nil {
 				errCh <- err
 			} else {
@@ -384,13 +404,20 @@ func (d *Locksmith) deviceSign(ctx *Context, withPGPOption bool) error {
 				ctx.LogUI.Debug("device sign w/ pgp success")
 				return nil
 			}
-			ctx.LogUI.Info("deviceSignPGP error: %s", err)
+
+			// If there are no available public keys, and no other ways to login,
+			// then no point in continuing. Bail out.
+			if _, ok := err.(libkb.NoKeyError); ok && !arg.HasPaperBackupKey && len(arg.Devices) == 0 {
+				return err
+			}
+
+			ctx.LogUI.Info("PGP: %s", err)
 			uiarg := keybase1.DeviceSignAttemptErrArg{
 				Msg:     err.Error(),
 				Attempt: i + 1,
 				Total:   totalTries,
 			}
-			if err = ctx.LocksmithUI.DeviceSignAttemptErr(uiarg); err != nil {
+			if err = ctx.LocksmithUI.DeviceSignAttemptErr(context.TODO(), uiarg); err != nil {
 				d.G().Log.Info("error making ui call DeviceSignAttemptErr: %s", err)
 			}
 		case keybase1.DeviceSignerKind_DEVICE:
@@ -419,7 +446,7 @@ func (d *Locksmith) deviceSign(ctx *Context, withPGPOption bool) error {
 				Attempt: i + 1,
 				Total:   totalTries,
 			}
-			if err = ctx.LocksmithUI.DeviceSignAttemptErr(uiarg); err != nil {
+			if err = ctx.LocksmithUI.DeviceSignAttemptErr(context.TODO(), uiarg); err != nil {
 				d.G().Log.Info("error making ui call DeviceSignAttemptErr: %s", err)
 			}
 		case keybase1.DeviceSignerKind_PAPER_BACKUP_KEY:
@@ -434,7 +461,7 @@ func (d *Locksmith) deviceSign(ctx *Context, withPGPOption bool) error {
 				Attempt: i + 1,
 				Total:   totalTries,
 			}
-			if err = ctx.LocksmithUI.DeviceSignAttemptErr(uiarg); err != nil {
+			if err = ctx.LocksmithUI.DeviceSignAttemptErr(context.TODO(), uiarg); err != nil {
 				d.G().Log.Info("error making ui call DeviceSignAttemptErr: %s", err)
 			}
 		default:
@@ -509,7 +536,8 @@ func (d *Locksmith) deviceSignPGP(ctx *Context) (err error) {
 
 	bundle, ierr := gpg.ImportKey(true, selected.GetFingerprint())
 	if ierr != nil {
-		err = fmt.Errorf("ImportKey error: %s", ierr)
+		err = ierr
+		return err
 	}
 
 	if err = bundle.Unlock("adding this device to your account", ctx.SecretUI); err != nil {
@@ -592,7 +620,7 @@ func (d *Locksmith) selectPGPKey(ctx *Context, keys []*libkb.PGPKeyBundle) (*lib
 		gks = append(gks, gk)
 	}
 
-	keyid, err := ctx.GPGUI.SelectKey(keybase1.SelectKeyArg{Keys: gks})
+	keyid, err := ctx.GPGUI.SelectKey(context.TODO(), keybase1.SelectKeyArg{Keys: gks})
 	if err != nil {
 		return nil, err
 	}
@@ -633,7 +661,7 @@ func (d *Locksmith) deviceName(ctx *Context) (string, error) {
 
 	go func() {
 		for i := 0; i < 10; i++ {
-			name, err := ctx.LocksmithUI.PromptDeviceName(0)
+			name, err := ctx.LocksmithUI.PromptDeviceName(context.TODO(), 0)
 			if err != nil {
 				errCh <- err
 				return
@@ -647,7 +675,7 @@ func (d *Locksmith) deviceName(ctx *Context) (string, error) {
 				nameCh <- name
 				return
 			}
-			err = ctx.LocksmithUI.DeviceNameTaken(keybase1.DeviceNameTakenArg{Name: name})
+			err = ctx.LocksmithUI.DeviceNameTaken(context.TODO(), keybase1.DeviceNameTakenArg{Name: name})
 			if err != nil {
 				errCh <- err
 				return

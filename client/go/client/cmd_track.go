@@ -3,11 +3,13 @@ package client
 import (
 	"fmt"
 
+	"golang.org/x/net/context"
+
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
 )
 
 type CmdTrack struct {
@@ -51,15 +53,15 @@ func (v *CmdTrack) Run() error {
 		return err
 	}
 
-	protocols := []rpc2.Protocol{
+	protocols := []rpc.Protocol{
 		NewIdentifyTrackUIProtocol(),
-		NewSecretUIProtocol(),
+		NewSecretUIProtocol(G),
 	}
 	if err = RegisterProtocols(protocols); err != nil {
 		return err
 	}
 
-	return cli.Track(keybase1.TrackArg{
+	return cli.Track(context.TODO(), keybase1.TrackArg{
 		UserAssertion: v.user,
 		Options:       v.options,
 	})

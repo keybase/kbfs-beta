@@ -1,46 +1,26 @@
 package kex2
 
 import (
-	"errors"
-	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
-	"golang.org/x/net/context"
 	"net"
 	"time"
-)
 
-type baseDevice struct {
-	conn     net.Conn
-	xp       *rpc2.Transport
-	deviceID DeviceID
-	start    chan struct{}
-	canceled bool
-}
+	"golang.org/x/net/context"
+
+	keybase1 "github.com/keybase/client/go/protocol"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
+)
 
 type provisioner struct {
 	baseDevice
 	arg ProvisionerArg
 }
 
-// ErrCanceled is returned if Kex is canceled by the caller via the Context argument
-var ErrCanceled = errors.New("kex canceled by caller")
-
 // Provisioner is an interface that abstracts out the crypto and session
 // management that a provisioner needs to do as part of the protocol.
 type Provisioner interface {
-	GetHelloArg() keybase1.HelloArg
+	GetHelloArg() (keybase1.HelloArg, error)
 	CounterSign(keybase1.HelloRes) ([]byte, error)
-	GetLogFactory() rpc2.LogFactory
-}
-
-// KexBaseArg are arguments common to both Provisioner and Provisionee
-type KexBaseArg struct {
-	Ctx           context.Context
-	Mr            MessageRouter
-	Secret        Secret
-	DeviceID      keybase1.DeviceID // For now, this deviceID is different from the one in the transport
-	SecretChannel <-chan Secret
-	Timeout       time.Duration
+	GetLogFactory() rpc.LogFactory
 }
 
 // ProvisionerArg provides the details that a provisioner needs in order
@@ -75,7 +55,7 @@ func (p *provisioner) close() (err error) {
 	return err
 }
 
-func (p *provisioner) KexStart() error {
+func (p *provisioner) KexStart(_ context.Context) error {
 	close(p.start)
 	return nil
 }
@@ -104,31 +84,50 @@ func (p *provisioner) setDeviceID() (err error) {
 }
 
 func (p *provisioner) pickFirstConnection() (err error) {
-	var conn net.Conn
-	if conn, err = NewConn(p.arg.Mr, p.arg.Secret, p.deviceID, p.arg.Timeout); err != nil {
-		return err
-	}
 
-	prot := keybase1.Kex2ProvisionerProtocol(p)
-	xp := rpc2.NewTransport(conn, p.arg.Provisioner.GetLogFactory(), nil)
-	srv := rpc2.NewServer(xp, nil)
-	if err = srv.Register(prot); err != nil {
-		return err
-	}
-	if err = srv.Run(true); err != nil {
-		return err
+	// This connection is auto-closed at the end of this function, so if
+	// you don't want it to close, then set it to nil.  See the first
+	// case in the select below.
+	var conn net.Conn
+	var xp rpc.Transporter
+
+	defer func() {
+		if conn != nil {
+			conn.Close()
+		}
+	}()
+
+	// Only make a channel if we were provided a secret to start it with.
+	// If not, we'll just have to wait for a message on p.arg.SecretChannel
+	// and use the provisionee's channel.
+	if len(p.arg.Secret) != 0 {
+		if conn, err = NewConn(p.arg.Mr, p.arg.Secret, p.deviceID, p.arg.Timeout); err != nil {
+			return err
+		}
+		prot := keybase1.Kex2ProvisionerProtocol(p)
+		xp = rpc.NewTransport(conn, p.arg.Provisioner.GetLogFactory(), nil)
+		srv := rpc.NewServer(xp, nil)
+		if err = srv.Register(prot); err != nil {
+			return err
+		}
+		if err = srv.Run(true); err != nil {
+			return err
+		}
 	}
 
 	select {
 	case <-p.start:
 		p.conn = conn
+		conn = nil // so it's not closed in the defer()'ed close
 		p.xp = xp
 	case sec := <-p.arg.SecretChannel:
+		if len(sec) != SecretLen {
+			return ErrBadSecret
+		}
 		if p.conn, err = NewConn(p.arg.Mr, sec, p.deviceID, p.arg.Timeout); err != nil {
 			return err
 		}
-		p.xp = rpc2.NewTransport(p.conn, p.arg.Provisioner.GetLogFactory(), nil)
-		conn.Close()
+		p.xp = rpc.NewTransport(p.conn, p.arg.Provisioner.GetLogFactory(), nil)
 	case <-p.arg.Ctx.Done():
 		err = ErrCanceled
 	case <-time.After(p.arg.Timeout):
@@ -152,9 +151,14 @@ func (p *provisioner) runProtocolWithCancel() (err error) {
 }
 
 func (p *provisioner) runProtocol() (err error) {
-	cli := keybase1.Kex2ProvisioneeClient{Cli: rpc2.NewClient(p.xp, nil)}
+	cli := keybase1.Kex2ProvisioneeClient{Cli: rpc.NewClient(p.xp, nil)}
+	var helloArg keybase1.HelloArg
+	helloArg, err = p.arg.Provisioner.GetHelloArg()
+	if err != nil {
+		return
+	}
 	var res keybase1.HelloRes
-	if res, err = cli.Hello(p.arg.Provisioner.GetHelloArg()); err != nil {
+	if res, err = cli.Hello(context.TODO(), helloArg); err != nil {
 		return
 	}
 	if p.canceled {
@@ -164,7 +168,7 @@ func (p *provisioner) runProtocol() (err error) {
 	if counterSigned, err = p.arg.Provisioner.CounterSign(res); err != nil {
 		return err
 	}
-	if err = cli.DidCounterSign(counterSigned); err != nil {
+	if err = cli.DidCounterSign(context.TODO(), counterSigned); err != nil {
 		return err
 	}
 	return nil

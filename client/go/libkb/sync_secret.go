@@ -61,7 +61,9 @@ type SecretSyncer struct {
 	keys  *ServerPrivateKeys
 }
 
-var DefaultDeviceTypes = map[string]bool{
+type DeviceTypeSet map[string]bool
+
+var DefaultDeviceTypes = DeviceTypeSet{
 	DeviceTypeDesktop: true,
 	DeviceTypeMobile:  true,
 }
@@ -156,6 +158,9 @@ func (ss *SecretSyncer) store(uid keybase1.UID) (err error) {
 // FindActiveKey examines the synced keys, looking for one that's currently active.
 // Returns ret=nil if none was found.
 func (ss *SecretSyncer) FindActiveKey(ckf *ComputedKeyFamily) (ret *SKB, err error) {
+	if ss.keys == nil {
+		return nil, nil
+	}
 	for _, key := range ss.keys.PrivateKeys {
 		if ret, _ = key.FindActiveKey(ckf); ret != nil {
 			return
@@ -230,7 +235,7 @@ func (ss *SecretSyncer) dumpDevices() {
 
 // IsDeviceNameTaken returns true if a desktop or mobile device is
 // using a name already.
-func (ss *SecretSyncer) IsDeviceNameTaken(name string, includeTypesSet map[string]bool) bool {
+func (ss *SecretSyncer) IsDeviceNameTaken(name string, includeTypesSet DeviceTypeSet) bool {
 	devs, err := ss.ActiveDevices(includeTypesSet)
 	if err != nil {
 		return false
@@ -245,7 +250,7 @@ func (ss *SecretSyncer) IsDeviceNameTaken(name string, includeTypesSet map[strin
 
 // HasActiveDevice returns true if there is an active desktop or
 // mobile device available.
-func (ss *SecretSyncer) HasActiveDevice(includeTypesSet map[string]bool) (bool, error) {
+func (ss *SecretSyncer) HasActiveDevice(includeTypesSet DeviceTypeSet) (bool, error) {
 	devs, err := ss.ActiveDevices(includeTypesSet)
 	if err != nil {
 		return false, err
@@ -254,7 +259,7 @@ func (ss *SecretSyncer) HasActiveDevice(includeTypesSet map[string]bool) (bool, 
 }
 
 // ActiveDevices returns all the active desktop and mobile devices.
-func (ss *SecretSyncer) ActiveDevices(includeTypesSet map[string]bool) (DeviceKeyMap, error) {
+func (ss *SecretSyncer) ActiveDevices(includeTypesSet DeviceTypeSet) (DeviceKeyMap, error) {
 	if ss.keys == nil {
 		return nil, fmt.Errorf("no keys")
 	}

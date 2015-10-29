@@ -1,53 +1,56 @@
 package service
 
 import (
-	"os"
-	"time"
-
 	"github.com/keybase/client/go/engine"
+	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
+	"golang.org/x/net/context"
 )
 
 type CtlHandler struct {
+	libkb.Contextified
+	service *Service
 	*BaseHandler
 }
 
-func NewCtlHandler(xp *rpc2.Transport) *CtlHandler {
-	return &CtlHandler{BaseHandler: NewBaseHandler(xp)}
+func NewCtlHandler(xp rpc.Transporter, v *Service, g *libkb.GlobalContext) *CtlHandler {
+	return &CtlHandler{
+		BaseHandler:  NewBaseHandler(xp),
+		Contextified: libkb.NewContextified(g),
+		service:      v,
+	}
 }
 
 // Stop is called on the rpc keybase.1.ctl.stop, which shuts down the service.
-func (c *CtlHandler) Stop(sessionID int) error {
-	G.Log.Info("Received stop() RPC; shutting down")
+func (c *CtlHandler) Stop(_ context.Context, sessionID int) error {
+	c.G().Log.Info("Received stop() RPC; shutting down")
 	go func() {
-		time.Sleep(1 * time.Second)
-		G.Shutdown()
-		os.Exit(0)
+		c.service.Stop()
 	}()
 	return nil
 }
 
-func (c *CtlHandler) LogRotate(sessionID int) error {
-	return G.Log.RotateLogFile()
+func (c *CtlHandler) LogRotate(_ context.Context, sessionID int) error {
+	return c.G().Log.RotateLogFile()
 }
 
-func (c *CtlHandler) SetLogLevel(arg keybase1.SetLogLevelArg) error {
-	G.Log.SetExternalLogLevel(arg.Level)
+func (c *CtlHandler) SetLogLevel(_ context.Context, arg keybase1.SetLogLevelArg) error {
+	c.G().Log.SetExternalLogLevel(arg.Level)
 	return nil
 }
 
-func (c *CtlHandler) Reload(sessionID int) error {
-	G.Log.Info("Reloading config file")
-	return G.ConfigReload()
+func (c *CtlHandler) Reload(_ context.Context, sessionID int) error {
+	c.G().Log.Info("Reloading config file")
+	return c.G().ConfigReload()
 }
 
-func (c *CtlHandler) DbNuke(sessionID int) error {
+func (c *CtlHandler) DbNuke(_ context.Context, sessionID int) error {
 	ctx := engine.Context{
 		LogUI: c.getLogUI(sessionID),
 	}
 
-	fn, err := G.LocalDb.Nuke()
+	fn, err := c.G().LocalDb.Nuke()
 	if err != nil {
 		ctx.LogUI.Warning("Failed to nuke DB: %s", err)
 		return err
@@ -55,5 +58,5 @@ func (c *CtlHandler) DbNuke(sessionID int) error {
 	ctx.LogUI.Warning("Nuking database %s", fn)
 
 	// Now drop caches, since we had the DB's state in-memory too.
-	return G.ConfigureCaches()
+	return c.G().ConfigureCaches()
 }

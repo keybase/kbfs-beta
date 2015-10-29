@@ -14,9 +14,10 @@ var con net.Conn
 var startOnce sync.Once
 
 // ServerURI should match run mode environment.
-func Init(homeDir string, runModeStr string, serverURI string) {
+func Init(homeDir string, runModeStr string, serverURI string, accessGroupOverride bool) {
 	startOnce.Do(func() {
-		libkb.G.Init()
+		g := libkb.G
+		g.Init()
 		usage := libkb.Usage{
 			Config:    true,
 			API:       true,
@@ -26,9 +27,12 @@ func Init(homeDir string, runModeStr string, serverURI string) {
 		if err != nil {
 			fmt.Println("Error decoding run mode", err, runModeStr)
 		}
-		config := libkb.AppConfig{HomeDir: homeDir, RunMode: runMode, Debug: true, LocalRPCDebug: "Acsvip", ServerURI: serverURI}
-		libkb.G.Configure(config, usage)
-		(service.NewService(false)).StartLoopbackServer(libkb.G)
+		config := libkb.AppConfig{HomeDir: homeDir, RunMode: runMode, Debug: true, LocalRPCDebug: "Acsvip", ServerURI: serverURI, SecurityAccessGroupOverride: accessGroupOverride}
+		err = libkb.G.Configure(config, usage)
+		if err != nil {
+			panic(err)
+		}
+		(service.NewService(false, g)).StartLoopbackServer()
 		Reset()
 	})
 }
@@ -83,7 +87,7 @@ func Reset() {
 
 	var err error
 	libkb.G.SocketWrapper = nil
-	con, _, err = libkb.G.GetSocket()
+	con, _, err = libkb.G.GetSocket(false)
 
 	if err != nil {
 		fmt.Println("loopback socker error:", err)

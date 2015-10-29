@@ -3,19 +3,23 @@ package client
 import (
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
 )
 
-func GetRPCClient() (ret *rpc2.Client, xp *rpc2.Transport, err error) {
-	if _, xp, err = G.GetSocket(); err == nil {
-		ret = rpc2.NewClient(xp, libkb.UnwrapError)
+func GetRPCClient() (ret *rpc.Client, xp rpc.Transporter, err error) {
+	return GetRPCClientWithContext(G)
+}
+
+func GetRPCClientWithContext(g *libkb.GlobalContext) (ret *rpc.Client, xp rpc.Transporter, err error) {
+	if _, xp, err = g.GetSocket(false); err == nil {
+		ret = rpc.NewClient(xp, libkb.ErrorUnwrapper{})
 	}
 	return
 }
 
-func GetRPCServer() (ret *rpc2.Server, xp *rpc2.Transport, err error) {
-	if _, xp, err = G.GetSocket(); err == nil {
-		ret = rpc2.NewServer(xp, libkb.WrapError)
+func GetRPCServer(g *libkb.GlobalContext) (ret *rpc.Server, xp rpc.Transporter, err error) {
+	if _, xp, err = g.GetSocket(false); err == nil {
+		ret = rpc.NewServer(xp, libkb.WrapError)
 	}
 	if err != nil {
 		DiagnoseSocketError(err)
@@ -23,40 +27,39 @@ func GetRPCServer() (ret *rpc2.Server, xp *rpc2.Transport, err error) {
 	return
 }
 
-func GetSignupClient() (cli keybase1.SignupClient, err error) {
-	var rpc *rpc2.Client
-	if rpc, _, err = GetRPCClient(); err == nil {
+func GetSignupClient(g *libkb.GlobalContext) (cli keybase1.SignupClient, err error) {
+	var rpc *rpc.Client
+	if rpc, _, err = GetRPCClientWithContext(g); err == nil {
 		cli = keybase1.SignupClient{Cli: rpc}
 	}
 	return
 }
 
-func GetConfigClient() (cli keybase1.ConfigClient, err error) {
-	var rpc *rpc2.Client
-	if rpc, _, err = GetRPCClient(); err == nil {
+func GetConfigClient(g *libkb.GlobalContext) (cli keybase1.ConfigClient, err error) {
+	var rpc *rpc.Client
+	if rpc, _, err = GetRPCClientWithContext(g); err == nil {
 		cli = keybase1.ConfigClient{Cli: rpc}
 	}
 	return
 }
 
-func GetLoginClient() (cli keybase1.LoginClient, err error) {
-	var rcli *rpc2.Client
-	if rcli, _, err = GetRPCClient(); err == nil {
+func GetLoginClient(g *libkb.GlobalContext) (cli keybase1.LoginClient, err error) {
+	var rcli *rpc.Client
+	if rcli, _, err = GetRPCClientWithContext(g); err == nil {
 		cli = keybase1.LoginClient{Cli: rcli}
 	}
 	return
 }
 
-func RegisterProtocols(prots []rpc2.Protocol) (err error) {
-	var srv *rpc2.Server
-	if srv, _, err = GetRPCServer(); err != nil {
+func RegisterProtocolsWithContext(prots []rpc.Protocol, g *libkb.GlobalContext) (err error) {
+	var srv *rpc.Server
+	if srv, _, err = GetRPCServer(g); err != nil {
 		return
 	}
-
 	prots = append(prots, NewLogUIProtocol())
 	for _, p := range prots {
 		if err = srv.Register(p); err != nil {
-			if _, ok := err.(rpc2.AlreadyRegisteredError); !ok {
+			if _, ok := err.(rpc.AlreadyRegisteredError); !ok {
 				return err
 			}
 			err = nil
@@ -65,8 +68,12 @@ func RegisterProtocols(prots []rpc2.Protocol) (err error) {
 	return
 }
 
+func RegisterProtocols(prots []rpc.Protocol) (err error) {
+	return RegisterProtocolsWithContext(prots, G)
+}
+
 func GetIdentifyClient() (cli keybase1.IdentifyClient, err error) {
-	var rcli *rpc2.Client
+	var rcli *rpc.Client
 	if rcli, _, err = GetRPCClient(); err == nil {
 		cli = keybase1.IdentifyClient{Cli: rcli}
 	}
@@ -74,7 +81,7 @@ func GetIdentifyClient() (cli keybase1.IdentifyClient, err error) {
 }
 
 func GetProveClient() (cli keybase1.ProveClient, err error) {
-	var rcli *rpc2.Client
+	var rcli *rpc.Client
 	if rcli, _, err = GetRPCClient(); err == nil {
 		cli = keybase1.ProveClient{Cli: rcli}
 	}
@@ -82,7 +89,7 @@ func GetProveClient() (cli keybase1.ProveClient, err error) {
 }
 
 func GetTrackClient() (cli keybase1.TrackClient, err error) {
-	var rcli *rpc2.Client
+	var rcli *rpc.Client
 	if rcli, _, err = GetRPCClient(); err == nil {
 		cli = keybase1.TrackClient{Cli: rcli}
 	}
@@ -90,7 +97,7 @@ func GetTrackClient() (cli keybase1.TrackClient, err error) {
 }
 
 func GetDeviceClient() (cli keybase1.DeviceClient, err error) {
-	var rcli *rpc2.Client
+	var rcli *rpc.Client
 	if rcli, _, err = GetRPCClient(); err == nil {
 		cli = keybase1.DeviceClient{Cli: rcli}
 	}
@@ -98,7 +105,7 @@ func GetDeviceClient() (cli keybase1.DeviceClient, err error) {
 }
 
 func GetUserClient() (cli keybase1.UserClient, err error) {
-	var rcli *rpc2.Client
+	var rcli *rpc.Client
 	if rcli, _, err = GetRPCClient(); err == nil {
 		cli = keybase1.UserClient{Cli: rcli}
 	}
@@ -106,7 +113,7 @@ func GetUserClient() (cli keybase1.UserClient, err error) {
 }
 
 func GetSigsClient() (cli keybase1.SigsClient, err error) {
-	var rcli *rpc2.Client
+	var rcli *rpc.Client
 	if rcli, _, err = GetRPCClient(); err == nil {
 		cli = keybase1.SigsClient{Cli: rcli}
 	}
@@ -114,7 +121,7 @@ func GetSigsClient() (cli keybase1.SigsClient, err error) {
 }
 
 func GetPGPClient() (cli keybase1.PGPClient, err error) {
-	var rcli *rpc2.Client
+	var rcli *rpc.Client
 	if rcli, _, err = GetRPCClient(); err == nil {
 		cli = keybase1.PGPClient{Cli: rcli}
 	}
@@ -122,39 +129,39 @@ func GetPGPClient() (cli keybase1.PGPClient, err error) {
 }
 
 func GetRevokeClient() (cli keybase1.RevokeClient, err error) {
-	var rcli *rpc2.Client
+	var rcli *rpc.Client
 	if rcli, _, err = GetRPCClient(); err == nil {
 		cli = keybase1.RevokeClient{Cli: rcli}
 	}
 	return
 }
 
-func GetBTCClient() (cli keybase1.BTCClient, err error) {
-	var rcli *rpc2.Client
-	if rcli, _, err = GetRPCClient(); err == nil {
+func GetBTCClient(g *libkb.GlobalContext) (cli keybase1.BTCClient, err error) {
+	var rcli *rpc.Client
+	if rcli, _, err = GetRPCClientWithContext(g); err == nil {
 		cli = keybase1.BTCClient{Cli: rcli}
 	}
 	return
 }
 
 func GetDoctorClient() (cli keybase1.DoctorClient, err error) {
-	var rcli *rpc2.Client
+	var rcli *rpc.Client
 	if rcli, _, err = GetRPCClient(); err == nil {
 		cli = keybase1.DoctorClient{Cli: rcli}
 	}
 	return
 }
 
-func GetCtlClient() (cli keybase1.CtlClient, err error) {
-	var rcli *rpc2.Client
-	if rcli, _, err = GetRPCClient(); err == nil {
+func GetCtlClient(g *libkb.GlobalContext) (cli keybase1.CtlClient, err error) {
+	var rcli *rpc.Client
+	if rcli, _, err = GetRPCClientWithContext(g); err == nil {
 		cli = keybase1.CtlClient{Cli: rcli}
 	}
 	return
 }
 
 func GetAccountClient() (cli keybase1.AccountClient, err error) {
-	var rcli *rpc2.Client
+	var rcli *rpc.Client
 	if rcli, _, err = GetRPCClient(); err == nil {
 		cli = keybase1.AccountClient{Cli: rcli}
 	}
@@ -162,7 +169,7 @@ func GetAccountClient() (cli keybase1.AccountClient, err error) {
 }
 
 func GetFavoriteClient() (cli keybase1.FavoriteClient, err error) {
-	var rcli *rpc2.Client
+	var rcli *rpc.Client
 	if rcli, _, err = GetRPCClient(); err == nil {
 		cli = keybase1.FavoriteClient{Cli: rcli}
 	}

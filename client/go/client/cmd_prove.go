@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"strings"
+
+	"golang.org/x/net/context"
 
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
 )
 
 // CmdProve is the wrapper structure for the the `keybase prove` operation.
@@ -26,7 +29,7 @@ func (p *CmdProve) ParseArgv(ctx *cli.Context) error {
 	p.output = ctx.String("output")
 
 	if nargs > 2 || nargs == 0 {
-		err = fmt.Errorf("prove takes 1 or args: <service> [<username>]")
+		err = fmt.Errorf("prove takes 1 or 2 args: <service> [<username>]")
 	} else {
 		p.arg.Service = ctx.Args()[0]
 		if nargs == 2 {
@@ -43,7 +46,7 @@ func (p *CmdProve) fileOutputHook(txt string) (err error) {
 	return
 }
 
-func newProveUIProtocol(ui ProveUI) rpc2.Protocol {
+func newProveUIProtocol(ui ProveUI) rpc.Protocol {
 	return keybase1.ProveUiProtocol(ui)
 }
 
@@ -54,10 +57,10 @@ func (p *CmdProve) Run() error {
 	proveUI := ProveUI{parent: GlobUI}
 	p.installOutputHook(&proveUI)
 
-	protocols := []rpc2.Protocol{
+	protocols := []rpc.Protocol{
 		newProveUIProtocol(proveUI),
-		NewLoginUIProtocol(),
-		NewSecretUIProtocol(),
+		NewLoginUIProtocol(G),
+		NewSecretUIProtocol(G),
 	}
 
 	cli, err := GetProveClient()
@@ -71,7 +74,7 @@ func (p *CmdProve) Run() error {
 	// command line interface wants the PromptPosted ui loop
 	p.arg.PromptPosted = true
 
-	_, err = cli.StartProof(p.arg)
+	_, err = cli.StartProof(context.TODO(), p.arg)
 	return err
 }
 
@@ -85,10 +88,13 @@ func (p *CmdProve) installOutputHook(ui *ProveUI) {
 
 // NewCmdProve makes a new prove command from the given CLI parameters.
 func NewCmdProve(cl *libcmdline.CommandLine) cli.Command {
+	serviceList := strings.Join(libkb.ListProofCheckers(), ", ")
+	description := fmt.Sprintf("Supported services are: %s.", serviceList)
 	return cli.Command{
 		Name:         "prove",
 		ArgumentHelp: "<service> [service username]",
-		Usage:        "Generate a new proof",
+		Usage:        "Generate a new proof.",
+		Description:  description,
 		Flags: []cli.Flag{
 			cli.StringFlag{
 				Name:  "output, o",

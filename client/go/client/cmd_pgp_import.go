@@ -3,13 +3,15 @@ package client
 import (
 	"fmt"
 
+	"golang.org/x/net/context"
+
 	"io/ioutil"
 
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
 )
 
 func NewCmdPGPImport(cl *libcmdline.CommandLine) cli.Command {
@@ -64,8 +66,8 @@ func (s *CmdPGPImport) Run() error {
 		return err
 	}
 
-	protocols := []rpc2.Protocol{
-		NewSecretUIProtocol(),
+	protocols := []rpc.Protocol{
+		NewSecretUIProtocol(G),
 	}
 
 	cli, err := GetPGPClient()
@@ -75,7 +77,7 @@ func (s *CmdPGPImport) Run() error {
 	if err = RegisterProtocols(protocols); err != nil {
 		return err
 	}
-	return cli.PGPImport(s.arg)
+	return cli.PGPImport(context.TODO(), s.arg)
 }
 
 func (s *CmdPGPImport) readKeyData() error {

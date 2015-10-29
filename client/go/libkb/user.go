@@ -8,6 +8,11 @@ import (
 	jsonw "github.com/keybase/go-jsonw"
 )
 
+type UserBasic interface {
+	GetUID() keybase1.UID
+	GetName() string
+}
+
 type User struct {
 	// Raw JSON element read from the server or our local DB.
 	basics     *jsonw.Wrapper
@@ -151,6 +156,18 @@ func (u *User) GetActivePGPKIDs(sibkey bool) (ret []keybase1.KID) {
 		ret = append(ret, pgp.GetKID())
 	}
 	return
+}
+
+func (u *User) GetDeviceSibkey() (GenericKey, error) {
+	did := u.G().Env.GetDeviceID()
+	if did.IsNil() {
+		return nil, NotProvisionedError{}
+	}
+	ckf := u.GetComputedKeyFamily()
+	if ckf == nil {
+		return nil, KeyFamilyError{"no key family available"}
+	}
+	return ckf.GetSibkeyForDevice(did)
 }
 
 func (u *User) GetDeviceSubkey() (subkey GenericKey, err error) {
@@ -450,7 +467,7 @@ func (u *User) TrackChainLinkFor(username string, uid keybase1.UID) (*TrackChain
 	defer u.G().Log.Debug("- GetTrackingStatement for %s", uid)
 
 	remote, e1 := u.remoteTrackChainLinkFor(username, uid)
-	local, e2 := LocalTrackChainLinkFor(u.id, uid)
+	local, e2 := LocalTrackChainLinkFor(u.id, uid, u.G())
 
 	u.G().Log.Debug("| Load remote -> %v", (remote != nil))
 	u.G().Log.Debug("| Load local -> %v", (local != nil))
@@ -537,6 +554,25 @@ func (u *User) GetDevice(id keybase1.DeviceID) (*Device, error) {
 		return nil, fmt.Errorf("device %s doesn't exist", id)
 	}
 	return device, nil
+}
+
+func (u *User) DeviceNames() ([]string, error) {
+	ckf := u.GetComputedKeyFamily()
+	if ckf == nil {
+		return nil, fmt.Errorf("no computed key family")
+	}
+	if ckf.cki == nil {
+		return nil, fmt.Errorf("no computed key infos")
+	}
+
+	var names []string
+	for _, device := range ckf.cki.Devices {
+		if device.Description == nil {
+			continue
+		}
+		names = append(names, *device.Description)
+	}
+	return names, nil
 }
 
 // Returns whether or not the current install has an active device

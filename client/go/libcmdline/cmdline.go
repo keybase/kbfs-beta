@@ -117,6 +117,20 @@ func (p CommandLine) GetSocketFile() string {
 func (p CommandLine) GetPidFile() string {
 	return p.GetGString("pid-file")
 }
+func (p CommandLine) GetScraperTimeout() (time.Duration, bool) {
+	ret, err := p.GetGDuration("scraper-timeout")
+	if err != nil {
+		return 0, false
+	}
+	return ret, true
+}
+func (p CommandLine) GetAPITimeout() (time.Duration, bool) {
+	ret, err := p.GetGDuration("api-timeout")
+	if err != nil {
+		return 0, false
+	}
+	return ret, true
+}
 func (p CommandLine) GetGpgOptions() []string {
 	var ret []string
 	s := p.GetGString("gpg-options")
@@ -146,12 +160,6 @@ func (p CommandLine) GetProofCacheSize() (int, bool) {
 		return ret, true
 	}
 	return 0, false
-}
-func (p CommandLine) GetDaemonPort() (ret int, set bool) {
-	if ret = p.GetGInt("daemon-port"); ret != 0 {
-		set = true
-	}
-	return
 }
 
 func (p CommandLine) GetStandalone() (bool, bool) {
@@ -304,10 +312,6 @@ func (p *CommandLine) PopulateApp(addHelp bool, extraFlags []cli.Flag) {
 			Name:  "gpg-options",
 			Usage: "Options to use when calling GPG.",
 		},
-		cli.IntFlag{
-			Name:  "daemon-port",
-			Usage: "Specify a daemon port on 127.0.0.1.",
-		},
 		cli.BoolFlag{
 			Name:  "standalone",
 			Usage: "Use the client without any daemon support.",
@@ -327,6 +331,14 @@ func (p *CommandLine) PopulateApp(addHelp bool, extraFlags []cli.Flag) {
 		cli.StringFlag{
 			Name:  "timers",
 			Usage: "Specify 'a' for API; 'r' for RPCs; and 'x' for eXternal API calls",
+		},
+		cli.StringFlag{
+			Name:  "scraper-timeout",
+			Usage: "set the HTTP timeout for external proof scrapers",
+		},
+		cli.StringFlag{
+			Name:  "api-timeout",
+			Usage: "set the HTTP timeout for API calls to the keybase API server",
 		},
 	}
 	if extraFlags != nil {

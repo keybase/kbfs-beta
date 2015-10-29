@@ -8,6 +8,8 @@ package engine
 import (
 	"fmt"
 
+	"golang.org/x/net/context"
+
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
 )
@@ -64,20 +66,27 @@ func (e *PaperKey) Run(ctx *Context) error {
 	if cki == nil {
 		return fmt.Errorf("no computed key infos")
 	}
+
 	var needReload bool
+	var devicesToRevoke []*libkb.Device
 	for i, bdev := range cki.PaperDevices() {
-		revoke, err := ctx.LoginUI.PromptRevokePaperKeys(
+		revoke, err := ctx.LoginUI.PromptRevokePaperKeys(context.TODO(),
 			keybase1.PromptRevokePaperKeysArg{
 				Device: *bdev.ProtExport(),
 				Index:  i,
 			})
 		if err != nil {
 			e.G().Log.Warning("prompt error: %s", err)
-			continue
+			return err
 		}
-		if !revoke {
-			continue
+		if revoke {
+			devicesToRevoke = append(devicesToRevoke, bdev)
 		}
+	}
+
+	// Revoke all keys at once, not one-by-one. This way, a cancelation of the
+	// experience above will stop all operations
+	for _, bdev := range devicesToRevoke {
 		reng := NewRevokeDeviceEngine(RevokeDeviceEngineArgs{ID: bdev.ID}, e.G())
 		if err := RunEngine(reng, ctx); err != nil {
 			// probably not a good idea to continue...
@@ -116,7 +125,7 @@ func (e *PaperKey) Run(ctx *Context) error {
 		return err
 	}
 
-	return ctx.LoginUI.DisplayPaperKeyPhrase(keybase1.DisplayPaperKeyPhraseArg{Phrase: e.passphrase.String()})
+	return ctx.LoginUI.DisplayPaperKeyPhrase(context.TODO(), keybase1.DisplayPaperKeyPhraseArg{Phrase: e.passphrase.String()})
 
 }
 

@@ -4,22 +4,27 @@ import (
 	"github.com/keybase/client/go/engine"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
+	"golang.org/x/net/context"
 )
 
 type SignupHandler struct {
 	*BaseHandler
+	libkb.Contextified
 }
 
-func NewSignupHandler(xp *rpc2.Transport) *SignupHandler {
-	return &SignupHandler{BaseHandler: NewBaseHandler(xp)}
+func NewSignupHandler(xp rpc.Transporter, g *libkb.GlobalContext) *SignupHandler {
+	return &SignupHandler{
+		BaseHandler:  NewBaseHandler(xp),
+		Contextified: libkb.NewContextified(g),
+	}
 }
 
-func (h *SignupHandler) CheckUsernameAvailable(arg keybase1.CheckUsernameAvailableArg) error {
-	return engine.CheckUsernameAvailable(G, arg.Username)
+func (h *SignupHandler) CheckUsernameAvailable(_ context.Context, arg keybase1.CheckUsernameAvailableArg) error {
+	return engine.CheckUsernameAvailable(h.G(), arg.Username)
 }
 
-func (h *SignupHandler) Signup(arg keybase1.SignupArg) (res keybase1.SignupRes, err error) {
+func (h *SignupHandler) Signup(_ context.Context, arg keybase1.SignupArg) (res keybase1.SignupRes, err error) {
 	ctx := &engine.Context{
 		LogUI:    h.getLogUI(arg.SessionID),
 		GPGUI:    h.getGPGUI(arg.SessionID),
@@ -33,8 +38,9 @@ func (h *SignupHandler) Signup(arg keybase1.SignupArg) (res keybase1.SignupRes, 
 		Passphrase:  arg.Passphrase,
 		StoreSecret: arg.StoreSecret,
 		DeviceName:  arg.DeviceName,
+		SkipMail:    arg.SkipMail,
 	}
-	eng := engine.NewSignupEngine(&runarg, G)
+	eng := engine.NewSignupEngine(&runarg, h.G())
 	err = engine.RunEngine(eng, ctx)
 
 	if err == nil {
@@ -61,7 +67,7 @@ func (h *SignupHandler) Signup(arg keybase1.SignupArg) (res keybase1.SignupRes, 
 	return res, err
 }
 
-func (h *SignupHandler) InviteRequest(arg keybase1.InviteRequestArg) (err error) {
+func (h *SignupHandler) InviteRequest(_ context.Context, arg keybase1.InviteRequestArg) (err error) {
 	return libkb.PostInviteRequest(libkb.InviteRequestArg{
 		Email:    arg.Email,
 		Fullname: arg.Fullname,

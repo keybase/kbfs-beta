@@ -12,10 +12,10 @@ import (
 	"strings"
 
 	keybase1 "github.com/keybase/client/go/protocol"
+	"github.com/keybase/go-crypto/openpgp"
+	"github.com/keybase/go-crypto/openpgp/armor"
+	"github.com/keybase/go-crypto/openpgp/packet"
 	jsonw "github.com/keybase/go-jsonw"
-	"golang.org/x/crypto/openpgp"
-	"golang.org/x/crypto/openpgp/armor"
-	"golang.org/x/crypto/openpgp/packet"
 )
 
 type PGPKeyBundle struct {
@@ -134,14 +134,14 @@ func (k *PGPKeyBundle) StripRevocations() (strippedKey *PGPKeyBundle) {
 	return
 }
 
-func (k *PGPKeyBundle) StoreToLocalDb() error {
+func (k *PGPKeyBundle) StoreToLocalDb(g *GlobalContext) error {
 	s, err := k.Encode()
 	if err != nil {
 		return err
 	}
 	val := jsonw.NewString(s)
-	G.Log.Debug("| Storing Key (kid=%s) to Local DB", k.GetKID())
-	return G.LocalDb.Put(DbKey{Typ: DBPGPKey, Key: k.GetKID().String()}, []DbKey{}, val)
+	g.Log.Debug("| Storing Key (kid=%s) to Local DB", k.GetKID())
+	return g.LocalDb.Put(DbKey{Typ: DBPGPKey, Key: k.GetKID().String()}, []DbKey{}, val)
 }
 
 func (p PGPFingerprint) Eq(p2 PGPFingerprint) bool {
@@ -255,9 +255,18 @@ func (k *PGPKeyBundle) EncodeToStream(wc io.WriteCloser) (err error) {
 	return
 }
 
+func cleanPGPInput(s string) string {
+	rxx := regexp.MustCompile(`[ \t\r]*\n[ \t\r]*`)
+	s = strings.TrimSpace(s)
+	v := rxx.Split(s, -1)
+	ret := strings.Join(v, "\n")
+	return ret
+}
+
 // note:  openpgp.ReadArmoredKeyRing only returns the first block.
 // It will never return multiple entities.
 func ReadOneKeyFromString(s string) (*PGPKeyBundle, error) {
+	s = cleanPGPInput(s)
 	reader := strings.NewReader(s)
 	el, err := openpgp.ReadArmoredKeyRing(reader)
 	return finishReadOne(el, s, err)

@@ -1,0 +1,57 @@
+@namespace("keybase.1")
+
+protocol provisionUi {
+  import idl "common.avdl";
+
+  enum ProvisionMethod {
+    DEVICE_0,
+    GPG_1,
+    PAPER_KEY_2,
+    PASSPHRASE_3
+  }
+  /**
+    Called during device provisioning for the user to select a
+    method for provisioning.  gpgOption will be true if GPG
+    should be offered as an option.
+    */
+  ProvisionMethod chooseProvisioningMethod(int sessionID, boolean gpgOption);
+
+  enum DeviceType {
+    DESKTOP_0,
+    MOBILE_1
+  }
+  /**
+   If provisioning via device, this will be called so user can select the provisioner/provisionee device type: desktop or mobile.
+   */
+  DeviceType chooseDeviceType(int sessionID);
+
+  /**
+   DisplayAndPromptSecret displays a secret that the user can enter into the other device.
+   It also can return a secret that the user enters into this device (from the other device). 
+   If it does not return a secret, it will be canceled when this device receives the secret via kex2.
+   */
+  bytes DisplayAndPromptSecret(int sessionID, bytes secret, string phrase, DeviceType otherDeviceType);
+
+  /**
+   DisplaySecretExchanged is called when the kex2 secret has successfully been exchanged by the two
+   devices.
+   */
+  void DisplaySecretExchanged(int sessionID);
+
+  /**
+   PromptNewDeviceName is called when the device provisioning process needs a name for the new device.
+   To help the clients not send a duplicate name, existingDevices is populated with the current device
+   names for the user.
+   */
+  string PromptNewDeviceName(int sessionID, array<string> existingDevices);
+
+  /**
+   ProvisioneeSuccess is called on provisionee when it is successfully provisioned.
+   */
+  void ProvisioneeSuccess(int sessionID, string username, string deviceName);
+  
+  /**
+   ProvisionerSuccess is called on provisioner when it successfully provisions another device.
+   */
+  void ProvisionerSuccess(int sessionID, string deviceName, string deviceType);
+}

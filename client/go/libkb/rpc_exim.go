@@ -3,14 +3,14 @@
 package libkb
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"sort"
 
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
-	"golang.org/x/crypto/openpgp"
-	"golang.org/x/crypto/openpgp/errors"
+	"github.com/keybase/go-crypto/openpgp"
+	pgpErrors "github.com/keybase/go-crypto/openpgp/errors"
 )
 
 func (sh SigHint) Export() *keybase1.SigHint {
@@ -129,7 +129,7 @@ func ExportErrorAsStatus(e error) (ret *keybase1.Status) {
 		}
 	}
 
-	if e == errors.ErrKeyIncorrect {
+	if e == pgpErrors.ErrKeyIncorrect {
 		return &keybase1.Status{
 			Code: SCKeyNoActive,
 			Name: "SC_KEY_NO_ACTIVE",
@@ -159,11 +159,19 @@ func WrapError(e error) interface{} {
 	return ExportErrorAsStatus(e)
 }
 
-func UnwrapError(nxt rpc2.DecodeNext) (app error, dispatch error) {
-	var s *keybase1.Status
-	if dispatch = nxt(&s); dispatch == nil {
-		app = ImportStatusAsError(s)
+type ErrorUnwrapper struct{}
+
+func (eu ErrorUnwrapper) MakeArg() interface{} {
+	return &keybase1.Status{}
+}
+
+func (eu ErrorUnwrapper) UnwrapError(arg interface{}) (appError error, dispatchError error) {
+	targ, ok := arg.(*keybase1.Status)
+	if !ok {
+		dispatchError = errors.New("Error converting status to keybase1.Status object")
+		return
 	}
+	appError = ImportStatusAsError(targ)
 	return
 }
 
@@ -722,7 +730,14 @@ func (e ProofNotFoundForUsernameError) ToStatus() (s keybase1.Status) {
 	return
 }
 
-func (e PGPDecError) ToStatus() (s keybase1.Status) {
+func (e PGPNoDecryptionKeyError) ToStatus() (s keybase1.Status) {
+	s.Code = SCDecryptionKeyNotFound
+	s.Name = "KEY_NOT_FOUND_DECRYPTION"
+	s.Desc = e.Msg
+	return
+}
+
+func (e NoKeyError) ToStatus() (s keybase1.Status) {
 	s.Code = SCKeyNotFound
 	s.Name = "KEY_NOT_FOUND"
 	s.Desc = e.Msg

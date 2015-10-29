@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"os"
 
+	"golang.org/x/net/context"
+
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
 )
 
 func NewCmdPGPExport(cl *libcmdline.CommandLine) cli.Command {
@@ -60,8 +62,8 @@ func (s *CmdPGPExport) ParseArgv(ctx *cli.Context) error {
 }
 
 func (s *CmdPGPExport) Run() (err error) {
-	protocols := []rpc2.Protocol{
-		NewSecretUIProtocol(),
+	protocols := []rpc.Protocol{
+		NewSecretUIProtocol(G),
 	}
 
 	cli, err := GetPGPClient()
@@ -71,7 +73,7 @@ func (s *CmdPGPExport) Run() (err error) {
 	if err = RegisterProtocols(protocols); err != nil {
 		return err
 	}
-	return s.finish(cli.PGPExport(s.arg))
+	return s.finish(cli.PGPExport(context.TODO(), s.arg))
 }
 
 func (s *CmdPGPExport) finish(res []keybase1.KeyInfo, inErr error) error {

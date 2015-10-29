@@ -1,54 +1,64 @@
 package service
 
 import (
-	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"os"
 	"path"
+	"strings"
 
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
 )
 
-// Keep this around to simplify things
-var G = libkb.G
-
 type Service struct {
+	libkb.Contextified
 	isDaemon bool
 	chdirTo  string
 	lockPid  *libkb.LockPIDFile
+	startCh  chan struct{}
+	stopCh   chan struct{}
 }
 
-func NewService(isDaemon bool) *Service {
-	return &Service{isDaemon: isDaemon}
+func NewService(isDaemon bool, g *libkb.GlobalContext) *Service {
+	return &Service{
+		Contextified: libkb.NewContextified(g),
+		isDaemon:     isDaemon,
+		startCh:      make(chan struct{}),
+		stopCh:       make(chan struct{}),
+	}
 }
 
-func RegisterProtocols(srv *rpc2.Server, xp *rpc2.Transport) error {
-	protocols := []rpc2.Protocol{
-		keybase1.AccountProtocol(NewAccountHandler(xp)),
-		keybase1.BTCProtocol(NewBTCHandler(xp)),
-		keybase1.ConfigProtocol(ConfigHandler{xp}),
-		keybase1.CryptoProtocol(NewCryptoHandler(xp)),
-		keybase1.CtlProtocol(NewCtlHandler(xp)),
+func (d *Service) GetStartChannel() <-chan struct{} {
+	return d.startCh
+}
+
+func (d *Service) RegisterProtocols(srv *rpc.Server, xp rpc.Transporter, connID libkb.ConnectionID, g *libkb.GlobalContext) error {
+	protocols := []rpc.Protocol{
+		keybase1.AccountProtocol(NewAccountHandler(xp, g)),
+		keybase1.BTCProtocol(NewBTCHandler(xp, g)),
+		keybase1.ConfigProtocol(NewConfigHandler(xp, g)),
+		keybase1.CryptoProtocol(NewCryptoHandler(xp, g)),
+		keybase1.CtlProtocol(NewCtlHandler(xp, d, g)),
 		keybase1.DebuggingProtocol(NewDebuggingHandler(xp)),
-		keybase1.DeviceProtocol(NewDeviceHandler(xp)),
-		keybase1.DoctorProtocol(NewDoctorHandler(xp)),
-		keybase1.FavoriteProtocol(NewFavoriteHandler(xp)),
-		keybase1.IdentifyProtocol(NewIdentifyHandler(xp)),
-		keybase1.LoginProtocol(NewLoginHandler(xp)),
-		keybase1.ProveProtocol(NewProveHandler(xp)),
-		keybase1.SessionProtocol(NewSessionHandler(xp)),
-		keybase1.SignupProtocol(NewSignupHandler(xp)),
-		keybase1.SigsProtocol(NewSigsHandler(xp)),
-		keybase1.PGPProtocol(NewPGPHandler(xp)),
-		keybase1.RevokeProtocol(NewRevokeHandler(xp)),
-		keybase1.TestProtocol(NewTestHandler(xp)),
-		keybase1.TrackProtocol(NewTrackHandler(xp)),
-		keybase1.UserProtocol(NewUserHandler(xp)),
+		keybase1.DeviceProtocol(NewDeviceHandler(xp, g)),
+		keybase1.DoctorProtocol(NewDoctorHandler(xp, g)),
+		keybase1.FavoriteProtocol(NewFavoriteHandler(xp, g)),
+		keybase1.IdentifyProtocol(NewIdentifyHandler(xp, g)),
+		keybase1.LoginProtocol(NewLoginHandler(xp, g)),
+		keybase1.ProveProtocol(NewProveHandler(xp, g)),
+		keybase1.SessionProtocol(NewSessionHandler(xp, g)),
+		keybase1.SignupProtocol(NewSignupHandler(xp, g)),
+		keybase1.SigsProtocol(NewSigsHandler(xp, g)),
+		keybase1.PGPProtocol(NewPGPHandler(xp, g)),
+		keybase1.RevokeProtocol(NewRevokeHandler(xp, g)),
+		keybase1.TestProtocol(NewTestHandler(xp, g)),
+		keybase1.TrackProtocol(NewTrackHandler(xp, g)),
+		keybase1.UserProtocol(NewUserHandler(xp, g)),
+		keybase1.NotifyCtlProtocol(NewNotifyCtlHandler(xp, connID, g)),
 	}
 	for _, proto := range protocols {
 		if err := srv.Register(proto); err != nil {
@@ -59,37 +69,45 @@ func RegisterProtocols(srv *rpc2.Server, xp *rpc2.Transport) error {
 }
 
 func (d *Service) Handle(c net.Conn) {
-	xp := rpc2.NewTransport(c, libkb.NewRPCLogFactory(), libkb.WrapError)
+	xp := rpc.NewTransport(c, libkb.NewRPCLogFactory(), libkb.WrapError)
 
-	server := rpc2.NewServer(xp, libkb.WrapError)
-	if err := RegisterProtocols(server, xp); err != nil {
-		G.Log.Warning("RegisterProtocols error: %s", err)
+	server := rpc.NewServer(xp, libkb.WrapError)
+
+	cl := make(chan error)
+	server.AddCloseListener(cl)
+	connID := d.G().NotifyRouter.AddConnection(xp, cl)
+
+	if err := d.RegisterProtocols(server, xp, connID, d.G()); err != nil {
+		d.G().Log.Warning("RegisterProtocols error: %s", err)
 		return
 	}
 
 	if d.isDaemon {
-		// Create an extra LogUI that lives for the duration of this client
-		// connection, which we register with the logger to hook into all calls
-		// to G.Log.*(). This is a hack to allow the client to print warning
-		// and error messages that currently get hidden away in the daemon's
-		// logfile. Eventually we should replace G.Log with a less hacky
-		// context object that we pass around everywhere, and then we won't
-		// need these global hacks.
 		baseHandler := NewBaseHandler(xp)
 		logUI := LogUI{sessionID: 0, cli: baseHandler.getLogUICli()}
-		handle := G.Log.AddExternalLogger(&logUI)
-		defer G.Log.RemoveExternalLogger(handle)
+		handle := d.G().Log.AddExternalLogger(&logUI)
+		defer d.G().Log.RemoveExternalLogger(handle)
 	}
 
 	if err := server.Run(false /* bg */); err != nil {
-		G.Log.Warning("Run error: %s", err)
+		if err != io.EOF {
+			d.G().Log.Warning("Run error: %s", err)
+		}
 	}
 }
 
 func (d *Service) Run() (err error) {
-	G.Service = true
 
-	err = d.writeVersionFile()
+	defer func() {
+		if d.startCh != nil {
+			close(d.startCh)
+		}
+		d.G().Shutdown()
+	}()
+
+	d.G().Service = true
+
+	err = d.writeServiceInfo()
 	if err != nil {
 		return
 	}
@@ -97,16 +115,15 @@ func (d *Service) Run() (err error) {
 	if len(d.chdirTo) != 0 {
 		etmp := os.Chdir(d.chdirTo)
 		if etmp != nil {
-			G.Log.Warning("Could not change directory to %s: %s", d.chdirTo, etmp)
+			d.G().Log.Warning("Could not change directory to %s: %s", d.chdirTo, etmp)
 		} else {
-			G.Log.Info("Changing runtime dir to %s", d.chdirTo)
+			d.G().Log.Info("Changing runtime dir to %s", d.chdirTo)
 		}
 	}
 
 	if err = d.GetExclusiveLock(); err != nil {
 		return
 	}
-
 	if err = d.OpenSocket(); err != nil {
 		return
 	}
@@ -115,13 +132,13 @@ func (d *Service) Run() (err error) {
 	if l, err = d.ConfigRPCServer(); err != nil {
 		return
 	}
-	if err = d.ListenLoop(l); err != nil {
+	if err = d.ListenLoopWithStopper(l); err != nil {
 		return
 	}
 	return
 }
 
-func (d *Service) StartLoopbackServer(g *libkb.GlobalContext) error {
+func (d *Service) StartLoopbackServer() error {
 
 	var l net.Listener
 	var err error
@@ -130,7 +147,7 @@ func (d *Service) StartLoopbackServer(g *libkb.GlobalContext) error {
 		return err
 	}
 
-	if l, err = g.MakeLoopbackServer(); err != nil {
+	if l, err = d.G().MakeLoopbackServer(); err != nil {
 		return err
 	}
 
@@ -139,25 +156,28 @@ func (d *Service) StartLoopbackServer(g *libkb.GlobalContext) error {
 	return nil
 }
 
+func (d *Service) ensureRuntimeDir() (string, error) {
+	runtimeDir := d.G().Env.GetRuntimeDir()
+	return runtimeDir, os.MkdirAll(runtimeDir, libkb.PermDir)
+}
+
 // If the daemon is already running, we need to be able to check what version
 // it is, in case the client has been updated.
-func (d *Service) writeVersionFile() error {
-	// 0700 as per the XDG standard
-	// TODO: It shouldn't be the responsibility of all callers to remember to
-	// create these directories. They should be created transparently when
-	// anything retrieves them.
-	if err := os.MkdirAll(G.Env.GetRuntimeDir(), 0700); err != nil {
+func (d *Service) writeServiceInfo() error {
+	runtimeDir, err := d.ensureRuntimeDir()
+	if err != nil {
 		return err
 	}
-	versionFilePath := path.Join(G.Env.GetRuntimeDir(), "service.version")
-	version := fmt.Sprintf("%s-%s", libkb.Version, libkb.Build)
-	return ioutil.WriteFile(versionFilePath, []byte(version), 0644)
+
+	// Write runtime info file
+	rtInfo := libkb.KeybaseServiceInfo()
+	return rtInfo.WriteFile(path.Join(runtimeDir, "keybased.info"))
 }
 
 // ReleaseLock releases the locking pidfile by closing, unlocking and
 // deleting it.
 func (d *Service) ReleaseLock() error {
-	G.Log.Debug("Releasing lock file")
+	d.G().Log.Debug("Releasing lock file")
 	return d.lockPid.Close()
 }
 
@@ -165,7 +185,7 @@ func (d *Service) ReleaseLock() error {
 // keybase and continues to hold the lock. The caller is then required to
 // manually release this lock via ReleaseLock()
 func (d *Service) GetExclusiveLockWithoutAutoUnlock() error {
-	if err := os.MkdirAll(G.Env.GetRuntimeDir(), libkb.PermDir); err != nil {
+	if _, err := d.ensureRuntimeDir(); err != nil {
 		return err
 	}
 	if err := d.lockPIDFile(); err != nil {
@@ -181,23 +201,23 @@ func (d *Service) GetExclusiveLock() error {
 	if err := d.GetExclusiveLockWithoutAutoUnlock(); err != nil {
 		return err
 	}
-	G.PushShutdownHook(func() error {
+	d.G().PushShutdownHook(func() error {
 		return d.ReleaseLock()
 	})
 	return nil
 }
 
 func (d *Service) OpenSocket() error {
-	sf, err := G.Env.GetSocketFile()
+	sf, err := d.G().Env.GetSocketFile()
 	if err != nil {
 		return err
 	}
 	if exists, err := libkb.FileExists(sf); err != nil {
 		return err
 	} else if exists {
-		G.Log.Debug("removing stale socket file: %s", sf)
+		d.G().Log.Debug("removing stale socket file: %s", sf)
 		if err = os.Remove(sf); err != nil {
-			G.Log.Warning("error removing stale socket file: %s", err)
+			d.G().Log.Warning("error removing stale socket file: %s", err)
 			return err
 		}
 	}
@@ -206,33 +226,59 @@ func (d *Service) OpenSocket() error {
 
 func (d *Service) lockPIDFile() (err error) {
 	var fn string
-	if fn, err = G.Env.GetPidFile(); err != nil {
+	if fn, err = d.G().Env.GetPidFile(); err != nil {
 		return
 	}
 	d.lockPid = libkb.NewLockPIDFile(fn)
 	if err = d.lockPid.Lock(); err != nil {
 		return err
 	}
-	G.Log.Debug("Locking pidfile %s\n", fn)
+	d.G().Log.Debug("Locking pidfile %s\n", fn)
 	return nil
 }
 
 func (d *Service) ConfigRPCServer() (l net.Listener, err error) {
-	if l, err = G.BindToSocket(); err != nil {
+	if l, err = d.G().BindToSocket(); err != nil {
 		return
 	}
+	if d.startCh != nil {
+		close(d.startCh)
+		d.startCh = nil
+	}
 
-	G.PushShutdownHook(func() error {
+	d.G().PushShutdownHook(func() error {
 		return l.Close()
 	})
 
 	return
 }
 
+func (d *Service) Stop() {
+	d.stopCh <- struct{}{}
+}
+
+func (d *Service) ListenLoopWithStopper(l net.Listener) (err error) {
+	ch := make(chan error)
+	go func() {
+		ch <- d.ListenLoop(l)
+	}()
+	<-d.stopCh
+	l.Close()
+	return <-ch
+}
+
 func (d *Service) ListenLoop(l net.Listener) (err error) {
+	d.G().Log.Debug("+ Enter ListenLoop()")
 	for {
 		var c net.Conn
 		if c, err = l.Accept(); err != nil {
+
+			// net.errClosing isn't exported, so do this.. UGLY!
+			if strings.HasSuffix(err.Error(), "use of closed network connection") {
+				err = nil
+			}
+
+			d.G().Log.Debug("+ Leaving ListenLoop() w/ error %v", err)
 			return
 		}
 		go d.Handle(c)
@@ -244,7 +290,7 @@ func (d *Service) ParseArgv(ctx *cli.Context) error {
 	return nil
 }
 
-func NewCmdService(cl *libcmdline.CommandLine) cli.Command {
+func NewCmdService(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.Command {
 	return cli.Command{
 		Name:  "service",
 		Usage: "Run the keybase service",
@@ -259,7 +305,7 @@ func NewCmdService(cl *libcmdline.CommandLine) cli.Command {
 			},
 		},
 		Action: func(c *cli.Context) {
-			cl.ChooseCommand(NewService(true /* isDaemon */), "service", c)
+			cl.ChooseCommand(NewService(true /* isDaemon */, g), "service", c)
 			cl.SetService()
 		},
 	}
@@ -275,8 +321,8 @@ func (d *Service) GetUsage() libkb.Usage {
 	}
 }
 
-func GetCommands(cl *libcmdline.CommandLine) []cli.Command {
+func GetCommands(cl *libcmdline.CommandLine, g *libkb.GlobalContext) []cli.Command {
 	return []cli.Command{
-		NewCmdService(cl),
+		NewCmdService(cl, g),
 	}
 }

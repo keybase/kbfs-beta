@@ -4,12 +4,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
-	"golang.org/x/net/context"
 	"io"
 	"testing"
 	"time"
+
+	keybase1 "github.com/keybase/client/go/protocol"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
+	"golang.org/x/net/context"
 )
 
 const (
@@ -44,13 +45,13 @@ func (n *nullLogOutput) Info(s string, args ...interface{})    {}
 func (n *nullLogOutput) Debug(s string, args ...interface{})   {}
 func (n *nullLogOutput) Profile(s string, args ...interface{}) {}
 
-var _ rpc2.LogOutput = (*nullLogOutput)(nil)
+var _ rpc.LogOutput = (*nullLogOutput)(nil)
 
-func makeLogFactory() rpc2.LogFactory {
+func makeLogFactory() rpc.LogFactory {
 	if testing.Verbose() {
 		return nil
 	}
-	return rpc2.NewSimpleLogFactory(&nullLogOutput{}, nil)
+	return rpc.NewSimpleLogFactory(&nullLogOutput{}, nil)
 }
 
 func genUID(t *testing.T) keybase1.UID {
@@ -73,7 +74,7 @@ func newMockProvisionee(t *testing.T, behavior int) *mockProvisionee {
 	return &mockProvisionee{behavior}
 }
 
-func (mp *mockProvisioner) GetLogFactory() rpc2.LogFactory {
+func (mp *mockProvisioner) GetLogFactory() rpc.LogFactory {
 	return makeLogFactory()
 }
 
@@ -82,12 +83,12 @@ func (mp *mockProvisioner) CounterSign(input keybase1.HelloRes) (output []byte, 
 	return
 }
 
-func (mp *mockProvisioner) GetHelloArg() (res keybase1.HelloArg) {
+func (mp *mockProvisioner) GetHelloArg() (res keybase1.HelloArg, err error) {
 	res.Uid = mp.uid
 	return
 }
 
-func (mp *mockProvisionee) GetLogFactory() rpc2.LogFactory {
+func (mp *mockProvisionee) GetLogFactory() rpc.LogFactory {
 	return makeLogFactory()
 }
 
@@ -220,7 +221,7 @@ func TestFullProtocolXProvisioneeFailDidCounterSign(t *testing.T) {
 func TestFullProtocolXProvisioneeSlowHello(t *testing.T) {
 	results := testProtocolXWithBehavior(t, BadProvisioneeSlowHello)
 	for i, e := range results {
-		if !eeq(e, ErrTimedOut) && !eeq(e, rpc2.EofError{}) {
+		if !eeq(e, ErrTimedOut) && !eeq(e, io.EOF) {
 			t.Fatalf("Bad error %d: %v", i, e)
 		}
 	}
@@ -238,7 +239,7 @@ func TestFullProtocolXProvisioneeSlowHelloWithCancel(t *testing.T) {
 func TestFullProtocolXProvisioneeSlowDidCounterSign(t *testing.T) {
 	results := testProtocolXWithBehavior(t, BadProvisioneeSlowDidCounterSign)
 	for i, e := range results {
-		if !eeq(e, ErrTimedOut) && !eeq(e, rpc2.EofError{}) {
+		if !eeq(e, ErrTimedOut) && !eeq(e, io.EOF) {
 			t.Fatalf("Bad error %d: %v", i, e)
 		}
 	}
@@ -271,7 +272,7 @@ func TestFullProtocolY(t *testing.T) {
 		ch <- err
 	}()
 
-	// Run the privisionee
+	// Run the provisionee
 	go func() {
 		err := RunProvisionee(ProvisioneeArg{
 			KexBaseArg: KexBaseArg{

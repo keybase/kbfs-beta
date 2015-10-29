@@ -3,11 +3,13 @@ package client
 import (
 	"fmt"
 
+	"golang.org/x/net/context"
+
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
 )
 
 type CmdPGPSelect struct {
@@ -39,15 +41,15 @@ func (v *CmdPGPSelect) Run() error {
 	if err != nil {
 		return err
 	}
-	protocols := []rpc2.Protocol{
-		NewGPGUIProtocol(),
-		NewSecretUIProtocol(),
+	protocols := []rpc.Protocol{
+		NewGPGUIProtocol(G),
+		NewSecretUIProtocol(G),
 	}
 	if err = RegisterProtocols(protocols); err != nil {
 		return err
 	}
 
-	err = c.PGPSelect(keybase1.PGPSelectArg{
+	err = c.PGPSelect(context.TODO(), keybase1.PGPSelectArg{
 		FingerprintQuery: v.query,
 		AllowMulti:       v.multi,
 		SkipImport:       v.skipImport,

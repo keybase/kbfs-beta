@@ -1,23 +1,29 @@
 package service
 
 import (
+	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
+	"golang.org/x/net/context"
 )
 
 type TestHandler struct {
 	*BaseHandler
+	libkb.Contextified
 }
 
-func NewTestHandler(xp *rpc2.Transport) *TestHandler {
-	return &TestHandler{BaseHandler: NewBaseHandler(xp)}
+func NewTestHandler(xp rpc.Transporter, g *libkb.GlobalContext) *TestHandler {
+	return &TestHandler{
+		BaseHandler:  NewBaseHandler(xp),
+		Contextified: libkb.NewContextified(g),
+	}
 }
 
-func (t TestHandler) Test(arg keybase1.TestArg) (test keybase1.Test, err error) {
+func (t TestHandler) Test(ctx context.Context, arg keybase1.TestArg) (test keybase1.Test, err error) {
 	client := t.rpcClient()
 	cbArg := keybase1.TestCallbackArg{Name: arg.Name, SessionID: arg.SessionID}
 	var cbReply string
-	err = client.Call("keybase.1.test.testCallback", []interface{}{cbArg}, &cbReply)
+	err = client.Call(ctx, "keybase.1.test.testCallback", []interface{}{cbArg}, &cbReply)
 	if err != nil {
 		return
 	}
@@ -26,12 +32,12 @@ func (t TestHandler) Test(arg keybase1.TestArg) (test keybase1.Test, err error) 
 	return
 }
 
-func (t TestHandler) TestCallback(arg keybase1.TestCallbackArg) (s string, err error) {
+func (t TestHandler) TestCallback(_ context.Context, arg keybase1.TestCallbackArg) (s string, err error) {
 	return
 }
 
-func (t TestHandler) Panic(message string) error {
-	G.Log.Info("Received panic() RPC")
+func (t TestHandler) Panic(_ context.Context, message string) error {
+	t.G().Log.Info("Received panic() RPC")
 	go func() {
 		panic(message)
 	}()

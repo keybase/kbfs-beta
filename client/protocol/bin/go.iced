@@ -40,7 +40,7 @@ class GoEmitter
   tabs : () -> ("\t" for i in [0...@_tabs]).join("")
   output : (l) ->
     @_code.push (@tabs() + l)
-    @_code.push("") if (l is "}" or l is ")")
+    @_code.push("") if (l is "}" or l is ")") and @_tabs is 0
 
   tab : () -> @_tabs++
   untab : () -> @_tabs--
@@ -117,24 +117,6 @@ class GoEmitter
     @untab()
     @output ")"
 
-  emit_message_server : (name, details) ->
-    arg = details.request[0]
-    res = details.response
-    args = "#{arg.name} *#{arg.type}, res *#{res}"
-    @output "#{@go_export_case(name)}(#{args}) error"
-
-  emit_message_client : (protocol, name, details, async) ->
-    p = @go_export_case protocol
-    arg = details.request[0]
-    res = details.response
-    ap = if async then "Async" else ""
-    call = if async then "Go" else "Call"
-    @output "func (c #{p}Client) #{ap}#{@go_export_case(name)}(#{arg.name} #{arg.type}, res *#{res}) error {"
-    @tab()
-    @output """return c.Cli.#{call}("#{@_pkg}.#{protocol}.#{name}", #{arg.name}, res)"""
-    @untab()
-    @output "}"
-
   emit_wrapper_objects : (messages) ->
     for k,v of messages
       @emit_wrapper_object k, v
@@ -169,20 +151,6 @@ class GoEmitter
     for k,v of messages
       @emit_message_client protocol, k,v, false
 
-  emit_interface_server : (protocol, messages) ->
-    p = @go_export_case protocol
-    @output "type #{p}Interface interface {"
-    @tab()
-    for k,v of messages
-      @emit_message_server k,v
-    @untab()
-    @output "}"
-    @output "func Register#{p}(server *rpc.Server, i #{p}Interface) error {"
-    @tab()
-    @output """return server.RegisterName("#{@_pkg}.#{protocol}", i)"""
-    @untab()
-    @output "}"
-
   run : (files, cb) ->
     esc = make_esc cb, "run"
     for f in files
@@ -193,12 +161,9 @@ class GoEmitter
   emit_generic_client : () ->
     @output "type GenericClient interface {"
     @tab()
-    @output "Call(s string, args interface{}, res interface{}) error"
+    @output "Call(ctx context.Context, s string, args interface{}, res interface{}) error"
     @untab()
     @output "}"
-
-  emit_imports : () ->
-    @output '"net/rpc"'
 
   emit_package : (json, cb) ->
     pkg = json.namespace
@@ -217,16 +182,9 @@ class GoEmitter
       @_pkg = pkg
     cb err
 
-  run_file : (json, cb) ->
-    esc = make_esc cb, "run_file"
-    await @emit_package json, esc defer()
-    @emit_types json.types
-    @emit_interface json.protocol, json.messages
-    cb null
-
-#====================================================================
-
-class GoEmitter2 extends GoEmitter
+  emit_imports : () ->
+    @output 'rpc "github.com/keybase/go-framed-msgpack-rpc"'
+    @output 'context "golang.org/x/net/context"'
 
   emit_interface_server : (protocol, messages) ->
     p = @go_export_case protocol
@@ -238,38 +196,70 @@ class GoEmitter2 extends GoEmitter
     @output "}"
     @emit_protocol_server protocol, messages
 
-  special_wrapper_object : () -> true
-
-  emit_imports : () ->
-    @output '"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"'
-
   emit_server_hook : (name, details) ->
     arg = details.request
     res = details.response
     resvar = if res is "null" then "" else "ret, "
-    @output """"#{name}": func(nxt rpc2.DecodeNext) (ret interface{}, err error) {"""
+    @output """"#{name}": {"""
     @tab()
-    @output "args := make([]#{@go_primitive_type(arg.type)}, 1)"
-    @output "if err = nxt(&args); err == nil {"
-    @tab()
-    farg = if arg.nargs is 0 then ''
-    else if arg.nargs is 1 then "args[0].#{@go_export_case arg.single.name}"
-    else "args[0]"
-    @output "#{resvar}err = i.#{@go_export_case(name)}(#{farg})"
+    @emit_server_hook_make_arg name, details
+    @emit_server_hook_make_handler name, details
+    @emit_server_hook_method_type name, details
     @untab()
-    @output "} "
+    @output "},"
+
+  emit_server_hook_make_arg : (name, details) ->
+    arg = details.request
+    @output "MakeArg: func() interface{} {"
+    @tab()
+
+    # Over the wire, we're expecting either an empty argument array,
+    # or an array with one T in it. So we have to pass the decoder
+    # a pointer to a slice of T's. This is a little bit convoluted
+    # but we're obeying the msgpack spec (which says RPCs take arrays
+    # of arguments) and also the library's attempts to avoid unnecessary
+    # copies of objects as they are passed from MakeArg, through the
+    # decoder, and back into the Handler specified below.
+    @output "ret := make([]#{@go_primitive_type(arg.type)}, 1)"
+    @output "return &ret"
+    @untab()
+    @output "},"
+
+  emit_server_hook_method_type : (name, details) ->
+    @output "MethodType: rpc.Method#{if details.notify? then 'Notify' else 'Call'},"
+
+  emit_server_hook_make_handler : (name, details) ->
+    arg = details.request
+    res = details.response
+    resvar = if res is "null" then "" else "ret, "
+    pt = @go_primitive_type arg.type
+    @output "Handler: func(ctx context.Context, args interface{}) (ret interface{}, err error) {"
+    @tab()
+    if arg.nargs > 0
+      @output "typedArgs, ok := args.(*[]#{pt})"
+      @output "if !ok {"
+      @tab()
+      @output "err = rpc.NewTypeError((*[]#{pt})(nil), args)"
+      @output "return"
+      @untab()
+      @output "}"
+    farg = if arg.nargs is 0 then ''
+    else
+      access = if arg.nargs is 1 then ".#{@go_export_case arg.single.name}" else ''
+      "(*typedArgs)[0]#{access}"
+    @output "#{resvar}err = i.#{@go_export_case(name)}(ctx, #{farg})"
     @output "return"
     @untab()
     @output "},"
 
   emit_protocol_server : (protocol, messages) ->
     p = @go_export_case protocol
-    @output "func #{p}Protocol(i #{p}Interface) rpc2.Protocol {"
+    @output "func #{p}Protocol(i #{p}Interface) rpc.Protocol {"
     @tab()
-    @output "return rpc2.Protocol {"
+    @output "return rpc.Protocol {"
     @tab()
     @output """Name: "#{@_pkg}.#{protocol}","""
-    @output "Methods: map[string]rpc2.ServeHook{"
+    @output "Methods: map[string]rpc.ServeHandlerDescription{"
     @tab()
     for k,v of messages
       @emit_server_hook k, v
@@ -287,7 +277,7 @@ class GoEmitter2 extends GoEmitter
     res_types = []
     if res isnt "null" then res_types.push @go_lint_capitalize(@emit_field_type(res).type)
     res_types.push "error"
-    @output "#{@go_export_case(name)}(#{args}) (#{res_types.join ","})"
+    @output "#{@go_export_case(name)}(context.Context, #{args}) (#{res_types.join ","})"
 
   emit_message_client: (protocol, name, details, async) ->
     p = @go_export_case protocol
@@ -305,7 +295,7 @@ class GoEmitter2 extends GoEmitter
     else
       parg = arg.single or arg
       "#{parg.name} #{(@emit_field_type parg.type).type}"
-    @output "func (c #{p}Client) #{@go_export_case(name)}(#{params}) (#{outs}) {"
+    @output "func (c #{p}Client) #{@go_export_case(name)}(ctx context.Context, #{params}) (#{outs}) {"
     @tab()
     if arg.nargs is 1
       n = arg.single.name
@@ -314,10 +304,17 @@ class GoEmitter2 extends GoEmitter
     oarg += if arg.nargs is 0 then "#{arg.type}{}"
     else arg.name
     oarg += "}"
-    @output """err = c.Cli.Call("#{@_pkg}.#{protocol}.#{name}", #{oarg}, #{res_in})"""
+    @output """err = c.Cli.Call(ctx, "#{@_pkg}.#{protocol}.#{name}", #{oarg}, #{res_in})"""
     @output "return"
     @untab()
     @output "}"
+
+  run_file : (json, cb) ->
+    esc = make_esc cb, "run_file"
+    await @emit_package json, esc defer()
+    @emit_types json.types
+    @emit_interface json.protocol, json.messages
+    cb null
 
 #====================================================================
 
@@ -340,7 +337,7 @@ class Runner
       @output = @argv.o
       switch @targ
         when "go"
-          klass = if @argv.v is 2 then GoEmitter2 else GoEmitter
+          klass = GoEmitter
           @emitter = new klass
         else
           err = new Error "Unknown language target; I support {go}"

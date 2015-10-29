@@ -3,11 +3,13 @@ package client
 import (
 	"fmt"
 
+	"golang.org/x/net/context"
+
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/engine"
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
 )
 
 type CmdPGPGen struct {
@@ -40,8 +42,8 @@ func (v *CmdPGPGen) ParseArgv(ctx *cli.Context) (err error) {
 
 // Why use CreatePGPIDs rather than MakeAllIds?
 func (v *CmdPGPGen) Run() (err error) {
-	protocols := []rpc2.Protocol{
-		NewSecretUIProtocol(),
+	protocols := []rpc.Protocol{
+		NewSecretUIProtocol(G),
 	}
 	cli, err := GetPGPClient()
 	if err != nil {
@@ -53,12 +55,12 @@ func (v *CmdPGPGen) Run() (err error) {
 	if err = v.arg.Gen.CreatePGPIDs(); err != nil {
 		return err
 	}
-	v.arg.PushSecret, err = GlobUI.PromptYesNo("Push an encrypted copy of the secret key to the server?", PromptDefaultYes)
+	v.arg.PushSecret, err = GlobUI.PromptYesNo(PromptDescriptorPGPGenPushSecret, "Push an encrypted copy of your new secret key to the Keybase.io server?", libkb.PromptDefaultYes)
 	if err != nil {
 		return err
 	}
 
-	err = cli.PGPKeyGen(v.arg.Export())
+	err = cli.PGPKeyGen(context.TODO(), v.arg.Export())
 	err = AddPGPMultiInstructions(err)
 	return err
 }

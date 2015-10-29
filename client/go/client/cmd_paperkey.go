@@ -4,7 +4,8 @@ import (
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
+	"golang.org/x/net/context"
 )
 
 func NewCmdPaperKey(cl *libcmdline.CommandLine) cli.Command {
@@ -21,18 +22,18 @@ type CmdPaperKey struct {
 }
 
 func (c *CmdPaperKey) Run() error {
-	cli, err := GetLoginClient()
+	cli, err := GetLoginClient(G)
 	if err != nil {
 		return err
 	}
-	protocols := []rpc2.Protocol{
-		NewLoginUIProtocol(),
-		NewSecretUIProtocol(),
+	protocols := []rpc.Protocol{
+		NewLoginUIProtocol(G),
+		NewSecretUIProtocol(G),
 	}
 	if err := RegisterProtocols(protocols); err != nil {
 		return err
 	}
-	return cli.PaperKey(0)
+	return cli.PaperKey(context.TODO(), 0)
 }
 
 func (c *CmdPaperKey) ParseArgv(ctx *cli.Context) error {
