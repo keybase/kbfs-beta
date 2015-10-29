@@ -697,3 +697,24 @@ func (e MDUpdateInvertError) Error() string {
 	return fmt.Sprintf("MD revision %d isn't next in line for our "+
 		"current revision %d while inverting", e.rev, e.curr)
 }
+
+// NotPermittedWhileDirtyError indicates that some operation failed
+// because of outstanding dirty files, and may be retried later.
+type NotPermittedWhileDirtyError struct {
+}
+
+// Error implements the error interface for NotPermittedWhileDirtyError.
+func (e NotPermittedWhileDirtyError) Error() string {
+	return "Not permitted while writes are dirty"
+}
+
+// NoChainFoundError indicates that a conflict resolution chain
+// corresponding to the given pointer could not be found.
+type NoChainFoundError struct {
+	ptr BlockPointer
+}
+
+// Error implements the error interface for NoChainFoundError.
+func (e NoChainFoundError) Error() string {
+	return fmt.Sprintf("No chain found for %v", e.ptr)
+}

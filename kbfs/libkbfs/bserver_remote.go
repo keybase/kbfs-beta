@@ -4,6 +4,8 @@ import (
 	"encoding/hex"
 	"time"
 
+	"github.com/keybase/go-framed-msgpack-rpc"
+
 	"github.com/keybase/client/go/logger"
 	keybase1 "github.com/keybase/client/go/protocol"
 	"golang.org/x/net/context"
@@ -13,10 +15,10 @@ import (
 // represents a remote KBFS block server.
 type BlockServerRemote struct {
 	config     Config
-	conn       *Connection
+	shutdownFn func()
+	client     keybase1.BlockInterface
 	log        logger.Logger
 	blkSrvAddr string
-	testClient keybase1.GenericClient // for testing
 }
 
 // Test that BlockServerRemote fully implements the BlockServer interface.
@@ -24,22 +26,27 @@ var _ BlockServer = (*BlockServerRemote)(nil)
 
 // NewBlockServerRemote constructs a new BlockServerRemote for the
 // given address.
-func NewBlockServerRemote(ctx context.Context, config Config, blkSrvAddr string) *BlockServerRemote {
-	bs := &BlockServerRemote{config: config,
+func NewBlockServerRemote(config Config, blkSrvAddr string) *BlockServerRemote {
+	bs := &BlockServerRemote{
+		config:     config,
 		log:        config.MakeLogger(""),
-		blkSrvAddr: blkSrvAddr}
-	connection := NewConnection(ctx, config, blkSrvAddr, bs, BServerUnwrapError)
-	bs.conn = connection
+		blkSrvAddr: blkSrvAddr,
+	}
+	bs.log.Debug("BlockServerRemote new instance "+
+		"server addr %s", blkSrvAddr)
+	conn := NewTLSConnection(config, blkSrvAddr, bServerErrorUnwrapper{}, bs)
+	bs.client = keybase1.BlockClient{Cli: conn.GetClient()}
+	bs.shutdownFn = conn.Shutdown
 	return bs
 }
 
 // For testing.
 func newBlockServerRemoteWithClient(ctx context.Context, config Config,
-	testClient keybase1.GenericClient) *BlockServerRemote {
+	client keybase1.GenericClient) *BlockServerRemote {
 	bs := &BlockServerRemote{
-		config:     config,
-		log:        config.MakeLogger(""),
-		testClient: testClient,
+		config: config,
+		client: keybase1.BlockClient{Cli: client},
+		log:    config.MakeLogger(""),
 	}
 	return bs
 }
@@ -51,7 +58,7 @@ func (b *BlockServerRemote) RemoteAddress() string {
 
 // OnConnect implements the ConnectionHandler interface.
 func (b *BlockServerRemote) OnConnect(ctx context.Context,
-	conn *Connection, client keybase1.GenericClient) error {
+	conn *Connection, client keybase1.GenericClient, _ *rpc.Server) error {
 	token, err := b.config.KBPKI().GetCurrentToken(ctx)
 	if err != nil {
 		b.log.CWarningf(ctx, "BlockServerRemote: error getting session %q", err)
@@ -68,33 +75,19 @@ func (b *BlockServerRemote) OnConnect(ctx context.Context,
 		Sid:  token,
 	}
 
-	// save the conn pointer
-	b.conn = conn
-
 	b.log.CDebugf(ctx, "BlockServerRemote.OnConnect establish session for "+
-		"uid %s\n", uid.String())
-	// using conn.DoCommand here would cause problematic recursion
-	return runUnlessCanceled(ctx, func() error {
-		c := keybase1.BlockClient{Cli: client}
-		return c.EstablishSession(arg)
-	})
+		"uid %s", uid.String())
+	// Using b.client here would cause problematic recursion.
+	c := keybase1.BlockClient{Cli: cancelableClient{client}}
+	return c.EstablishSession(ctx, arg)
 }
 
 // OnConnectError implements the ConnectionHandler interface.
 func (b *BlockServerRemote) OnConnectError(err error, wait time.Duration) {
-	b.log.Warning("BlockServerRemote: connection error: %q; retrying in %s",
+	b.log.Warning("BlockServerRemote: connection error: %v; retrying in %s",
 		err, wait)
 	// TODO: it might make sense to show something to the user if this is
 	// due to authentication, for example.
-}
-
-// Helper to return a metadata client.
-func (b *BlockServerRemote) client() keybase1.BlockClient {
-	if b.testClient != nil {
-		// for testing
-		return keybase1.BlockClient{Cli: b.testClient}
-	}
-	return keybase1.BlockClient{Cli: b.conn.GetClient()}
 }
 
 // OnDisconnected implements the ConnectionHandler interface.
@@ -111,37 +104,27 @@ func (b *BlockServerRemote) ShouldThrottle(err error) bool {
 	return shouldThrottle
 }
 
-// Helper to call an rpc command.
-func (b *BlockServerRemote) doCommand(ctx context.Context, command func() error) error {
-	if b.testClient != nil {
-		// for testing
-		return runUnlessCanceled(ctx, command)
-	}
-	return b.conn.DoCommand(ctx, command)
-}
-
 // Get implements the BlockServer interface for BlockServerRemote.
 func (b *BlockServerRemote) Get(ctx context.Context, id BlockID,
 	context BlockContext) ([]byte, BlockCryptKeyServerHalf, error) {
-	b.log.CDebugf(ctx, "BlockServerRemote.Get id=%s uid=%s",
-		id.String(), context.GetWriter())
+	var err error
+	size := -1
+	defer func() {
+		b.log.CDebugf(ctx, "BlockServerRemote.Get id=%s uid=%s sz=%d err=%v",
+			id, context.GetWriter(), size, err)
+	}()
+
 	bid := keybase1.BlockIdCombo{
 		BlockHash: id.String(),
 		ChargedTo: context.GetWriter(),
 	}
 
-	var err error
-	var res keybase1.GetBlockRes
-	err = b.doCommand(ctx, func() error {
-		res, err = b.client().GetBlock(bid)
-		return err
-	})
+	res, err := b.client.GetBlock(ctx, bid)
 	if err != nil {
-		b.log.CDebugf(ctx, "BlockServerRemote.Get id=%s err=%v",
-			id.String(), err)
 		return nil, BlockCryptKeyServerHalf{}, err
 	}
 
+	size = len(res.Buf)
 	bk := BlockCryptKeyServerHalf{}
 	var kbuf []byte
 	if kbuf, err = hex.DecodeString(res.BlockKey); err != nil {
@@ -156,8 +139,13 @@ func (b *BlockServerRemote) Get(ctx context.Context, id BlockID,
 func (b *BlockServerRemote) Put(ctx context.Context, id BlockID, tlfID TlfID,
 	context BlockContext, buf []byte,
 	serverHalf BlockCryptKeyServerHalf) error {
-	b.log.CDebugf(ctx, "BlockServerRemote.Put id=%s uid=%s",
-		id.String(), context.GetWriter())
+	var err error
+	size := len(buf)
+	defer func() {
+		b.log.CDebugf(ctx, "BlockServerRemote.Put id=%s uid=%s sz=%d err=%v",
+			id, context.GetWriter(), size, err)
+	}()
+
 	arg := keybase1.PutBlockArg{
 		Bid: keybase1.BlockIdCombo{
 			ChargedTo: context.GetWriter(),
@@ -168,26 +156,19 @@ func (b *BlockServerRemote) Put(ctx context.Context, id BlockID, tlfID TlfID,
 		Buf:      buf,
 	}
 
-	var err error
-	err = b.doCommand(ctx, func() error {
-		return b.client().PutBlock(arg)
-	})
-
-	if err != nil {
-		b.log.CDebugf(ctx, "BlockServerRemote.Put id=%s err=%v",
-			id.String(), err)
-		return err
-	}
-
-	return nil
+	err = b.client.PutBlock(ctx, arg)
+	return err
 }
 
 // AddBlockReference implements the BlockServer interface for BlockServerRemote
 func (b *BlockServerRemote) AddBlockReference(ctx context.Context, id BlockID,
 	tlfID TlfID, context BlockContext) error {
-	b.log.CDebugf(ctx, "BlockServerRemote.AddBlockReference id=%s "+
-		"creator=%s uid=%s", id.String(), context.GetCreator(),
-		context.GetWriter())
+	var err error
+	defer func() {
+		b.log.CDebugf(ctx, "BlockServerRemote.AddBlockReference id=%s uid=%s err=%v",
+			id, context.GetWriter(), err)
+	}()
+
 	arg := keybase1.IncBlockReferenceArg{
 		Bid: keybase1.BlockIdCombo{
 			ChargedTo: context.GetCreator(),
@@ -199,24 +180,20 @@ func (b *BlockServerRemote) AddBlockReference(ctx context.Context, id BlockID,
 	nonce := context.GetRefNonce()
 	copy(arg.Nonce[:], nonce[:])
 
-	var err error
-	err = b.doCommand(ctx, func() error {
-		return b.client().IncBlockReference(arg)
-	})
-	if err != nil {
-		b.log.CDebugf(ctx, "BlockServerRemote.AddBlockReference id=%s err=%v",
-			id.String(), err)
-		return err
-	}
-	return nil
+	err = b.client.IncBlockReference(ctx, arg)
+	return err
 }
 
 // RemoveBlockReference implements the BlockServer interface for
 // BlockServerRemote
 func (b *BlockServerRemote) RemoveBlockReference(ctx context.Context, id BlockID,
 	tlfID TlfID, context BlockContext) error {
-	b.log.CDebugf(ctx, "BlockServerRemote.RemoveBlockReference id=%s uid=%s",
-		id.String(), context.GetWriter())
+	var err error
+	defer func() {
+		b.log.CDebugf(ctx, "BlockServerRemote.RemoveBlockReference id=%s uid=%s err=%v",
+			id, context.GetWriter(), err)
+	}()
+
 	arg := keybase1.DecBlockReferenceArg{
 		Bid: keybase1.BlockIdCombo{
 			ChargedTo: context.GetCreator(),
@@ -228,21 +205,13 @@ func (b *BlockServerRemote) RemoveBlockReference(ctx context.Context, id BlockID
 	nonce := context.GetRefNonce()
 	copy(arg.Nonce[:], nonce[:])
 
-	var err error
-	err = b.doCommand(ctx, func() error {
-		return b.client().DecBlockReference(arg)
-	})
-	if err != nil {
-		b.log.CDebugf(ctx, "BlockServerRemote.RemoveBlockReference id=%s "+
-			"err=%v", id.String(), err)
-		return err
-	}
-	return nil
+	err = b.client.DecBlockReference(ctx, arg)
+	return err
 }
 
 // Shutdown implements the BlockServer interface for BlockServerRemote.
 func (b *BlockServerRemote) Shutdown() {
-	if b.conn != nil {
-		b.conn.Shutdown()
+	if b.shutdownFn != nil {
+		b.shutdownFn()
 	}
 }

@@ -48,7 +48,11 @@ type syncInfo struct {
 // Constants used in this file.  TODO: Make these configurable?
 const (
 	maxParallelBlockPuts = 10
-	maxMDsAtATime        = 10 // Max response size for a single DynamoDB query is 1MB.
+	// Max response size for a single DynamoDB query is 1MB.
+	maxMDsAtATime = 10
+	// Time between checks for dirty files to flush, in case Sync is
+	// never called.
+	secondsBetweenBackgroundFlushes = 10
 )
 
 // FolderBranchOps implements the KBFSOps interface for a specific
@@ -212,6 +216,9 @@ func NewFolderBranchOps(config Config, fb FolderBranch,
 		updatePauseChan: make(chan (<-chan struct{})),
 	}
 	fbo.cr = NewConflictResolver(config, fbo)
+	if config.DoBackgroundFlushes() {
+		go fbo.backgroundFlusher(secondsBetweenBackgroundFlushes * time.Second)
+	}
 	return fbo
 }
 
@@ -418,6 +425,10 @@ func (fbo *FolderBranchOps) getMDForWriteLocked(ctx context.Context) (
 	return &newMd, nil
 }
 
+func (fbo *FolderBranchOps) nowUnixNano() int64 {
+	return fbo.config.Clock().Now().UnixNano()
+}
+
 // writerLock must be taken
 func (fbo *FolderBranchOps) initMDLocked(
 	ctx context.Context, md *RootMetadata) error {
@@ -462,12 +473,13 @@ func (fbo *FolderBranchOps) initMDLocked(
 		return err
 	}
 
+	now := fbo.nowUnixNano()
 	md.data.Dir = DirEntry{
 		BlockInfo: info,
 		Type:      Dir,
 		Size:      uint64(plainSize),
-		Mtime:     time.Now().UnixNano(),
-		Ctime:     time.Now().UnixNano(),
+		Mtime:     now,
+		Ctime:     now,
 	}
 	md.AddOp(newCreateOp("", BlockPointer{}, Dir))
 	md.AddRefBlock(md.data.Dir.BlockInfo)
@@ -920,13 +932,11 @@ type blockState struct {
 
 // blockPutState is an internal structure to track data when putting blocks
 type blockPutState struct {
-	oldPtrs     map[BlockPointer]BlockPointer
 	blockStates []blockState
 }
 
 func newBlockPutState(length int) *blockPutState {
 	bps := &blockPutState{}
-	bps.oldPtrs = make(map[BlockPointer]BlockPointer)
 	bps.blockStates = make([]blockState, 0, length)
 	return bps
 }
@@ -938,9 +948,6 @@ func (bps *blockPutState) addNewBlock(blockPtr BlockPointer, block Block,
 }
 
 func (bps *blockPutState) mergeOtherBps(other *blockPutState) {
-	for k, v := range other.oldPtrs {
-		bps.oldPtrs[k] = v
-	}
 	bps.blockStates = append(bps.blockStates, other.blockStates...)
 }
 
@@ -1087,7 +1094,7 @@ func (fbo *FolderBranchOps) syncBlockLocked(ctx context.Context,
 	refPath := *dir.ChildPathNoPtr(name)
 	var newDe DirEntry
 	doSetTime := true
-	now := time.Now().UnixNano()
+	now := fbo.nowUnixNano()
 	for len(newPath.path) < len(dir.path)+1 {
 		info, plainSize, err :=
 			fbo.readyBlockMultiple(ctx, md, currBlock, uid, bps)
@@ -1096,7 +1103,7 @@ func (fbo *FolderBranchOps) syncBlockLocked(ctx context.Context,
 		}
 
 		// prepend to path and setup next one
-		newPath.path = append([]pathNode{pathNode{info.BlockPointer, currName}},
+		newPath.path = append([]pathNode{{info.BlockPointer, currName}},
 			newPath.path...)
 
 		// get the parent block
@@ -1181,10 +1188,8 @@ func (fbo *FolderBranchOps) syncBlockLocked(ctx context.Context,
 
 		if prevIdx < 0 {
 			md.AddUpdate(md.data.Dir.BlockInfo, info)
-			bps.oldPtrs[info.BlockPointer] = md.data.Dir.BlockPointer
 		} else if prevDe, ok := prevDblock.Children[currName]; ok {
 			md.AddUpdate(prevDe.BlockInfo, info)
-			bps.oldPtrs[info.BlockPointer] = prevDe.BlockPointer
 		} else {
 			// this is a new block
 			md.AddRefBlock(info)
@@ -1308,14 +1313,6 @@ func (fbo *FolderBranchOps) finalizeBlocksLocked(bps *blockPutState) error {
 	defer fbo.cacheLock.Unlock()
 	for _, blockState := range bps.blockStates {
 		newPtr := blockState.blockPtr
-		if oldPtr, ok := bps.oldPtrs[newPtr]; ok {
-			// move the deCache for this directory
-			oldPtrStripped := stripBP(oldPtr)
-			if deMap, ok := fbo.deCache[oldPtrStripped]; ok {
-				fbo.deCache[stripBP(blockState.blockPtr)] = deMap
-				delete(fbo.deCache, oldPtrStripped)
-			}
-		}
 		// only cache this block if we made a brand new block, not if
 		// we just incref'd some other block.
 		if !newPtr.IsFirstRef() {
@@ -1380,6 +1377,14 @@ func (fbo *FolderBranchOps) finalizeWriteLocked(ctx context.Context,
 		fbo.setStagedLocked(true)
 		fbo.cr.Resolve(md.Revision, mergedRev)
 	} else {
+		if fbo.staged {
+			// If we were staged, prune all unmerged history now
+			err = fbo.config.MDServer().PruneUnmerged(ctx, fbo.id())
+			if err != nil {
+				return err
+			}
+		}
+
 		fbo.setStagedLocked(false)
 	}
 	fbo.transitionState(cleanState)
@@ -1571,12 +1576,13 @@ func (fbo *FolderBranchOps) createLinkLocked(
 	md.AddOp(newCreateOp(fromName, dirPath.tailPointer(), Sym))
 
 	// Create a direntry for the link, and then sync
+	now := fbo.nowUnixNano()
 	dblock.Children[fromName] = DirEntry{
 		Type:    Sym,
 		Size:    uint64(len(toPath)),
 		SymPath: toPath,
-		Mtime:   time.Now().UnixNano(),
-		Ctime:   time.Now().UnixNano(),
+		Mtime:   now,
+		Ctime:   now,
 	}
 
 	_, err = fbo.syncBlockAndFinalizeLocked(
@@ -1797,7 +1803,7 @@ func (fbo *FolderBranchOps) renameLocked(
 		if err != nil {
 			return err
 		}
-		now := time.Now().UnixNano()
+		now := fbo.nowUnixNano()
 
 		oldGrandparent := *oldParent.parentPath()
 		if len(oldGrandparent.path) > 0 {
@@ -1841,33 +1847,9 @@ func (fbo *FolderBranchOps) renameLocked(
 	}
 
 	// only the ctime changes
-	newDe.Ctime = time.Now().UnixNano()
+	newDe.Ctime = fbo.nowUnixNano()
 	newPBlock.Children[newName] = newDe
 	delete(oldPBlock.Children, oldName)
-
-	// if there are any outstanding de updates from writes/truncates
-	// for the moved path, we need to move them too
-	if oldParent.tailPointer().ID != newParent.tailPointer().ID {
-		fbo.cacheLock.Lock()
-		oldPtr := stripBP(oldParent.tailPointer())
-		if deMap, ok := fbo.deCache[oldPtr]; ok {
-			dePtr := stripBP(newDe.BlockPointer)
-			if de, ok := deMap[dePtr]; ok {
-				newPtr := stripBP(newParent.tailPointer())
-				if _, ok = fbo.deCache[newPtr]; !ok {
-					fbo.deCache[newPtr] = make(map[BlockPointer]DirEntry)
-				}
-				fbo.deCache[newPtr][dePtr] = de
-				delete(deMap, dePtr)
-				if len(deMap) == 0 {
-					delete(fbo.deCache, oldPtr)
-				} else {
-					fbo.deCache[oldPtr] = deMap
-				}
-			}
-		}
-		fbo.cacheLock.Unlock()
-	}
 
 	// find the common ancestor
 	var i int
@@ -2211,7 +2193,7 @@ func (fbo *FolderBranchOps) writeDataLocked(
 						Seed:  rand.Int63(),
 					},
 					IPtrs: []IndirectFilePtr{
-						IndirectFilePtr{
+						{
 							BlockInfo: BlockInfo{
 								BlockPointer: BlockPointer{
 									ID:       newID,
@@ -2531,11 +2513,12 @@ func (fbo *FolderBranchOps) setExLocked(
 	}
 
 	parentPath := file.parentPath()
-	md.AddOp(newSetAttrOp(file.tailName(), parentPath.tailPointer(), exAttr))
+	md.AddOp(newSetAttrOp(file.tailName(), parentPath.tailPointer(), exAttr,
+		file.tailPointer()))
 
 	// If the type isn't File or Exec, there's nothing to do, but
 	// change the ctime anyway (to match ext4 behavior).
-	de.Ctime = time.Now().UnixNano()
+	de.Ctime = fbo.nowUnixNano()
 	dblock.Children[file.tailName()] = de
 	_, err = fbo.syncBlockAndFinalizeLocked(
 		ctx, md, dblock, *parentPath.parentPath(), parentPath.tailName(),
@@ -2578,11 +2561,12 @@ func (fbo *FolderBranchOps) setMtimeLocked(
 	fbo.blockLock.RUnlock()
 
 	parentPath := file.parentPath()
-	md.AddOp(newSetAttrOp(file.tailName(), parentPath.tailPointer(), mtimeAttr))
+	md.AddOp(newSetAttrOp(file.tailName(), parentPath.tailPointer(), mtimeAttr,
+		file.tailPointer()))
 
 	de.Mtime = mtime.UnixNano()
 	// setting the mtime counts as changing the file MD, so must set ctime too
-	de.Ctime = time.Now().UnixNano()
+	de.Ctime = fbo.nowUnixNano()
 	dblock.Children[file.tailName()] = de
 	_, err = fbo.syncBlockAndFinalizeLocked(
 		ctx, md, dblock, *parentPath.parentPath(), parentPath.tailName(),
@@ -3190,12 +3174,57 @@ func (fbo *FolderBranchOps) unlinkFromCache(op op, oldDir BlockPointer,
 	}
 }
 
-func (fbo *FolderBranchOps) notifyOneOp(ctx context.Context, op op,
-	md *RootMetadata) {
-	// update all the block pointers
+// cacheLock must be taken by the caller.
+func (fbo *FolderBranchOps) moveDeCacheEntryLocked(oldParent BlockPointer,
+	newParent BlockPointer, moved BlockPointer) {
+	if newParent == zeroPtr {
+		// A rename within the same directory, so no need to move anything.
+		return
+	}
+
+	oldPtr := stripBP(oldParent)
+	if deMap, ok := fbo.deCache[oldPtr]; ok {
+		dePtr := stripBP(moved)
+		if de, ok := deMap[dePtr]; ok {
+			newPtr := stripBP(newParent)
+			if _, ok = fbo.deCache[newPtr]; !ok {
+				fbo.deCache[newPtr] = make(map[BlockPointer]DirEntry)
+			}
+			fbo.deCache[newPtr][dePtr] = de
+			delete(deMap, dePtr)
+			if len(deMap) == 0 {
+				delete(fbo.deCache, oldPtr)
+			} else {
+				fbo.deCache[oldPtr] = deMap
+			}
+		}
+	}
+}
+
+func (fbo *FolderBranchOps) updatePointers(op op) {
+	fbo.cacheLock.Lock()
+	defer fbo.cacheLock.Unlock()
 	for _, update := range op.AllUpdates() {
 		fbo.nodeCache.UpdatePointer(update.Unref, update.Ref)
+		// move the deCache for this directory
+		oldPtrStripped := stripBP(update.Unref)
+		if deMap, ok := fbo.deCache[oldPtrStripped]; ok {
+			fbo.deCache[stripBP(update.Ref)] = deMap
+			delete(fbo.deCache, oldPtrStripped)
+		}
 	}
+
+	// For renames, we need to update any outstanding writes as well.
+	rop, ok := op.(*renameOp)
+	if !ok {
+		return
+	}
+	fbo.moveDeCacheEntryLocked(rop.OldDir.Ref, rop.NewDir.Ref, rop.Renamed)
+}
+
+func (fbo *FolderBranchOps) notifyOneOp(ctx context.Context, op op,
+	md *RootMetadata) {
+	fbo.updatePointers(op)
 
 	var changes []NodeChange
 	switch realOp := op.(type) {
@@ -3377,7 +3406,7 @@ func (fbo *FolderBranchOps) reembedBlockChanges(ctx context.Context,
 			p := path{
 				FolderBranch: fbo.folderBranch,
 				path: []pathNode{
-					pathNode{BlockPointer: rmd.data.Changes.Pointer}},
+					{BlockPointer: rmd.data.Changes.Pointer}},
 			}
 			return fbo.getFileLocked(ctx, rmd, p, read)
 		}()
@@ -3452,7 +3481,7 @@ func (fbo *FolderBranchOps) undoMDUpdatesLocked(ctx context.Context,
 	// sync will put us into an unmerged state anyway and we'll
 	// require conflict resolution.
 	if fbo.getState() != cleanState {
-		return errors.New("Ignoring MD updates while writes are dirty")
+		return NotPermittedWhileDirtyError{}
 	}
 
 	fbo.reembedBlockChanges(ctx, rmds)
@@ -3573,7 +3602,7 @@ func (fbo *FolderBranchOps) UnstageForTesting(
 	}
 
 	if fbo.getState() != cleanState {
-		return errors.New("Can't unstage while files are dirty!")
+		return NotPermittedWhileDirtyError{}
 	}
 
 	// launch unstaging in a new goroutine, because we don't want to
@@ -3581,14 +3610,21 @@ func (fbo *FolderBranchOps) UnstageForTesting(
 	// notifications if we do.  But we still want to wait for the
 	// context to cancel.
 	c := make(chan error, 1)
-	freshCtx, cancel := context.WithCancel(context.Background())
+	logTags := make(logger.CtxLogTags)
+	logTags[CtxFBOIDKey] = CtxFBOOpID
+	ctxWithTags := logger.NewContextWithLogTags(context.Background(), logTags)
+	id, err := MakeRandomRequestID()
+	if err != nil {
+		fbo.log.Warning("Couldn't generate a random request ID: %v", err)
+	} else {
+		ctxWithTags = context.WithValue(ctxWithTags, CtxFBOIDKey, id)
+	}
+	freshCtx, cancel := context.WithCancel(ctxWithTags)
 	defer cancel()
+	fbo.log.CDebugf(freshCtx, "Launching new context for UnstageForTesting")
 	go func() {
 		fbo.writerLock.Lock()
 		defer fbo.writerLock.Unlock()
-		// don't allow any writes to sneak into the cache
-		fbo.cacheLock.Lock()
-		defer fbo.cacheLock.Unlock()
 
 		// fetch all of my unstaged updates, and undo them one at a time
 		err := fbo.undoUnmergedMDUpdatesLocked(freshCtx)
@@ -3773,6 +3809,12 @@ func (fbo *FolderBranchOps) registerForUpdates() {
 				if err != nil {
 					fbo.log.CDebugf(ctx, "Got an error while applying "+
 						"updates: %v", err)
+					if _, ok := err.(NotPermittedWhileDirtyError); ok {
+						// If this fails because of outstanding dirty
+						// files, delay a bit to avoid wasting RPCs
+						// and CPU.
+						time.Sleep(1 * time.Second)
+					}
 					return err
 				}
 				return nil
@@ -3786,4 +3828,45 @@ func (fbo *FolderBranchOps) registerForUpdates() {
 			}
 		}
 	})
+}
+
+func (fbo *FolderBranchOps) getDirtyPointers() []BlockPointer {
+	fbo.cacheLock.Lock()
+	defer fbo.cacheLock.Unlock()
+	var dirtyPtrs []BlockPointer
+	for _, entries := range fbo.deCache {
+		for ptr := range entries {
+			dirtyPtrs = append(dirtyPtrs, ptr)
+		}
+	}
+	return dirtyPtrs
+}
+
+func (fbo *FolderBranchOps) backgroundFlusher(betweenFlushes time.Duration) {
+	ticker := time.NewTicker(betweenFlushes)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			dirtyPtrs := fbo.getDirtyPointers()
+			fbo.runUnlessShutdown(func(ctx context.Context) (err error) {
+				for _, ptr := range dirtyPtrs {
+					node := fbo.nodeCache.Get(ptr)
+					if node == nil {
+						continue
+					}
+					err := fbo.Sync(ctx, node)
+					if err != nil {
+						// Just log the warning and keep trying to
+						// sync the rest of the dirty files.
+						fbo.log.CWarningf(ctx, "Couldn't sync dirty file %v",
+							ptr)
+					}
+				}
+				return nil
+			})
+		case <-fbo.shutdownChan:
+			return
+		}
+	}
 }

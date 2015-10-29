@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/logger"
@@ -65,7 +66,7 @@ func NewRootMetadataForTest(d *TlfHandle, id TlfID) *RootMetadata {
 	return rmd
 }
 
-func setTestLogger(config Config, t *testing.T) {
+func setTestLogger(config Config, t logger.TestLogBackend) {
 	config.SetLoggerMaker(func(m string) logger.Logger {
 		return logger.NewTestLogger(t)
 	})
@@ -73,10 +74,12 @@ func setTestLogger(config Config, t *testing.T) {
 
 // MakeTestConfigOrBust creates and returns a config suitable for
 // unit-testing with the given list of users.
-func MakeTestConfigOrBust(t *testing.T, users ...libkb.NormalizedUsername) *ConfigLocal {
+func MakeTestConfigOrBust(t logger.TestLogBackend,
+	users ...libkb.NormalizedUsername) *ConfigLocal {
 	config := NewConfigLocal()
 	setTestLogger(config, t)
 
+	config.SetBlockSplitter(&BlockSplitterSimple{64 * 1024, 8 * 1024})
 	config.SetKeyManager(NewKeyManagerStandard(config))
 
 	localUsers := MakeLocalUsers(users)
@@ -97,7 +100,7 @@ func MakeTestConfigOrBust(t *testing.T, users ...libkb.NormalizedUsername) *Conf
 	bserverAddr := os.Getenv(EnvTestBServerAddr)
 	if len(bserverAddr) != 0 {
 		blockServer :=
-			NewBlockServerRemote(context.TODO(), config, bserverAddr)
+			NewBlockServerRemote(config, bserverAddr)
 		config.SetBlockServer(blockServer)
 	} else {
 		blockServer, err := NewBlockServerMemory(config)
@@ -128,7 +131,7 @@ func MakeTestConfigOrBust(t *testing.T, users ...libkb.NormalizedUsername) *Conf
 		libkb.G.ConfigureLogging()
 
 		// connect to server
-		mdServer = NewMDServerRemote(context.TODO(), config, mdServerAddr)
+		mdServer = NewMDServerRemote(config, mdServerAddr)
 		// for now the MD server acts as the key server in production
 		keyServer = mdServer.(*MDServerRemote)
 	} else {
@@ -146,6 +149,9 @@ func MakeTestConfigOrBust(t *testing.T, users ...libkb.NormalizedUsername) *Conf
 	config.SetMDServer(mdServer)
 	config.SetKeyServer(keyServer)
 
+	// turn off background flushing by default during tests
+	config.noBGFlush = true
+
 	return config
 }
 
@@ -156,6 +162,7 @@ func ConfigAsUser(config *ConfigLocal, loggedInUser libkb.NormalizedUsername) *C
 	c.SetLoggerMaker(config.loggerFn)
 	c.SetRootCerts(config.RootCerts())
 
+	c.SetBlockSplitter(config.BlockSplitter())
 	c.SetKeyManager(NewKeyManagerStandard(c))
 
 	daemon := config.KeybaseDaemon().(KeybaseDaemonLocal)
@@ -178,7 +185,7 @@ func ConfigAsUser(config *ConfigLocal, loggedInUser libkb.NormalizedUsername) *C
 	c.SetCrypto(crypto)
 
 	if s, ok := config.BlockServer().(*BlockServerRemote); ok {
-		blockServer := NewBlockServerRemote(context.TODO(), c, s.RemoteAddress())
+		blockServer := NewBlockServerRemote(c, s.RemoteAddress())
 		c.SetBlockServer(blockServer)
 	} else {
 		c.SetBlockServer(config.BlockServer())
@@ -191,7 +198,7 @@ func ConfigAsUser(config *ConfigLocal, loggedInUser libkb.NormalizedUsername) *C
 	var keyServer KeyServer
 	if len(mdServerAddr) != 0 {
 		// connect to server
-		mdServer = NewMDServerRemote(context.TODO(), c, mdServerAddr)
+		mdServer = NewMDServerRemote(c, mdServerAddr)
 		// for now the MD server also acts as the key server.
 		keyServer = mdServer.(*MDServerRemote)
 	} else {
@@ -398,7 +405,7 @@ func testWithCanceledContext(t *testing.T, ctx context.Context,
 func MakeDirRKeyBundle(uid keybase1.UID, cryptPublicKey CryptPublicKey) TLFKeyBundle {
 	return TLFKeyBundle{
 		RKeys: map[keybase1.UID]UserCryptKeyBundle{
-			uid: UserCryptKeyBundle{
+			uid: {
 				cryptPublicKey.KID: TLFCryptKeyInfo{},
 			},
 		},
@@ -410,7 +417,7 @@ func MakeDirRKeyBundle(uid keybase1.UID, cryptPublicKey CryptPublicKey) TLFKeyBu
 func MakeDirWKeyBundle(uid keybase1.UID, cryptPublicKey CryptPublicKey) TLFKeyBundle {
 	return TLFKeyBundle{
 		WKeys: map[keybase1.UID]UserCryptKeyBundle{
-			uid: UserCryptKeyBundle{
+			uid: {
 				cryptPublicKey.KID: TLFCryptKeyInfo{},
 			},
 		},
@@ -432,4 +439,14 @@ func DisableUpdatesForTesting(config Config, folderBranch FolderBranch) (
 	c := make(chan struct{})
 	ops.updatePauseChan <- c
 	return c, nil
+}
+
+// TestClock returns a set time as the current time.
+type TestClock struct {
+	T time.Time
+}
+
+// Now implements the Clock interface for TestClock.
+func (tc TestClock) Now() time.Time {
+	return tc.T
 }

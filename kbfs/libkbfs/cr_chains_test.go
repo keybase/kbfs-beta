@@ -3,6 +3,8 @@ package libkbfs
 import (
 	"reflect"
 	"testing"
+
+	"golang.org/x/net/context"
 )
 
 func checkExpectedChains(t *testing.T, expected map[BlockPointer]BlockPointer,
@@ -88,7 +90,7 @@ func testCRCheckOps(t *testing.T, cc *crChains, original BlockPointer,
 	}
 
 	if g, e := len(chain.ops), len(expectedOps); g != e {
-		t.Fatalf("Wrong number of operations: %d vs %d", g, e)
+		t.Fatalf("Wrong number of operations: %d vs %d: %v", g, e, chain.ops)
 	}
 
 	for i, op := range chain.ops {
@@ -124,6 +126,19 @@ func testCRCheckOps(t *testing.T, cc *crChains, original BlockPointer,
 	}
 }
 
+func testCRChainsFillInWriter(t *testing.T, rmds []*RootMetadata) KBPKI {
+	config := MakeTestConfigOrBust(t, "u1")
+	kbpki := config.KBPKI()
+	uid, err := kbpki.GetCurrentUID(context.Background())
+	if err != nil {
+		t.Fatalf("Couldn't get UID: %v", err)
+	}
+	for _, rmd := range rmds {
+		rmd.data.LastWriter = uid
+	}
+	return kbpki
+}
+
 func TestCRChainsSingleOp(t *testing.T) {
 	rmd := &RootMetadata{}
 
@@ -139,7 +154,9 @@ func TestCRChainsSingleOp(t *testing.T) {
 	rmd.AddOp(co)
 	rmd.data.Dir.BlockPointer = expected[rootPtrUnref]
 
-	cc, err := newCRChains([]*RootMetadata{rmd})
+	rmds := []*RootMetadata{rmd}
+	kbpki := testCRChainsFillInWriter(t, rmds)
+	cc, err := newCRChains(context.Background(), kbpki, rmds)
 	if err != nil {
 		t.Fatalf("Error making chains: %v", err)
 	}
@@ -164,13 +181,15 @@ func TestCRChainsRenameOp(t *testing.T) {
 
 	oldName, newName := "old", "new"
 	ro := newRenameOp(oldName, dir1Unref, newName, dir2Unref, filePtr)
-	expectedRenames[filePtr] = renameInfo{dir2Unref, "new"}
+	expectedRenames[filePtr] = renameInfo{dir1Unref, "old", dir2Unref, "new"}
 	currPtr = testCRFillOpPtrs(currPtr, expected, revPtrs,
 		[]BlockPointer{rootPtrUnref, dir1Unref, dir2Unref}, ro)
 	rmd.AddOp(ro)
 	rmd.data.Dir.BlockPointer = expected[rootPtrUnref]
 
-	cc, err := newCRChains([]*RootMetadata{rmd})
+	rmds := []*RootMetadata{rmd}
+	kbpki := testCRChainsFillInWriter(t, rmds)
+	cc, err := newCRChains(context.Background(), kbpki, rmds)
 	if err != nil {
 		t.Fatalf("Error making chains: %v", err)
 	}
@@ -214,9 +233,10 @@ func TestCRChainsMultiOps(t *testing.T) {
 	var multiRmds []*RootMetadata
 
 	// setex root/dir3/file2
-	op1 := newSetAttrOp(f2, dir3Unref, exAttr)
+	op1 := newSetAttrOp(f2, dir3Unref, exAttr, file2Ptr)
 	currPtr = testCRFillOpPtrs(currPtr, expected, revPtrs,
 		[]BlockPointer{rootPtrUnref, dir3Unref}, op1)
+	expected[file2Ptr] = file2Ptr // no update to the file ptr
 	bigRmd.AddOp(op1)
 	newRmd := &RootMetadata{}
 	newRmd.AddOp(op1)
@@ -236,7 +256,7 @@ func TestCRChainsMultiOps(t *testing.T) {
 	// rename root/dir3/file2 root/dir1/file4
 	op3 := newRenameOp(f2, expected[dir3Unref], f4,
 		expected[dir1Unref], file2Ptr)
-	expectedRenames[file2Ptr] = renameInfo{dir1Unref, f4}
+	expectedRenames[file2Ptr] = renameInfo{dir3Unref, f2, dir1Unref, f4}
 	currPtr = testCRFillOpPtrs(currPtr, expected, revPtrs,
 		[]BlockPointer{expected[rootPtrUnref], expected[dir1Unref],
 			expected[dir3Unref]}, op3)
@@ -269,7 +289,9 @@ func TestCRChainsMultiOps(t *testing.T) {
 	multiRmds = append(multiRmds, newRmd)
 
 	bigRmd.data.Dir.BlockPointer = expected[rootPtrUnref]
-	cc, err := newCRChains([]*RootMetadata{bigRmd})
+	rmds := []*RootMetadata{bigRmd}
+	kbpki := testCRChainsFillInWriter(t, rmds)
+	cc, err := newCRChains(context.Background(), kbpki, rmds)
 	if err != nil {
 		t.Fatalf("Error making chains for big RMD: %v", err)
 	}
@@ -286,15 +308,19 @@ func TestCRChainsMultiOps(t *testing.T) {
 	// dir2 should have one rm op
 	testCRCheckOps(t, cc, dir2Unref, []op{op5})
 
-	// dir3 should have a setex and the rm part of a rename
+	// dir3 should have the rm part of a rename
 	ro3 := newRmOp(f2, op3.OldDir.Unref)
-	testCRCheckOps(t, cc, dir3Unref, []op{op1, ro3})
+	testCRCheckOps(t, cc, dir3Unref, []op{ro3})
+
+	// file2 should have the setattr
+	testCRCheckOps(t, cc, file2Ptr, []op{op1})
 
 	// file4 should have one op
 	testCRCheckOps(t, cc, file4Unref, []op{op4})
 
 	// now make sure the chain of MDs gets the same answers
-	mcc, err := newCRChains(multiRmds)
+	kbpki = testCRChainsFillInWriter(t, multiRmds)
+	mcc, err := newCRChains(context.Background(), kbpki, multiRmds)
 	if err != nil {
 		t.Fatalf("Error making chains for multi RMDs: %v", err)
 	}
@@ -323,12 +349,14 @@ func TestCRChainsCollapse(t *testing.T) {
 	// * rm root/dir1/file2
 	// * rename root/dir2/file1 root/dir1/file3
 	// * rm root/dir1/file3
-	// * rename root/dir1/file4 root/dir1/file3
+	// * rename root/dir1/file4 root/dir1/file5
+	// * rename root/dir1/file5 root/dir1/file3
 
 	f1 := "file1"
 	f2 := "file2"
 	f3 := "file3"
 	f4 := "file4"
+	f5 := "file5"
 
 	currPtr, ptrs, revPtrs := testCRInitPtrs(3)
 	rootPtrUnref := ptrs[0]
@@ -350,9 +378,10 @@ func TestCRChainsCollapse(t *testing.T) {
 	rmd.AddOp(op1)
 
 	// setex root/dir2/file1
-	op2 := newSetAttrOp(f1, dir2Unref, exAttr)
+	op2 := newSetAttrOp(f1, dir2Unref, exAttr, file1Ptr)
 	currPtr = testCRFillOpPtrs(currPtr, expected, revPtrs,
 		[]BlockPointer{expected[rootPtrUnref], dir2Unref}, op2)
+	expected[file1Ptr] = file1Ptr
 	rmd.AddOp(op2)
 
 	// createfile root/dir1/file3
@@ -376,7 +405,7 @@ func TestCRChainsCollapse(t *testing.T) {
 	// rename root/dir2/file1 root/dir1/file3
 	op6 := newRenameOp(f1, expected[dir2Unref], f3, expected[dir1Unref],
 		file1Ptr)
-	expectedRenames[file1Ptr] = renameInfo{dir1Unref, f3}
+	expectedRenames[file1Ptr] = renameInfo{dir2Unref, f1, dir1Unref, f3}
 	currPtr = testCRFillOpPtrs(currPtr, expected, revPtrs,
 		[]BlockPointer{expected[rootPtrUnref], expected[dir1Unref],
 			expected[dir2Unref]}, op6)
@@ -388,16 +417,26 @@ func TestCRChainsCollapse(t *testing.T) {
 		[]BlockPointer{expected[rootPtrUnref], expected[dir1Unref]}, op7)
 	rmd.AddOp(op7)
 
-	// rename root/dir1/file4 root/dir1/file3
-	op8 := newRenameOp(f4, expected[dir1Unref], f3, expected[dir1Unref],
+	// rename root/dir1/file4 root/dir1/file5
+	op8 := newRenameOp(f4, expected[dir1Unref], f5, expected[dir1Unref],
 		file4Ptr)
-	expectedRenames[file4Ptr] = renameInfo{dir1Unref, f3}
 	currPtr = testCRFillOpPtrs(currPtr, expected, revPtrs,
 		[]BlockPointer{expected[rootPtrUnref], expected[dir1Unref]}, op8)
 	rmd.AddOp(op8)
 
+	// rename root/dir1/file5 root/dir1/file3
+	op9 := newRenameOp(f5, expected[dir1Unref], f3, expected[dir1Unref],
+		file4Ptr)
+	// expected the previous old name, not the new one
+	expectedRenames[file4Ptr] = renameInfo{dir1Unref, f4, dir1Unref, f3}
+	currPtr = testCRFillOpPtrs(currPtr, expected, revPtrs,
+		[]BlockPointer{expected[rootPtrUnref], expected[dir1Unref]}, op9)
+	rmd.AddOp(op9)
+
 	rmd.data.Dir.BlockPointer = expected[rootPtrUnref]
-	cc, err := newCRChains([]*RootMetadata{rmd})
+	rmds := []*RootMetadata{rmd}
+	kbpki := testCRChainsFillInWriter(t, rmds)
+	cc, err := newCRChains(context.Background(), kbpki, rmds)
 	if err != nil {
 		t.Fatalf("Error making chains: %v", err)
 	}
@@ -408,11 +447,14 @@ func TestCRChainsCollapse(t *testing.T) {
 	testCRCheckOps(t, cc, rootPtrUnref, []op{})
 
 	// dir1 should only have one createOp (the final rename)
-	co1 := newCreateOp(f3, op8.OldDir.Unref, File)
+	co1 := newCreateOp(f3, op9.OldDir.Unref, File)
 	co1.renamed = true
 	testCRCheckOps(t, cc, dir1Unref, []op{co1})
 
-	// dir2 should have a setex and the rm part of a rename
+	// dir2 should have the rm part of a rename
 	ro2 := newRmOp(f1, op6.OldDir.Unref)
-	testCRCheckOps(t, cc, dir2Unref, []op{op2, ro2})
+	testCRCheckOps(t, cc, dir2Unref, []op{ro2})
+
+	// file1 should have the setattr
+	testCRCheckOps(t, cc, file1Ptr, []op{op2})
 }

@@ -39,9 +39,12 @@ type ConfigLocal struct {
 	daemon    KeybaseDaemon
 	bsplit    BlockSplitter
 	notifier  Notifier
+	clock     Clock
+	renamer   ConflictRenamer
 	rootCerts []byte
 	registry  metrics.Registry
 	loggerFn  func(prefix string) logger.Logger
+	noBGFlush bool // logic opposite so the default value is the common setting
 }
 
 var _ Config = (*ConfigLocal)(nil)
@@ -139,7 +142,9 @@ func MakeLocalUsers(users []libkb.NormalizedUsername) []LocalUser {
 func NewConfigLocal() *ConfigLocal {
 	config := &ConfigLocal{}
 	config.SetKBFSOps(NewKBFSOpsStandard(config))
-	config.SetReporter(NewReporterSimple(10))
+	config.SetClock(wallClock{})
+	config.SetReporter(NewReporterSimple(config.Clock(), 10))
+	config.SetConflictRenamer(TimeAndWriterConflictRenamer{config})
 	config.SetMDCache(NewMDCacheStandard(5000))
 	config.SetKeyCache(NewKeyCacheStandard(5000))
 	config.SetBlockCache(NewBlockCacheStandard(config, 5000))
@@ -147,8 +152,6 @@ func NewConfigLocal() *ConfigLocal {
 	config.SetMDOps(&MDOpsStandard{config})
 	config.SetBlockOps(&BlockOpsStandard{config})
 	config.SetKeyOps(&KeyOpsStandard{config})
-	// 64K blocks by default, block changes embedded max == 8K
-	config.SetBlockSplitter(&BlockSplitterSimple{64 * 1024, 8 * 1024})
 	config.SetNotifier(config.kbfs.(*KBFSOpsStandard))
 
 	// Set the cert to be the environment variable, if it exists.
@@ -350,9 +353,34 @@ func (c *ConfigLocal) SetNotifier(n Notifier) {
 	c.notifier = n
 }
 
+// Clock implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) Clock() Clock {
+	return c.clock
+}
+
+// SetClock implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) SetClock(cl Clock) {
+	c.clock = cl
+}
+
+// ConflictRenamer implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) ConflictRenamer() ConflictRenamer {
+	return c.renamer
+}
+
+// SetConflictRenamer implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) SetConflictRenamer(cr ConflictRenamer) {
+	c.renamer = cr
+}
+
 // DataVersion implements the Config interface for ConfigLocal.
 func (c *ConfigLocal) DataVersion() DataVer {
 	return 1
+}
+
+// DoBackgroundFlushes implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) DoBackgroundFlushes() bool {
+	return !c.noBGFlush
 }
 
 // ReqsBufSize implements the Config interface for ConfigLocal.
@@ -411,4 +439,5 @@ func (c *ConfigLocal) Shutdown() {
 	c.KeyServer().Shutdown()
 	c.KeybaseDaemon().Shutdown()
 	c.BlockServer().Shutdown()
+	c.Crypto().Shutdown()
 }

@@ -9,7 +9,7 @@ import (
 	libkb "github.com/keybase/client/go/libkb"
 	logger "github.com/keybase/client/go/logger"
 	protocol "github.com/keybase/client/go/protocol"
-	rpc2 "github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	go_framed_msgpack_rpc "github.com/keybase/go-framed-msgpack-rpc"
 	go_metrics "github.com/rcrowley/go-metrics"
 	context "golang.org/x/net/context"
 	reflect "reflect"
@@ -467,6 +467,17 @@ func (_m *MockKeybaseDaemon) Identify(ctx context.Context, assertion string) (Us
 
 func (_mr *_MockKeybaseDaemonRecorder) Identify(arg0, arg1 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "Identify", arg0, arg1)
+}
+
+func (_m *MockKeybaseDaemon) LoadUserPlusKeys(ctx context.Context, uid protocol.UID) (UserInfo, error) {
+	ret := _m.ctrl.Call(_m, "LoadUserPlusKeys", ctx, uid)
+	ret0, _ := ret[0].(UserInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+func (_mr *_MockKeybaseDaemonRecorder) LoadUserPlusKeys(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "LoadUserPlusKeys", arg0, arg1)
 }
 
 func (_m *MockKeybaseDaemon) CurrentUID(ctx context.Context, sessionID int) (protocol.UID, error) {
@@ -1211,6 +1222,14 @@ func (_mr *_MockCryptoRecorder) DecryptBlock(arg0, arg1, arg2 interface{}) *gomo
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "DecryptBlock", arg0, arg1, arg2)
 }
 
+func (_m *MockCrypto) Shutdown() {
+	_m.ctrl.Call(_m, "Shutdown")
+}
+
+func (_mr *_MockCryptoRecorder) Shutdown() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "Shutdown")
+}
+
 // Mock of Codec interface
 type MockCodec struct {
 	ctrl     *gomock.Controller
@@ -1826,6 +1845,68 @@ func (_mr *_MockNotifierRecorder) UnregisterFromChanges(arg0, arg1 interface{}) 
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "UnregisterFromChanges", arg0, arg1)
 }
 
+// Mock of Clock interface
+type MockClock struct {
+	ctrl     *gomock.Controller
+	recorder *_MockClockRecorder
+}
+
+// Recorder for MockClock (not exported)
+type _MockClockRecorder struct {
+	mock *MockClock
+}
+
+func NewMockClock(ctrl *gomock.Controller) *MockClock {
+	mock := &MockClock{ctrl: ctrl}
+	mock.recorder = &_MockClockRecorder{mock}
+	return mock
+}
+
+func (_m *MockClock) EXPECT() *_MockClockRecorder {
+	return _m.recorder
+}
+
+func (_m *MockClock) Now() time.Time {
+	ret := _m.ctrl.Call(_m, "Now")
+	ret0, _ := ret[0].(time.Time)
+	return ret0
+}
+
+func (_mr *_MockClockRecorder) Now() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "Now")
+}
+
+// Mock of ConflictRenamer interface
+type MockConflictRenamer struct {
+	ctrl     *gomock.Controller
+	recorder *_MockConflictRenamerRecorder
+}
+
+// Recorder for MockConflictRenamer (not exported)
+type _MockConflictRenamerRecorder struct {
+	mock *MockConflictRenamer
+}
+
+func NewMockConflictRenamer(ctrl *gomock.Controller) *MockConflictRenamer {
+	mock := &MockConflictRenamer{ctrl: ctrl}
+	mock.recorder = &_MockConflictRenamerRecorder{mock}
+	return mock
+}
+
+func (_m *MockConflictRenamer) EXPECT() *_MockConflictRenamerRecorder {
+	return _m.recorder
+}
+
+func (_m *MockConflictRenamer) GetConflictSuffix(op op) string {
+	ret := _m.ctrl.Call(_m, "GetConflictSuffix", op)
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+func (_mr *_MockConflictRenamerRecorder) GetConflictSuffix(arg0 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetConflictSuffix", arg0)
+}
+
 // Mock of Config interface
 type MockConfig struct {
 	ctrl     *gomock.Controller
@@ -2171,6 +2252,42 @@ func (_mr *_MockConfigRecorder) SetNotifier(arg0 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "SetNotifier", arg0)
 }
 
+func (_m *MockConfig) Clock() Clock {
+	ret := _m.ctrl.Call(_m, "Clock")
+	ret0, _ := ret[0].(Clock)
+	return ret0
+}
+
+func (_mr *_MockConfigRecorder) Clock() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "Clock")
+}
+
+func (_m *MockConfig) SetClock(_param0 Clock) {
+	_m.ctrl.Call(_m, "SetClock", _param0)
+}
+
+func (_mr *_MockConfigRecorder) SetClock(arg0 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "SetClock", arg0)
+}
+
+func (_m *MockConfig) ConflictRenamer() ConflictRenamer {
+	ret := _m.ctrl.Call(_m, "ConflictRenamer")
+	ret0, _ := ret[0].(ConflictRenamer)
+	return ret0
+}
+
+func (_mr *_MockConfigRecorder) ConflictRenamer() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "ConflictRenamer")
+}
+
+func (_m *MockConfig) SetConflictRenamer(_param0 ConflictRenamer) {
+	_m.ctrl.Call(_m, "SetConflictRenamer", _param0)
+}
+
+func (_mr *_MockConfigRecorder) SetConflictRenamer(arg0 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "SetConflictRenamer", arg0)
+}
+
 func (_m *MockConfig) DataVersion() DataVer {
 	ret := _m.ctrl.Call(_m, "DataVersion")
 	ret0, _ := ret[0].(DataVer)
@@ -2189,6 +2306,16 @@ func (_m *MockConfig) ReqsBufSize() int {
 
 func (_mr *_MockConfigRecorder) ReqsBufSize() *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "ReqsBufSize")
+}
+
+func (_m *MockConfig) DoBackgroundFlushes() bool {
+	ret := _m.ctrl.Call(_m, "DoBackgroundFlushes")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+func (_mr *_MockConfigRecorder) DoBackgroundFlushes() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "DoBackgroundFlushes")
 }
 
 func (_m *MockConfig) RootCerts() []byte {
@@ -2352,25 +2479,15 @@ func (_m *MockConnectionTransport) EXPECT() *_MockConnectionTransportRecorder {
 	return _m.recorder
 }
 
-func (_m *MockConnectionTransport) Dial(ctx context.Context, srvAddr string) (protocol.GenericClient, error) {
-	ret := _m.ctrl.Call(_m, "Dial", ctx, srvAddr)
-	ret0, _ := ret[0].(protocol.GenericClient)
+func (_m *MockConnectionTransport) Dial(ctx context.Context) (go_framed_msgpack_rpc.Transporter, error) {
+	ret := _m.ctrl.Call(_m, "Dial", ctx)
+	ret0, _ := ret[0].(go_framed_msgpack_rpc.Transporter)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-func (_mr *_MockConnectionTransportRecorder) Dial(arg0, arg1 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "Dial", arg0, arg1)
-}
-
-func (_m *MockConnectionTransport) Serve(server rpc2.Protocol) error {
-	ret := _m.ctrl.Call(_m, "Serve", server)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-func (_mr *_MockConnectionTransportRecorder) Serve(arg0 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "Serve", arg0)
+func (_mr *_MockConnectionTransportRecorder) Dial(arg0 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "Dial", arg0)
 }
 
 func (_m *MockConnectionTransport) IsConnected() bool {
@@ -2397,4 +2514,47 @@ func (_m *MockConnectionTransport) Close() {
 
 func (_mr *_MockConnectionTransportRecorder) Close() *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "Close")
+}
+
+// Mock of crAction interface
+type MockcrAction struct {
+	ctrl     *gomock.Controller
+	recorder *_MockcrActionRecorder
+}
+
+// Recorder for MockcrAction (not exported)
+type _MockcrActionRecorder struct {
+	mock *MockcrAction
+}
+
+func NewMockcrAction(ctrl *gomock.Controller) *MockcrAction {
+	mock := &MockcrAction{ctrl: ctrl}
+	mock.recorder = &_MockcrActionRecorder{mock}
+	return mock
+}
+
+func (_m *MockcrAction) EXPECT() *_MockcrActionRecorder {
+	return _m.recorder
+}
+
+func (_m *MockcrAction) do(config Config, unmergedMostRecent BlockPointer, mergedMostRecent BlockPointer, unmergedOps []op, mergedOps []op, unmergedBlock *DirBlock, mergedBlock *DirBlock) ([]op, []op, error) {
+	ret := _m.ctrl.Call(_m, "do", config, unmergedMostRecent, mergedMostRecent, unmergedOps, mergedOps, unmergedBlock, mergedBlock)
+	ret0, _ := ret[0].([]op)
+	ret1, _ := ret[1].([]op)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+func (_mr *_MockcrActionRecorder) do(arg0, arg1, arg2, arg3, arg4, arg5, arg6 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "do", arg0, arg1, arg2, arg3, arg4, arg5, arg6)
+}
+
+func (_m *MockcrAction) String() string {
+	ret := _m.ctrl.Call(_m, "String")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+func (_mr *_MockcrActionRecorder) String() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "String")
 }

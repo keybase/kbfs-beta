@@ -459,17 +459,18 @@ func resolveUser(ctx context.Context, config Config, name string,
 	results <- uid
 }
 
-type uidList []keybase1.UID
+// UIDList can be used to lexicographically sort UIDs.
+type UIDList []keybase1.UID
 
-func (u uidList) Len() int {
+func (u UIDList) Len() int {
 	return len(u)
 }
 
-func (u uidList) Less(i, j int) bool {
+func (u UIDList) Less(i, j int) bool {
 	return u[i].Less(u[j])
 }
 
-func (u uidList) Swap(i, j int) {
+func (u UIDList) Swap(i, j int) {
 	u[i], u[j] = u[j], u[i]
 }
 
@@ -478,7 +479,7 @@ func sortUIDS(m map[keybase1.UID]struct{}) []keybase1.UID {
 	for uid := range m {
 		s = append(s, uid)
 	}
-	sort.Sort(uidList(s))
+	sort.Sort(UIDList(s))
 	return s
 }
 
@@ -912,8 +913,7 @@ type DirBlock struct {
 	// if not indirect, a map of path name to directory entry
 	Children map[string]DirEntry `codec:",omitempty"`
 	// if indirect, contains the indirect pointers to the next level of blocks
-	IPtrs   []IndirectDirPtr `codec:",omitempty"`
-	Padding []byte
+	IPtrs []IndirectDirPtr `codec:",omitempty"`
 }
 
 // NewDirBlock creates a new, empty DirBlock.
@@ -944,8 +944,7 @@ type FileBlock struct {
 	// if not indirect, the full contents of this block
 	Contents []byte `codec:",omitempty"`
 	// if indirect, contains the indirect pointers to the next level of blocks
-	IPtrs   []IndirectFilePtr `codec:",omitempty"`
-	Padding []byte
+	IPtrs []IndirectFilePtr `codec:",omitempty"`
 }
 
 // NewFileBlock creates a new, empty FileBlock.

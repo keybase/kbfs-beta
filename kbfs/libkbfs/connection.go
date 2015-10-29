@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -11,15 +12,16 @@ import (
 	"github.com/cenkalti/backoff"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
 	"golang.org/x/net/context"
 )
 
 // ConnectionHandler is the callback interface for interacting with the connection.
 type ConnectionHandler interface {
-	// OnConnect is called immediately after a connection has been established.
-	// An implementation would likely log something and/or perform authentication.
-	OnConnect(context.Context, *Connection, keybase1.GenericClient) error
+	// OnConnect is called immediately after a connection has been
+	// established.  An implementation would likely log something,
+	// register served protocols, and/or perform authentication.
+	OnConnect(context.Context, *Connection, keybase1.GenericClient, *rpc.Server) error
 
 	// OnConnectError is called whenever there is an error during connection.
 	OnConnectError(err error, reconnectThrottleDuration time.Duration)
@@ -34,25 +36,26 @@ type ConnectionHandler interface {
 	ShouldThrottle(error) bool
 }
 
-// ConnectionTransportTLS is a ConnectionTransport implementation that uses TLS+rpc2.
+// ConnectionTransportTLS is a ConnectionTransport implementation that uses TLS+rpc.
 type ConnectionTransportTLS struct {
-	config          Config
-	unwrapErrFunc   rpc2.UnwrapErrorFunc
-	transport       *rpc2.Transport
-	stagedTransport *rpc2.Transport
-	server          *rpc2.Server
+	config  Config
+	srvAddr string
+
+	// Protects everything below.
+	mutex           sync.Mutex
+	transport       rpc.Transporter
+	stagedTransport rpc.Transporter
 	conn            net.Conn
-	mutex           sync.Mutex // protects transport and server
 }
 
 // Test that ConnectionTransportTLS fully implements the ConnectionTransport interface.
 var _ ConnectionTransport = (*ConnectionTransportTLS)(nil)
 
 // Dial is an implementation of the ConnectionTransport interface.
-func (ct *ConnectionTransportTLS) Dial(ctx context.Context, srvAddr string) (
-	keybase1.GenericClient, error) {
-	var err error
-	err = runUnlessCanceled(ctx, func() error {
+func (ct *ConnectionTransportTLS) Dial(ctx context.Context) (
+	rpc.Transporter, error) {
+	var conn net.Conn
+	err := runUnlessCanceled(ctx, func() error {
 		// load CA certificate
 		certs := x509.NewCertPool()
 		if !certs.AppendCertsFromPEM(ct.config.RootCerts()) {
@@ -60,31 +63,20 @@ func (ct *ConnectionTransportTLS) Dial(ctx context.Context, srvAddr string) (
 		}
 		// connect
 		config := tls.Config{RootCAs: certs}
-		ct.conn, err = tls.Dial("tcp", srvAddr, &config)
+		var err error
+		conn, err = tls.Dial("tcp", ct.srvAddr, &config)
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	ct.stagedTransport = rpc2.NewTransport(ct.conn, libkb.NewRPCLogFactory(), libkb.WrapError)
-	client := rpc2.NewClient(ct.stagedTransport, ct.unwrapErrFunc)
-	return client, nil
-}
-
-// Serve is an implementation of the ConnectionTransport interface.
-func (ct *ConnectionTransportTLS) Serve(server rpc2.Protocol) error {
+	transport := rpc.NewTransport(conn, libkb.NewRPCLogFactory(), libkb.WrapError)
 	ct.mutex.Lock()
 	defer ct.mutex.Unlock()
-	if ct.server != nil {
-		return nil
-	}
-	ct.server = rpc2.NewServer(ct.transport, libkb.WrapError)
-	err := ct.server.Register(server)
-	if err != nil {
-		return err
-	}
-	return ct.server.Run(true)
+	ct.conn = conn
+	ct.stagedTransport = transport
+	return transport, nil
 }
 
 // IsConnected is an implementation of the ConnectionTransport interface.
@@ -100,7 +92,6 @@ func (ct *ConnectionTransportTLS) Finalize() {
 	defer ct.mutex.Unlock()
 	ct.transport = ct.stagedTransport
 	ct.stagedTransport = nil
-	ct.server = nil
 }
 
 // Close is an implementation of the ConnectionTransport interface.
@@ -112,34 +103,96 @@ func (ct *ConnectionTransportTLS) Close() {
 	}
 }
 
+// SharedKeybaseTransport is a ConnectionTransport implementation that
+// uses a shared local socket to a keybase daemon.
+type SharedKeybaseTransport struct {
+	kbCtx *libkb.GlobalContext
+
+	// Protects everything below.
+	mutex           sync.Mutex
+	transport       rpc.Transporter
+	stagedTransport rpc.Transporter
+}
+
+// Test that SharedKeybaseTransport fully implements the
+// ConnectionTransport interface.
+var _ ConnectionTransport = (*SharedKeybaseTransport)(nil)
+
+// Dial is an implementation of the ConnectionTransport interface.
+func (kt *SharedKeybaseTransport) Dial(ctx context.Context) (
+	rpc.Transporter, error) {
+	_, transport, err := kt.kbCtx.GetSocket(true)
+	if err != nil {
+		return nil, err
+	}
+
+	kt.mutex.Lock()
+	defer kt.mutex.Unlock()
+	kt.stagedTransport = transport
+	return transport, nil
+}
+
+// IsConnected is an implementation of the ConnectionTransport interface.
+func (kt *SharedKeybaseTransport) IsConnected() bool {
+	kt.mutex.Lock()
+	defer kt.mutex.Unlock()
+	return kt.transport != nil && kt.transport.IsConnected()
+}
+
+// Finalize is an implementation of the ConnectionTransport interface.
+func (kt *SharedKeybaseTransport) Finalize() {
+	kt.mutex.Lock()
+	defer kt.mutex.Unlock()
+	kt.transport = kt.stagedTransport
+	kt.stagedTransport = nil
+}
+
+// Close is an implementation of the ConnectionTransport interface.
+func (kt *SharedKeybaseTransport) Close() {
+	// Since this is a shared connection, do nothing.
+}
+
 // Connection encapsulates all client connection handling.
 type Connection struct {
-	config    Config
-	srvAddr   string
-	handler   ConnectionHandler
-	transport ConnectionTransport
+	config         Config
+	srvAddr        string
+	handler        ConnectionHandler
+	transport      ConnectionTransport
+	errorUnwrapper rpc.ErrorUnwrapper
 
 	mutex         sync.Mutex // protects: client, reconnectChan, and cancelFunc
 	client        keybase1.GenericClient
+	server        *rpc.Server
 	reconnectChan chan struct{}
 	cancelFunc    context.CancelFunc // used to cancel the reconnect loop
 }
 
-// NewConnection returns a newly connected connection.
-func NewConnection(ctx context.Context, config Config, srvAddr string,
-	handler ConnectionHandler, errFunc rpc2.UnwrapErrorFunc) *Connection {
-	transport := &ConnectionTransportTLS{config: config, unwrapErrFunc: errFunc}
-	return newConnectionWithTransport(ctx, config, srvAddr, handler, transport)
+// NewTLSConnection returns a connection that tries to connect to the
+// given server address with TLS.
+func NewTLSConnection(config Config, srvAddr string,
+	errorUnwrapper rpc.ErrorUnwrapper, handler ConnectionHandler) *Connection {
+	transport := &ConnectionTransportTLS{config: config, srvAddr: srvAddr}
+	return newConnectionWithTransport(config, handler, transport, errorUnwrapper)
 }
 
-// Separate from NewConnection to allow for unit testing.
-func newConnectionWithTransport(ctx context.Context, config Config, srvAddr string,
-	handler ConnectionHandler, transport ConnectionTransport) *Connection {
+// NewSharedKeybaseConnection returns a connection that tries to
+// connect to the local keybase daemon.
+func NewSharedKeybaseConnection(kbCtx *libkb.GlobalContext, config Config,
+	handler ConnectionHandler) *Connection {
+	transport := &SharedKeybaseTransport{kbCtx: kbCtx}
+	return newConnectionWithTransport(config, handler, transport, libkb.ErrorUnwrapper{})
+}
+
+// Separate from New*Connection functions above to allow for unit
+// testing.
+func newConnectionWithTransport(config Config,
+	handler ConnectionHandler, transport ConnectionTransport,
+	errorUnwrapper rpc.ErrorUnwrapper) *Connection {
 	connection := &Connection{
-		srvAddr:   srvAddr,
-		config:    config,
-		handler:   handler,
-		transport: transport,
+		config:         config,
+		handler:        handler,
+		transport:      transport,
+		errorUnwrapper: errorUnwrapper,
 	}
 	connection.getReconnectChan() // start connecting
 	return connection
@@ -148,13 +201,16 @@ func newConnectionWithTransport(ctx context.Context, config Config, srvAddr stri
 // connect performs the actual connect() and rpc setup.
 func (c *Connection) connect(ctx context.Context) error {
 	// connect
-	client, err := c.transport.Dial(ctx, c.srvAddr)
+	transport, err := c.transport.Dial(ctx)
 	if err != nil {
 		return err
 	}
 
+	client := rpc.NewClient(transport, c.errorUnwrapper)
+	server := rpc.NewServer(transport, libkb.WrapError)
+
 	// call the connect handler
-	err = c.handler.OnConnect(ctx, c, client)
+	err = c.handler.OnConnect(ctx, c, client, server)
 	if err != nil {
 		return err
 	}
@@ -165,13 +221,14 @@ func (c *Connection) connect(ctx context.Context) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	c.client = client
+	c.server = server
 	c.transport.Finalize()
 
 	return nil
 }
 
 // DoCommand executes the specific rpc command wrapped in rpcFunc.
-func (c *Connection) DoCommand(ctx context.Context, rpcFunc func() error) error {
+func (c *Connection) DoCommand(ctx context.Context, rpcFunc func(keybase1.GenericClient) error) error {
 	for {
 		// we may or may not be in the process of reconnecting.
 		// if so we'll block here unless canceled by the caller.
@@ -184,10 +241,17 @@ func (c *Connection) DoCommand(ctx context.Context, rpcFunc func() error) error 
 
 		// retry throttle errors w/backoff
 		throttleErr := backoff.RetryNotify(func() error {
+			rawClient := func() keybase1.GenericClient {
+				c.mutex.Lock()
+				defer c.mutex.Unlock()
+				return c.client
+			}()
 			// try the rpc call. this can also be canceled
 			// by the caller, and will retry connectivity
 			// errors w/backoff.
-			throttleErr := runUnlessCanceled(ctx, rpcFunc)
+			throttleErr := runUnlessCanceled(ctx, func() error {
+				return rpcFunc(rawClient)
+			})
 			if c.handler.ShouldThrottle(throttleErr) {
 				return throttleErr
 			}
@@ -237,8 +301,8 @@ func (c *Connection) checkForRetry(err error) bool {
 	if err == nil {
 		return false
 	}
-	_, disconnected := err.(rpc2.DisconnectedError)
-	_, eof := err.(rpc2.EofError)
+	_, disconnected := err.(rpc.DisconnectedError)
+	eof := err == io.EOF
 	return disconnected || eof
 }
 
@@ -287,16 +351,17 @@ func (c *Connection) doReconnect(ctx context.Context, reconnectChan chan struct{
 	c.cancelFunc = nil
 }
 
-// GetClient is called to retrieve an rpc client suitable for use by the caller.
+// GetClient returns an RPC client that uses DoCommand() for RPC
+// calls, and thus handles throttling, disconnections, etc.
 func (c *Connection) GetClient() keybase1.GenericClient {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	return c.client
+	return connectionClient{c}
 }
 
-// Serve is called to act as a server for an upstream client.
-func (c *Connection) Serve(server rpc2.Protocol) error {
-	return c.transport.Serve(server)
+// GetServer is called to retrieve an rpc server suitable for use by the caller.
+func (c *Connection) GetServer() *rpc.Server {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.server
 }
 
 // Shutdown cancels any reconnect loop in progress.
@@ -308,8 +373,20 @@ func (c *Connection) Shutdown() {
 	if c.cancelFunc != nil {
 		c.cancelFunc()
 	}
-	if c.transport != nil {
+	if c.transport != nil && c.transport.IsConnected() {
 		// close the connection
 		c.transport.Close()
 	}
+}
+
+type connectionClient struct {
+	conn *Connection
+}
+
+var _ keybase1.GenericClient = connectionClient{}
+
+func (c connectionClient) Call(ctx context.Context, s string, args interface{}, res interface{}) error {
+	return c.conn.DoCommand(ctx, func(rawClient keybase1.GenericClient) error {
+		return rawClient.Call(ctx, s, args, res)
+	})
 }

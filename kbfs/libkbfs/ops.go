@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+
+	"github.com/keybase/client/go/libkb"
 )
 
 // op represents a single file-system remote-sync operation
@@ -16,6 +18,21 @@ type op interface {
 	Refs() []BlockPointer
 	Unrefs() []BlockPointer
 	String() string
+	setWriterName(name libkb.NormalizedUsername)
+	getWriterName() libkb.NormalizedUsername
+	setFinalPath(p path)
+	getFinalPath() path
+	// CheckConflict compares the function's target op with the given
+	// op, and returns a resolution if one is needed (or nil
+	// otherwise).  The resulting action (if any) assumes that this
+	// method's target op is the unmerged op, and the given op is the
+	// merged op.
+	CheckConflict(renamer ConflictRenamer, mergedOp op) (crAction, error)
+	// GetDefaultAction should be called on an unmerged op only after
+	// all conflicts with the corresponding change have been checked,
+	// and it returns the action to take against the merged branch
+	// given that there are no conflicts.
+	GetDefaultAction(mergedPath path) crAction
 }
 
 // op codes
@@ -52,6 +69,13 @@ type OpCommon struct {
 	// its custom fields is updated on AddUpdate, instead of the
 	// generic Updates field.
 	customUpdates map[BlockPointer]*blockUpdate
+	// writerName is the keybase username that generated this
+	// operation.  Not exported; only used during conflict resolution.
+	writerName libkb.NormalizedUsername
+	// finalPath is the final resolved path to the node that this
+	// operation affects in a set of MD updates.  Not exported; only
+	// used during conflict resolution.
+	finalPath path
 }
 
 // AddRefBlock adds this block to the list of newly-referenced blocks
@@ -89,6 +113,22 @@ func (oc *OpCommon) Unrefs() []BlockPointer {
 	return oc.UnrefBlocks
 }
 
+func (oc *OpCommon) setWriterName(name libkb.NormalizedUsername) {
+	oc.writerName = name
+}
+
+func (oc *OpCommon) getWriterName() libkb.NormalizedUsername {
+	return oc.writerName
+}
+
+func (oc *OpCommon) setFinalPath(p path) {
+	oc.finalPath = p
+}
+
+func (oc *OpCommon) getFinalPath() path {
+	return oc.finalPath
+}
+
 // createOp is an op representing a file or subdirectory creation
 type createOp struct {
 	OpCommon
@@ -97,8 +137,14 @@ type createOp struct {
 	Type    EntryType   `codec:"t"`
 
 	// If true, this create op represents half of a rename operation.
-	// This op should never be persisted in a real directory entry
+	// This op should never be persisted.
 	renamed bool
+
+	// If this is set, ths create op needs to be turned has been
+	// turned into a symlink creation locally to avoid a cycle during
+	// conflict resolution, and the following field represents the
+	// text of the symlink. This op should never be persisted.
+	crSymPath string
 }
 
 func newCreateOp(name string, oldDir BlockPointer, t EntryType) *createOp {
@@ -132,11 +178,51 @@ func (co *createOp) String() string {
 	return res
 }
 
+func (co *createOp) CheckConflict(renamer ConflictRenamer, mergedOp op) (
+	crAction, error) {
+	switch realMergedOp := mergedOp.(type) {
+	case *createOp:
+		// Conflicts if this creates the same name and one of them
+		// isn't creating a directory.
+		if realMergedOp.NewName == co.NewName &&
+			(realMergedOp.Type != Dir || co.Type != Dir) {
+			if realMergedOp.Type != Dir && co.Type == Dir {
+				// Rename the merged entry only if the unmerged one is
+				// a directory and the merged one is not.
+				return &renameMergedAction{
+					fromName: co.NewName,
+					toName:   co.NewName + renamer.GetConflictSuffix(mergedOp),
+				}, nil
+			}
+			// Otherwise rename the unmerged entry (guaranteed to be a file).
+			return &renameUnmergedAction{
+				fromName: co.NewName,
+				toName:   co.NewName + renamer.GetConflictSuffix(co),
+			}, nil
+		}
+	}
+	// Doesn't conflict with any rmOps, because the default action
+	// will just re-create it in the merged branch as necessary.
+	return nil, nil
+}
+
+func (co *createOp) GetDefaultAction(mergedPath path) crAction {
+	return &copyUnmergedEntryAction{
+		fromName: co.NewName,
+		toName:   co.NewName,
+		symPath:  co.crSymPath,
+	}
+}
+
 // rmOp is an op representing a file or subdirectory removal
 type rmOp struct {
 	OpCommon
 	OldName string      `codec:"n"`
 	Dir     blockUpdate `codec:"d"`
+
+	// Indicates that the resolution process should skip this rm op.
+	// Likely indicates the rm half of a cycle-creating rename.
+	dropThis bool
 }
 
 func newRmOp(name string, oldDir BlockPointer) *rmOp {
@@ -163,6 +249,28 @@ func (ro *rmOp) AllUpdates() []blockUpdate {
 
 func (ro *rmOp) String() string {
 	return fmt.Sprintf("rm %s", ro.OldName)
+}
+
+func (ro *rmOp) CheckConflict(renamer ConflictRenamer, mergedOp op) (
+	crAction, error) {
+	switch realMergedOp := mergedOp.(type) {
+	case *createOp:
+		if realMergedOp.NewName == ro.OldName {
+			// Conflicts if this creates the same name.  This can only
+			// happen if the merged branch deleted the old node and
+			// re-created it, in which case it is totally fine to drop
+			// this rm op for the original node.
+			return &dropUnmergedAction{op: ro}, nil
+		}
+	}
+	return nil, nil
+}
+
+func (ro *rmOp) GetDefaultAction(mergedPath path) crAction {
+	if ro.dropThis {
+		return &dropUnmergedAction{op: ro}
+	}
+	return &rmMergedEntryAction{name: ro.OldName}
 }
 
 // renameOp is an op representing a rename of a file/subdirectory from
@@ -217,6 +325,15 @@ func (ro *renameOp) String() string {
 	return fmt.Sprintf("rename %s -> %s", ro.OldName, ro.NewName)
 }
 
+func (ro *renameOp) CheckConflict(renamer ConflictRenamer, mergedOp op) (
+	crAction, error) {
+	return nil, fmt.Errorf("Unexpected conflict check on a rename op: %s", ro)
+}
+
+func (ro *renameOp) GetDefaultAction(mergedPath path) crAction {
+	return nil
+}
+
 // WriteRange represents a file modification.  Len is 0 for a
 // truncate.
 type WriteRange struct {
@@ -268,6 +385,30 @@ func (so *syncOp) String() string {
 	return fmt.Sprintf("sync [%s]", strings.Join(writes, ", "))
 }
 
+func (so *syncOp) CheckConflict(renamer ConflictRenamer, mergedOp op) (
+	crAction, error) {
+	switch mergedOp.(type) {
+	case *syncOp:
+		// Any sync on the same file is a conflict.  (TODO: add
+		// type-specific intelligent conflict resolvers for file
+		// contents?)
+		return &renameUnmergedAction{
+			fromName: so.getFinalPath().tailName(),
+			toName: mergedOp.getFinalPath().tailName() +
+				renamer.GetConflictSuffix(so),
+		}, nil
+	}
+	return nil, nil
+}
+
+func (so *syncOp) GetDefaultAction(mergedPath path) crAction {
+	return &copyUnmergedEntryAction{
+		fromName: so.getFinalPath().tailName(),
+		toName:   mergedPath.tailName(),
+		symPath:  "",
+	}
+}
+
 type attrChange uint16
 
 const (
@@ -289,13 +430,14 @@ func (ac attrChange) String() string {
 // file/subdirectory with in a directory.
 type setAttrOp struct {
 	OpCommon
-	Name string      `codec:"n"`
-	Dir  blockUpdate `codec:"d"`
-	Attr attrChange  `codec:"a"`
+	Name string       `codec:"n"`
+	Dir  blockUpdate  `codec:"d"`
+	Attr attrChange   `codec:"a"`
+	File BlockPointer `codec:"f"`
 }
 
 func newSetAttrOp(name string, oldDir BlockPointer,
-	attr attrChange) *setAttrOp {
+	attr attrChange, file BlockPointer) *setAttrOp {
 	sao := &setAttrOp{
 		OpCommon: OpCommon{
 			customUpdates: make(map[BlockPointer]*blockUpdate),
@@ -305,6 +447,7 @@ func newSetAttrOp(name string, oldDir BlockPointer,
 	sao.Dir.Unref = oldDir
 	sao.customUpdates[oldDir] = &sao.Dir
 	sao.Attr = attr
+	sao.File = file
 	return sao
 }
 
@@ -320,6 +463,31 @@ func (sao *setAttrOp) AllUpdates() []blockUpdate {
 
 func (sao *setAttrOp) String() string {
 	return fmt.Sprintf("setAttr %s (%s)", sao.Name, sao.Attr)
+}
+
+func (sao *setAttrOp) CheckConflict(renamer ConflictRenamer, mergedOp op) (
+	crAction, error) {
+	switch realMergedOp := mergedOp.(type) {
+	case *setAttrOp:
+		if realMergedOp.Attr == sao.Attr {
+			// A set attr for the same attribute on the same file is a
+			// conflict.
+			return &renameUnmergedAction{
+				fromName: sao.getFinalPath().tailName(),
+				toName: mergedOp.getFinalPath().tailName() +
+					renamer.GetConflictSuffix(sao),
+			}, nil
+		}
+	}
+	return nil, nil
+}
+
+func (sao *setAttrOp) GetDefaultAction(mergedPath path) crAction {
+	return &copyUnmergedAttrAction{
+		fromName: sao.getFinalPath().tailName(),
+		toName:   mergedPath.tailName(),
+		attr:     sao.Attr,
+	}
 }
 
 // gcOp is an op that represents garbage-collecting the history of a
@@ -350,6 +518,15 @@ func (gco *gcOp) String() string {
 	return "gc"
 }
 
+func (gco *gcOp) CheckConflict(renamer ConflictRenamer, mergedOp op) (
+	crAction, error) {
+	return nil, nil
+}
+
+func (gco *gcOp) GetDefaultAction(mergedPath path) crAction {
+	return nil
+}
+
 // invertOpForLocalNotifications returns an operation that represents
 // an undoing of the effect of the given op.  These are intended to be
 // used for local notifications only, and would not be useful for
@@ -377,7 +554,7 @@ func invertOpForLocalNotifications(oldOp op) op {
 		newOp.(*syncOp).Writes = make([]WriteRange, len(op.Writes))
 		copy(newOp.(*syncOp).Writes, op.Writes)
 	case *setAttrOp:
-		newOp = newSetAttrOp(op.Name, op.Dir.Ref, op.Attr)
+		newOp = newSetAttrOp(op.Name, op.Dir.Ref, op.Attr, op.File)
 	case *gcOp:
 		newOp = op
 	}

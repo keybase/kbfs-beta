@@ -1,10 +1,13 @@
 package libkbfs
 
 import (
+	"time"
+
 	"github.com/keybase/client/go/client"
 	"github.com/keybase/client/go/libkb"
+	"github.com/keybase/client/go/logger"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	"github.com/keybase/go-framed-msgpack-rpc"
 	"golang.org/x/net/context"
 )
 
@@ -13,43 +16,65 @@ import (
 // signing key.
 type CryptoClient struct {
 	CryptoCommon
-	ctx    *libkb.GlobalContext
-	client keybase1.GenericClient
+	client     keybase1.CryptoClient
+	shutdownFn func()
 }
 
 var _ Crypto = (*CryptoClient)(nil)
 
 // NewCryptoClient constructs a new CryptoClient.
-func NewCryptoClient(config Config, ctx *libkb.GlobalContext) (
-	*CryptoClient, error) {
-	_, xp, err := ctx.GetSocket()
-	if err != nil {
-		return nil, err
+func NewCryptoClient(config Config, kbCtx *libkb.GlobalContext, log logger.Logger) *CryptoClient {
+	c := &CryptoClient{
+		CryptoCommon: CryptoCommon{
+			codec: config.Codec(),
+			log:   log,
+		},
 	}
-
-	srv := rpc2.NewServer(xp, libkb.WrapError)
-
-	protocols := []rpc2.Protocol{
-		client.NewSecretUIProtocol(),
-	}
-
-	for _, p := range protocols {
-		if err := srv.Register(p); err != nil {
-			if _, ok := err.(rpc2.AlreadyRegisteredError); !ok {
-				return nil, err
-			}
-		}
-	}
-
-	client := rpc2.NewClient(xp, libkb.UnwrapError)
-	return newCryptoClientWithClient(config, ctx, client), nil
+	conn := NewSharedKeybaseConnection(kbCtx, config, c)
+	c.client = keybase1.CryptoClient{Cli: conn.GetClient()}
+	c.shutdownFn = conn.Shutdown
+	return c
 }
 
 // newCryptoClientWithClient should only be used for testing.
-func newCryptoClientWithClient(config Config, ctx *libkb.GlobalContext,
-	client keybase1.GenericClient) *CryptoClient {
+func newCryptoClientWithClient(codec Codec, client keybase1.GenericClient,
+	log logger.Logger) *CryptoClient {
 	return &CryptoClient{
-		CryptoCommon{config.Codec(), config.MakeLogger("")}, ctx, client}
+		CryptoCommon: CryptoCommon{
+			codec: codec,
+			log:   log,
+		},
+		client: keybase1.CryptoClient{Cli: client},
+	}
+}
+
+// OnConnect implements the ConnectionHandler interface.
+func (c *CryptoClient) OnConnect(ctx context.Context,
+	conn *Connection, _ keybase1.GenericClient,
+	server *rpc.Server) error {
+	err := server.Register(client.NewSecretUIProtocol(libkb.G))
+	if err != nil {
+		if _, ok := err.(rpc.AlreadyRegisteredError); !ok {
+			return err
+		}
+	}
+	return nil
+}
+
+// OnConnectError implements the ConnectionHandler interface.
+func (c *CryptoClient) OnConnectError(err error, wait time.Duration) {
+	c.log.Warning("CryptoClient: connection error: %q; retrying in %s",
+		err, wait)
+}
+
+// OnDisconnected implements the ConnectionHandler interface.
+func (c *CryptoClient) OnDisconnected() {
+	c.log.Warning("CryptoClient is disconnected")
+}
+
+// ShouldThrottle implements the ConnectionHandler interface.
+func (c *CryptoClient) ShouldThrottle(err error) bool {
+	return false
 }
 
 // Sign implements the Crypto interface for CryptoClient.
@@ -60,18 +85,11 @@ func (c *CryptoClient) Sign(ctx context.Context, msg []byte) (
 			sigInfo, err)
 	}()
 
-	var ed25519SigInfo keybase1.ED25519SignatureInfo
-	f := func() error {
-		cc := keybase1.CryptoClient{Cli: c.client}
-		var err error
-		ed25519SigInfo, err = cc.SignED25519(keybase1.SignED25519Arg{
-			SessionID: 0,
-			Msg:       msg,
-			Reason:    "to use kbfs",
-		})
-		return err
-	}
-	err = runUnlessCanceled(ctx, f)
+	ed25519SigInfo, err := c.client.SignED25519(ctx, keybase1.SignED25519Arg{
+		SessionID: 0,
+		Msg:       msg,
+		Reason:    "to use kbfs",
+	})
 	if err != nil {
 		return
 	}
@@ -109,24 +127,24 @@ func (c *CryptoClient) DecryptTLFCryptKeyClientHalf(ctx context.Context,
 	}
 	copy(nonce[:], encryptedClientHalf.Nonce)
 
-	var decryptedClientHalf keybase1.Bytes32
-	f := func() error {
-		cc := keybase1.CryptoClient{Cli: c.client}
-		var err error
-		decryptedClientHalf, err = cc.UnboxBytes32(keybase1.UnboxBytes32Arg{
-			SessionID:        0,
-			EncryptedBytes32: encryptedData,
-			Nonce:            nonce,
-			PeersPublicKey:   keybase1.BoxPublicKey(publicKey.PublicKey),
-			Reason:           "to use kbfs",
-		})
-		return err
-	}
-	err = runUnlessCanceled(ctx, f)
+	decryptedClientHalf, err := c.client.UnboxBytes32(ctx, keybase1.UnboxBytes32Arg{
+		SessionID:        0,
+		EncryptedBytes32: encryptedData,
+		Nonce:            nonce,
+		PeersPublicKey:   keybase1.BoxPublicKey(publicKey.PublicKey),
+		Reason:           "to use kbfs",
+	})
 	if err != nil {
 		return
 	}
 
 	clientHalf = TLFCryptKeyClientHalf{decryptedClientHalf}
 	return
+}
+
+// Shutdown implements the Crypto interface for CryptoClient.
+func (c *CryptoClient) Shutdown() {
+	if c.shutdownFn != nil {
+		c.shutdownFn()
+	}
 }

@@ -8,7 +8,7 @@ import (
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/logger"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
 	metrics "github.com/rcrowley/go-metrics"
 	"golang.org/x/net/context"
 )
@@ -243,11 +243,6 @@ type KeybaseDaemon interface {
 	// validate an assertion or the identity of a user, use this to
 	// get UserInfo structs as it is much cheaper than Identify.
 	LoadUserPlusKeys(ctx context.Context, uid keybase1.UID) (UserInfo, error)
-
-	// CurrentUID returns the UID of the current session, or an
-	// error otherwise. This should be faster than calling
-	// CurrentSession.
-	CurrentUID(ctx context.Context, sessionID int) (keybase1.UID, error)
 
 	// CurrentSession returns a SessionInfo struct with all the
 	// information for the current session, or an error otherwise.
@@ -522,6 +517,9 @@ type Crypto interface {
 	// DecryptBlock() must guarantee that (size of the decrypted
 	// block) <= len(encryptedBlock).
 	DecryptBlock(encryptedBlock EncryptedBlock, key BlockCryptKey, block Block) error
+
+	// Shutdown frees any resources associated with this instance.
+	Shutdown()
 }
 
 // Codec encodes and decodes arbitrary data
@@ -813,6 +811,19 @@ type Notifier interface {
 	UnregisterFromChanges(folderBranches []FolderBranch, obs Observer) error
 }
 
+// Clock is an interface for getting the current time
+type Clock interface {
+	// Now returns the current time.
+	Now() time.Time
+}
+
+// ConflictRenamer deals with names for conflicting directory entries.
+type ConflictRenamer interface {
+	// GetConflictResolver returns the appropriate suffix for the
+	// given op causing a conflict.
+	GetConflictSuffix(op op) string
+}
+
 // Config collects all the singleton instance instantiations needed to
 // run KBFS in one place.  The methods below are self-explanatory and
 // do not require comments.
@@ -853,10 +864,18 @@ type Config interface {
 	SetBlockSplitter(BlockSplitter)
 	Notifier() Notifier
 	SetNotifier(Notifier)
+	Clock() Clock
+	SetClock(Clock)
+	ConflictRenamer() ConflictRenamer
+	SetConflictRenamer(ConflictRenamer)
 	DataVersion() DataVer
 	// ReqsBufSize indicates the number of read or write operations
 	// that can be buffered per folder
 	ReqsBufSize() int
+	// DoBackgroundFlushes says whether we should periodically try to
+	// flush dirty files, even without a sync from the user.  Should
+	// be true except for during some testing.
+	DoBackgroundFlushes() bool
 	RootCerts() []byte
 	SetRootCerts([]byte)
 	MakeLogger(module string) logger.Logger
@@ -909,11 +928,7 @@ type NodeCache interface {
 // used by a Connection instance.
 type ConnectionTransport interface {
 	// Dial is called to connect to the server.
-	Dial(ctx context.Context, srvAddr string) (keybase1.GenericClient, error)
-
-	// Serve is called when the client needs to act as a server on behalf
-	// of a server who wants to act as a client, e.g. push notifications.
-	Serve(server rpc2.Protocol) error
+	Dial(ctx context.Context) (rpc.Transporter, error)
 
 	// IsConnected is called to check for connection status.
 	IsConnected() bool
@@ -923,4 +938,25 @@ type ConnectionTransport interface {
 
 	// Close is used to close any open connection.
 	Close()
+}
+
+// crAction represents a specific action to take as part of the
+// conflict resolution process.
+type crAction interface {
+	// do modifies the given merged block in place to resolve the
+	// conflict, and returns potentially modified sets of unmerged and
+	// merged operations.  Eventually, the "unmerged" ops will be
+	// pushed as part of a MD update, and so should contain any
+	// necessarily operations to fully merge the unmerged data,
+	// including any conflict resolution.  The "merged" ops will be
+	// played through locally, to notify any caches about the
+	// newly-obtained merged data (and any changes to local data that
+	// were required as part of conflict resolution, such as renames).
+	do(config Config, unmergedMostRecent BlockPointer,
+		mergedMostRecent BlockPointer, unmergedOps []op, mergedOps []op,
+		unmergedBlock *DirBlock, mergedBlock *DirBlock) (
+		retUnmergedOps []op, retMergedOps []op, err error)
+	// String returns a string representation for this crAction, used
+	// for debugging.
+	String() string
 }

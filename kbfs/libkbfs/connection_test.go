@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
-	"github.com/maxtaco/go-framed-msgpack-rpc/rpc2"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
 	"golang.org/x/net/context"
 )
 
@@ -19,7 +20,7 @@ type unitTester struct {
 }
 
 // OnConnect implements the ConnectionHandler interface.
-func (ut *unitTester) OnConnect(context.Context, *Connection, keybase1.GenericClient) error {
+func (ut *unitTester) OnConnect(context.Context, *Connection, keybase1.GenericClient, *rpc.Server) error {
 	ut.numConnects++
 	ut.doneChan <- true
 	return nil
@@ -37,21 +38,17 @@ func (ut *unitTester) OnDisconnected() {
 
 // ShouldThrottle implements the ConnectionHandler interface.
 func (ut *unitTester) ShouldThrottle(err error) bool {
-	return err != nil && err.Error() == "throttle"
+	_, isThrottle := err.(throttleError)
+	return isThrottle
 }
 
 // Dial implements the ConnectionTransport interface.
-func (ut *unitTester) Dial(ctx context.Context, srvAddr string) (
-	keybase1.GenericClient, error) {
+func (ut *unitTester) Dial(ctx context.Context) (
+	rpc.Transporter, error) {
 	if ut.numConnectErrors == 0 {
 		return nil, errors.New("intentional error to trigger reconnect")
 	}
 	return nil, nil
-}
-
-// Serve implements the ConnectionTransport interface.
-func (ut *unitTester) Serve(rpc2.Protocol) error {
-	return nil
 }
 
 // IsConnected implements the ConnectionTransport interface.
@@ -83,10 +80,9 @@ func (ut *unitTester) Err() error {
 
 // Test a basic reconnect flow.
 func TestReconnectBasic(t *testing.T) {
-	ctx := context.Background()
 	config := NewConfigLocal()
 	unitTester := &unitTester{doneChan: make(chan bool)}
-	conn := newConnectionWithTransport(ctx, config, "", unitTester, unitTester)
+	conn := newConnectionWithTransport(config, unitTester, unitTester, libkb.ErrorUnwrapper{})
 	defer conn.Shutdown()
 	timeout := time.After(2 * time.Second)
 	select {
@@ -100,23 +96,66 @@ func TestReconnectBasic(t *testing.T) {
 	}
 }
 
+type throttleError struct {
+	Err error
+}
+
+func (e throttleError) ToStatus() (s keybase1.Status) {
+	s.Code = 1
+	s.Name = "THROTTLE"
+	s.Desc = e.Err.Error()
+	return
+}
+
+func (e throttleError) Error() string {
+	return e.Err.Error()
+}
+
+type testErrorUnwrapper struct{}
+
+var _ rpc.ErrorUnwrapper = testErrorUnwrapper{}
+
+func (eu testErrorUnwrapper) MakeArg() interface{} {
+	return &keybase1.Status{}
+}
+
+func (eu testErrorUnwrapper) UnwrapError(arg interface{}) (appError error, dispatchError error) {
+	s, ok := arg.(*keybase1.Status)
+	if !ok {
+		return nil, errors.New("Error converting arg to keybase1.Status object")
+	}
+	if s == nil || s.Code == 0 {
+		return nil, nil
+	}
+
+	switch s.Code {
+	case 1:
+		appError = throttleError{errors.New("throttle")}
+		break
+	default:
+		panic("Unknown testing error")
+	}
+	return appError, nil
+}
+
 // Test DoCommand with throttling.
 func TestDoCommandThrottle(t *testing.T) {
-	ctx := context.Background()
 	config := NewConfigLocal()
 	setTestLogger(config, t)
 	unitTester := &unitTester{doneChan: make(chan bool)}
 
 	throttleErr := errors.New("throttle")
-	conn := newConnectionWithTransport(ctx, config, "", unitTester, unitTester)
+	conn := newConnectionWithTransport(config, unitTester, unitTester, testErrorUnwrapper{})
 	defer conn.Shutdown()
 	<-unitTester.doneChan
 
 	throttle := true
-	err := conn.DoCommand(ctx, func() error {
+	ctx := context.Background()
+	err := conn.DoCommand(ctx, func(keybase1.GenericClient) error {
 		if throttle {
 			throttle = false
-			return throttleErr
+			err, _ := conn.errorUnwrapper.UnwrapError(libkb.WrapError(throttleError{Err: throttleErr}))
+			return err
 		}
 		return nil
 	})
