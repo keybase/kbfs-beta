@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package engine
 
 import (
@@ -58,6 +61,27 @@ func SignED25519(g *libkb.GlobalContext, secretUI libkb.SecretUI,
 		Sig:       keybase1.ED25519Signature(sig),
 		PublicKey: keybase1.ED25519PublicKey(publicKey),
 	}
+	return
+}
+
+// SignToString signs the given message with the current user's private
+// signing key and outputs the serialized NaclSigInfo string.
+func SignToString(g *libkb.GlobalContext, secretUI libkb.SecretUI,
+	arg keybase1.SignToStringArg) (
+	sig string, err error) {
+	signingKey, err := getMySecretKey(
+		g, secretUI, libkb.DeviceSigningKeyType, arg.Reason)
+	if err != nil {
+		return
+	}
+
+	kp, ok := signingKey.(libkb.NaclSigningKeyPair)
+	if !ok || kp.Private == nil {
+		err = libkb.KeyCannotSignError{}
+		return
+	}
+
+	sig, _, err = kp.SignToString(arg.Msg)
 	return
 }
 

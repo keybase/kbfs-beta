@@ -25,9 +25,9 @@ func makeMDServer(config Config, serverRootDir *string, mdserverAddr string) (
 		// local persistent MD server
 		handlePath := filepath.Join(*serverRootDir, "kbfs_handles")
 		mdPath := filepath.Join(*serverRootDir, "kbfs_md")
-		revPath := filepath.Join(*serverRootDir, "kbfs_revisions")
+		branchPath := filepath.Join(*serverRootDir, "kbfs_branches")
 		return NewMDServerLocal(
-			config, handlePath, mdPath, revPath)
+			config, handlePath, mdPath, branchPath)
 	}
 
 	// remote MD server. this can't fail. reconnection attempts
@@ -190,13 +190,14 @@ func Init(localUser libkb.NormalizedUsername, serverRootDir *string, cpuProfileP
 
 	config.SetKeyManager(NewKeyManagerStandard(config))
 
-	// TODO: handle production mode when it exists
-	// in production mode, one must connect to a backend server in
-	// the dev.keybase.io domain
 	if libkb.G.Env.GetRunMode() == libkb.StagingRunMode &&
 		strings.HasSuffix(bserverAddr, "dev.keybase.io:443") &&
 		strings.HasSuffix(mdserverAddr, "dev.keybase.io:443") {
 		config.SetRootCerts([]byte(DevRootCerts))
+	} else if libkb.G.Env.GetRunMode() == libkb.ProductionRunMode &&
+		strings.HasSuffix(bserverAddr, "kbfs.keybase.io:443") &&
+		strings.HasSuffix(mdserverAddr, "kbfs.keybase.io:443") {
+		config.SetRootCerts([]byte(ProductionRootCerts))
 	}
 
 	mdServer, err := makeMDServer(config, serverRootDir, mdserverAddr)
@@ -237,6 +238,8 @@ func Init(localUser libkb.NormalizedUsername, serverRootDir *string, cpuProfileP
 
 	k := NewKBPKIClient(config)
 	config.SetKBPKI(k)
+
+	config.SetReporter(NewReporterKBPKI(config, 10, 1000))
 
 	if localUser == "" {
 		c := NewCryptoClient(config, libkb.G, config.MakeLogger(""))

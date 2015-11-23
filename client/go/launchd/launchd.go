@@ -1,9 +1,13 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package launchd
 
 import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -15,18 +19,22 @@ import (
 	"github.com/keybase/client/go/libkb"
 )
 
-var log = libkb.G.Log
-
 // Service defines a service
 type Service struct {
-	label string
+	label  string
+	writer io.Writer
 }
 
 // NewService constructs a launchd service.
 func NewService(label string) Service {
 	return Service{
-		label: label,
+		label:  label,
+		writer: os.Stdout,
 	}
+}
+
+func (s *Service) SetWriter(writer io.Writer) {
+	s.writer = writer
 }
 
 // Label for service
@@ -58,7 +66,7 @@ func (s Service) Load(restart bool) error {
 	if restart {
 		exec.Command("/bin/launchctl", "unload", plistDest).Output()
 	}
-	log.Info("Loading %s", s.label)
+	fmt.Fprintf(s.writer, "Loading %s\n", s.label)
 	_, err := exec.Command("/bin/launchctl", "load", "-w", plistDest).Output()
 	return err
 }
@@ -66,7 +74,7 @@ func (s Service) Load(restart bool) error {
 // Unload will unload the service
 func (s Service) Unload() error {
 	plistDest := s.plistDestination()
-	log.Info("Unloading %s", s.label)
+	fmt.Fprintf(s.writer, "Unloading %s\n", s.label)
 	_, err := exec.Command("/bin/launchctl", "unload", plistDest).Output()
 	return err
 }
@@ -79,7 +87,7 @@ func (s Service) Install(p Plist) (err error) {
 	plist := p.plist()
 	plistDest := s.plistDestination()
 
-	log.Info("Saving %s", plistDest)
+	fmt.Fprintf(s.writer, "Saving %s\n", plistDest)
 	file := libkb.NewFile(plistDest, []byte(plist), 0644)
 	err = file.Save()
 	if err != nil {
@@ -99,27 +107,29 @@ func (s Service) Uninstall() (err error) {
 
 	plistDest := s.plistDestination()
 	if _, err := os.Stat(plistDest); err == nil {
-		log.Info("Removing %s", plistDest)
+		fmt.Fprintf(s.writer, "Removing %s\n", plistDest)
 		err = os.Remove(plistDest)
 	}
 	return
 }
 
-// ListServices will return service with label containing the filter string.
-func ListServices(filter string) ([]Service, error) {
+// ListServices will return service with label that starts with a filter string.
+func ListServices(filters []string) ([]Service, error) {
 	files, err := ioutil.ReadDir(launchAgentDir())
 	if err != nil {
 		return nil, err
 	}
 	var services []Service
 	for _, f := range files {
-		name := f.Name()
+		fileName := f.Name()
 		suffix := ".plist"
 		// We care about services that contain the filter word and end in .plist
-		if strings.Contains(name, filter) && strings.HasSuffix(name, suffix) {
-			label := name[0 : len(name)-len(suffix)]
-			service := NewService(label)
-			services = append(services, service)
+		for _, filter := range filters {
+			if strings.HasPrefix(fileName, filter) && strings.HasSuffix(fileName, suffix) {
+				label := fileName[0 : len(fileName)-len(suffix)]
+				service := NewService(label)
+				services = append(services, service)
+			}
 		}
 	}
 	return services, nil
@@ -137,6 +147,9 @@ func (s ServiceStatus) Label() string { return s.label }
 
 // Pid for status (empty string if not running)
 func (s ServiceStatus) Pid() string { return s.pid }
+
+// LastExitStatus will be blank if pid > 0, or a number "123"
+func (s ServiceStatus) LastExitStatus() string { return s.lastExitStatus }
 
 // Description returns service status info
 func (s ServiceStatus) Description() string {
@@ -161,7 +174,7 @@ func (s ServiceStatus) IsRunning() bool {
 
 // StatusDescription returns the service status description
 func (s Service) StatusDescription() string {
-	status, err := s.Status()
+	status, err := s.LoadStatus()
 	if status == nil {
 		return fmt.Sprintf("%s: Not Running", s.label)
 	}
@@ -172,7 +185,7 @@ func (s Service) StatusDescription() string {
 }
 
 // Status returns service status
-func (s Service) Status() (*ServiceStatus, error) {
+func (s Service) LoadStatus() (*ServiceStatus, error) {
 	out, err := exec.Command("/bin/launchctl", "list").Output()
 	if err != nil {
 		return nil, err
@@ -209,66 +222,71 @@ func (s Service) Status() (*ServiceStatus, error) {
 	return nil, nil
 }
 
-// ShowServices ouputs keybase service info.
-func ShowServices(filter string, name string) (err error) {
-	services, err := ListServices(filter)
+// ShowServices outputs keybase service info.
+func ShowServices(filters []string, name string, out io.Writer) (err error) {
+	services, err := ListServices(filters)
 	if err != nil {
 		return
 	}
 	if len(services) > 0 {
-		log.Info("%s %s:", name, libkb.Pluralize(len(services), "service", "services", false))
+		fmt.Fprintf(out, "%s %s:\n", name, libkb.Pluralize(len(services), "service", "services", false))
 		for _, service := range services {
-			log.Info(service.StatusDescription())
+			fmt.Fprintf(out, "%s\n", service.StatusDescription())
 		}
-		log.Info("")
+		fmt.Fprintf(out, "\n")
 	} else {
-		log.Info("No %s services.\n", name)
+		fmt.Fprintf(out, "No %s services.\n\n", name)
 	}
 	return
 }
 
 // Install will install a service
-func Install(plist Plist) (err error) {
+func Install(plist Plist, writer io.Writer) (err error) {
 	service := NewService(plist.label)
+	service.SetWriter(writer)
 	return service.Install(plist)
 }
 
 // Uninstall will uninstall a keybase service
-func Uninstall(label string) error {
+func Uninstall(label string, writer io.Writer) error {
 	service := NewService(label)
+	service.SetWriter(writer)
 	return service.Uninstall()
 }
 
 // Start will start a keybase service
-func Start(label string) error {
+func Start(label string, writer io.Writer) error {
 	service := NewService(label)
 	return service.Load(false)
 }
 
 // Stop will stop a keybase service
-func Stop(label string) error {
+func Stop(label string, writer io.Writer) error {
 	service := NewService(label)
+	service.SetWriter(writer)
 	return service.Unload()
 }
 
 // ShowStatus shows status info for a service
-func ShowStatus(label string) error {
+func ShowStatus(label string, writer io.Writer) error {
 	service := NewService(label)
-	status, err := service.Status()
+	service.SetWriter(writer)
+	status, err := service.LoadStatus()
 	if err != nil {
 		return err
 	}
 	if status != nil {
-		log.Info(status.Description())
+		fmt.Fprintf(writer, "%s\n", status.Description())
 	} else {
-		log.Info("No service found with label: %s", label)
+		fmt.Fprintf(writer, "No service found with label: %s\n", label)
 	}
 	return nil
 }
 
 // Restart restarts a service
-func Restart(label string) error {
+func Restart(label string, writer io.Writer) error {
 	service := NewService(label)
+	service.SetWriter(writer)
 	return service.Load(true)
 }
 
@@ -276,8 +294,12 @@ func launchAgentDir() string {
 	return filepath.Join(launchdHomeDir(), "Library", "LaunchAgents")
 }
 
+func PlistDestination(label string) string {
+	return filepath.Join(launchAgentDir(), label+".plist")
+}
+
 func (s Service) plistDestination() string {
-	return filepath.Join(launchAgentDir(), s.label+".plist")
+	return PlistDestination(s.label)
 }
 
 func launchdHomeDir() string {

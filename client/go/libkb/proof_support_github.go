@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -19,6 +22,8 @@ type GithubChecker struct {
 func NewGithubChecker(p RemoteProofChainLink) (*GithubChecker, ProofError) {
 	return &GithubChecker{p}, nil
 }
+
+func (rc *GithubChecker) GetTorError() ProofError { return nil }
 
 func (rc *GithubChecker) CheckHint(h SigHint) ProofError {
 	given := strings.ToLower(h.apiURL)

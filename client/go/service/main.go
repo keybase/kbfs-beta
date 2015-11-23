@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package service
 
 import (
@@ -5,7 +8,6 @@ import (
 	"net"
 	"os"
 	"path"
-	"strings"
 
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/libcmdline"
@@ -19,16 +21,17 @@ type Service struct {
 	isDaemon bool
 	chdirTo  string
 	lockPid  *libkb.LockPIDFile
+	ForkType keybase1.ForkType
 	startCh  chan struct{}
-	stopCh   chan struct{}
+	stopCh   chan keybase1.ExitCode
 }
 
-func NewService(isDaemon bool, g *libkb.GlobalContext) *Service {
+func NewService(g *libkb.GlobalContext, isDaemon bool) *Service {
 	return &Service{
 		Contextified: libkb.NewContextified(g),
 		isDaemon:     isDaemon,
 		startCh:      make(chan struct{}),
-		stopCh:       make(chan struct{}),
+		stopCh:       make(chan keybase1.ExitCode),
 	}
 }
 
@@ -40,14 +43,14 @@ func (d *Service) RegisterProtocols(srv *rpc.Server, xp rpc.Transporter, connID 
 	protocols := []rpc.Protocol{
 		keybase1.AccountProtocol(NewAccountHandler(xp, g)),
 		keybase1.BTCProtocol(NewBTCHandler(xp, g)),
-		keybase1.ConfigProtocol(NewConfigHandler(xp, g)),
+		keybase1.ConfigProtocol(NewConfigHandler(xp, g, d)),
 		keybase1.CryptoProtocol(NewCryptoHandler(xp, g)),
 		keybase1.CtlProtocol(NewCtlHandler(xp, d, g)),
 		keybase1.DebuggingProtocol(NewDebuggingHandler(xp)),
 		keybase1.DeviceProtocol(NewDeviceHandler(xp, g)),
-		keybase1.DoctorProtocol(NewDoctorHandler(xp, g)),
 		keybase1.FavoriteProtocol(NewFavoriteHandler(xp, g)),
 		keybase1.IdentifyProtocol(NewIdentifyHandler(xp, g)),
+		keybase1.KbfsProtocol(NewKBFSHandler(xp, g)),
 		keybase1.LoginProtocol(NewLoginHandler(xp, g)),
 		keybase1.ProveProtocol(NewProveHandler(xp, g)),
 		keybase1.SessionProtocol(NewSessionHandler(xp, g)),
@@ -59,6 +62,7 @@ func (d *Service) RegisterProtocols(srv *rpc.Server, xp rpc.Transporter, connID 
 		keybase1.TrackProtocol(NewTrackHandler(xp, g)),
 		keybase1.UserProtocol(NewUserHandler(xp, g)),
 		keybase1.NotifyCtlProtocol(NewNotifyCtlHandler(xp, connID, g)),
+		keybase1.DelegateUiCtlProtocol(NewDelegateUICtlHandler(xp, connID, g)),
 	}
 	for _, proto := range protocols {
 		if err := srv.Register(proto); err != nil {
@@ -102,10 +106,15 @@ func (d *Service) Run() (err error) {
 		if d.startCh != nil {
 			close(d.startCh)
 		}
-		d.G().Shutdown()
+		d.G().Log.Debug("From Service.Run(): exit with code %d\n", d.G().ExitCode)
 	}()
 
-	d.G().Service = true
+	d.G().Log.Debug("+ service starting up; forkType=%v", d.ForkType)
+
+	// Sets this global context to "service" mode which will toggle a flag
+	// and will also set in motion various go-routine based managers
+	d.G().SetService()
+	d.G().SetUIRouter(NewUIRouter(d.G()))
 
 	err = d.writeServiceInfo()
 	if err != nil {
@@ -132,10 +141,10 @@ func (d *Service) Run() (err error) {
 	if l, err = d.ConfigRPCServer(); err != nil {
 		return
 	}
-	if err = d.ListenLoopWithStopper(l); err != nil {
-		return
-	}
-	return
+
+	d.G().ExitCode, err = d.ListenLoopWithStopper(l)
+
+	return err
 }
 
 func (d *Service) StartLoopbackServer() error {
@@ -170,7 +179,7 @@ func (d *Service) writeServiceInfo() error {
 	}
 
 	// Write runtime info file
-	rtInfo := libkb.KeybaseServiceInfo()
+	rtInfo := libkb.KeybaseServiceInfo(d.G())
 	return rtInfo.WriteFile(path.Join(runtimeDir, "keybased.info"))
 }
 
@@ -245,26 +254,22 @@ func (d *Service) ConfigRPCServer() (l net.Listener, err error) {
 		close(d.startCh)
 		d.startCh = nil
 	}
-
-	d.G().PushShutdownHook(func() error {
-		return l.Close()
-	})
-
 	return
 }
 
-func (d *Service) Stop() {
-	d.stopCh <- struct{}{}
+func (d *Service) Stop(exitCode keybase1.ExitCode) {
+	d.stopCh <- exitCode
 }
 
-func (d *Service) ListenLoopWithStopper(l net.Listener) (err error) {
+func (d *Service) ListenLoopWithStopper(l net.Listener) (exitCode keybase1.ExitCode, err error) {
 	ch := make(chan error)
 	go func() {
 		ch <- d.ListenLoop(l)
 	}()
-	<-d.stopCh
+	exitCode = <-d.stopCh
 	l.Close()
-	return <-ch
+	d.G().Log.Debug("Left listen loop w/ exit code %d\n", exitCode)
+	return exitCode, <-ch
 }
 
 func (d *Service) ListenLoop(l net.Listener) (err error) {
@@ -273,8 +278,7 @@ func (d *Service) ListenLoop(l net.Listener) (err error) {
 		var c net.Conn
 		if c, err = l.Accept(); err != nil {
 
-			// net.errClosing isn't exported, so do this.. UGLY!
-			if strings.HasSuffix(err.Error(), "use of closed network connection") {
+			if libkb.IsSocketClosedError(err) {
 				err = nil
 			}
 
@@ -287,13 +291,17 @@ func (d *Service) ListenLoop(l net.Listener) (err error) {
 
 func (d *Service) ParseArgv(ctx *cli.Context) error {
 	d.chdirTo = ctx.String("chdir")
+	if ctx.Bool("auto-forked") {
+		d.ForkType = keybase1.ForkType_AUTO
+	} else if ctx.Bool("watchdog-forked") {
+		d.ForkType = keybase1.ForkType_WATCHDOG
+	}
 	return nil
 }
 
 func NewCmdService(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.Command {
 	return cli.Command{
-		Name:  "service",
-		Usage: "Run the keybase service",
+		Name: "service",
 		Flags: []cli.Flag{
 			cli.StringFlag{
 				Name:  "chdir",
@@ -303,9 +311,17 @@ func NewCmdService(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.Comma
 				Name:  "label",
 				Usage: "Specifying a label can help identify services.",
 			},
+			cli.BoolFlag{
+				Name:  "auto-forked",
+				Usage: "Specify if this binary was auto-forked from the client",
+			},
+			cli.BoolFlag{
+				Name:  "watchdog-forked",
+				Usage: "Specify if this binary was started by the watchdog",
+			},
 		},
 		Action: func(c *cli.Context) {
-			cl.ChooseCommand(NewService(true /* isDaemon */, g), "service", c)
+			cl.ChooseCommand(NewService(g, true /* isDaemon */), "service", c)
 			cl.SetService()
 		},
 	}

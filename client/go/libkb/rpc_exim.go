@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 // Export-Import for RPC stubs
 
 package libkb
@@ -34,6 +37,7 @@ func (l LinkCheckResult) Export() keybase1.LinkCheckResult {
 	ret := keybase1.LinkCheckResult{
 		ProofId:     l.position,
 		ProofResult: ExportProofError(l.err),
+		TorWarning:  l.torWarning,
 	}
 	if l.cached != nil {
 		ret.Cached = l.cached.Export()
@@ -228,6 +232,8 @@ func ImportStatusAsError(s *keybase1.Status) error {
 		return DeviceRequiredError{}
 	case SCSibkeyAlreadyExists:
 		return SibkeyAlreadyExistsError{}
+	case SCNoUIDelegation:
+		return UIDelegationUnavailableError{}
 	default:
 		ase := AppStatusError{
 			Code:   s.Code,
@@ -339,6 +345,7 @@ func (ir *IdentifyOutcome) Export() *keybase1.IdentifyOutcome {
 		NumProofSuccesses: ir.NumProofSuccesses(),
 		Revoked:           del,
 		TrackOptions:      ir.TrackOptions,
+		Reason:            ir.Reason,
 	}
 	return ret
 }
@@ -812,6 +819,14 @@ func (e SibkeyAlreadyExistsError) ToStatus() keybase1.Status {
 	return keybase1.Status{
 		Code: SCSibkeyAlreadyExists,
 		Name: "SC_SIBKEY_ALREADY_EXISTS",
+		Desc: e.Error(),
+	}
+}
+
+func (e UIDelegationUnavailableError) ToStatus() keybase1.Status {
+	return keybase1.Status{
+		Code: SCNoUIDelegation,
+		Name: "SC_UI_DELEGATION_UNAVAILABLE",
 		Desc: e.Error(),
 	}
 }

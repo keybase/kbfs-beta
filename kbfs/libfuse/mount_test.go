@@ -58,6 +58,13 @@ func makeFS(t testing.TB, config *libkbfs.ConfigLocal) (
 
 type fileInfoCheck func(fi os.FileInfo) error
 
+func mustBeFileWithSize(fi os.FileInfo, size int64) error {
+	if fi.Size() != size {
+		return fmt.Errorf("Bad file size: %d", fi.Size())
+	}
+	return nil
+}
+
 func mustBeDir(fi os.FileInfo) error {
 	if !fi.IsDir() {
 		return fmt.Errorf("not a directory: %v", fi)
@@ -116,6 +123,38 @@ func timeEqualFuzzy(a, b time.Time, skew time.Duration) bool {
 	return !a.Before(b1) && !a.After(b2)
 }
 
+func testStateForHandle(t *testing.T, config libkbfs.Config,
+	h *libkbfs.TlfHandle) {
+	ops := config.KBFSOps()
+	ctx := context.Background()
+	root, _, err := ops.GetOrCreateRootNodeForHandle(ctx, h,
+		libkbfs.MasterBranch)
+	if err != nil {
+		t.Fatalf("Couldn't get root for handle %s", h.ToString(ctx, config))
+	}
+
+	libkbfs.TestStateForTlf(t, ctx, config, root.GetFolderBranch().Tlf)
+}
+
+func testStateForPrivateFolder(t *testing.T, config libkbfs.Config,
+	tlf string) {
+	h, err := libkbfs.ParseTlfHandle(context.Background(), config, tlf)
+	if err != nil {
+		t.Fatalf("cannot parse %s as folder: %v", tlf, err)
+	}
+	testStateForHandle(t, config, h)
+}
+
+func testStateForPublicFolder(t *testing.T, config libkbfs.Config,
+	tlf string) {
+	h, err := libkbfs.ParseTlfHandle(context.Background(), config, tlf)
+	if err != nil {
+		t.Fatalf("cannot parse %s as folder: %v", tlf, err)
+	}
+	h.Readers = append(h.Readers, keybase1.PublicUID)
+	testStateForHandle(t, config, h)
+}
+
 func TestStatRoot(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
 	defer config.Shutdown()
@@ -146,6 +185,7 @@ func TestStatPrivate(t *testing.T) {
 	if g, e := fi.Mode().String(), `drwxr-xr-x`; g != e {
 		t.Errorf("wrong mode for folder: %q != %q", g, e)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestStatPublic(t *testing.T) {
@@ -162,6 +202,7 @@ func TestStatPublic(t *testing.T) {
 	if g, e := fi.Mode().String(), `drwxr-xr-x`; g != e {
 		t.Errorf("wrong mode for folder: %q != %q", g, e)
 	}
+	testStateForPublicFolder(t, config, "jdoe")
 }
 
 func TestStatMyFolder(t *testing.T) {
@@ -178,6 +219,7 @@ func TestStatMyFolder(t *testing.T) {
 	if g, e := fi.Mode().String(), `drwx------`; g != e {
 		t.Errorf("wrong mode for folder: %q != %q", g, e)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestStatNonexistentFolder(t *testing.T) {
@@ -190,6 +232,7 @@ func TestStatNonexistentFolder(t *testing.T) {
 	if _, err := os.Lstat(path.Join(mnt.Dir, PrivateName, "does-not-exist")); !os.IsNotExist(err) {
 		t.Fatalf("expected ENOENT: %v", err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestStatAlias(t *testing.T) {
@@ -214,6 +257,7 @@ func TestStatAlias(t *testing.T) {
 	if g, e := target, "jdoe"; g != e {
 		t.Errorf("wrong alias symlink target: %q != %q", g, e)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestStatMyPublic(t *testing.T) {
@@ -230,6 +274,7 @@ func TestStatMyPublic(t *testing.T) {
 	if g, e := fi.Mode().String(), `drwxr-xr-x`; g != e {
 		t.Errorf("wrong mode for folder: %q != %q", g, e)
 	}
+	testStateForPublicFolder(t, config, "jdoe")
 }
 
 func TestReaddirRoot(t *testing.T) {
@@ -269,6 +314,7 @@ func TestReaddirPrivate(t *testing.T) {
 	checkDir(t, path.Join(mnt.Dir, PrivateName), map[string]fileInfoCheck{
 		"jdoe": mustBeDir,
 	})
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestReaddirPublic(t *testing.T) {
@@ -296,6 +342,7 @@ func TestReaddirPublic(t *testing.T) {
 	checkDir(t, path.Join(mnt.Dir, PublicName), map[string]fileInfoCheck{
 		"jdoe": mustBeDir,
 	})
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestReaddirMyFolderEmpty(t *testing.T) {
@@ -306,6 +353,7 @@ func TestReaddirMyFolderEmpty(t *testing.T) {
 	defer cancelFn()
 
 	checkDir(t, path.Join(mnt.Dir, PrivateName, "jdoe"), map[string]fileInfoCheck{})
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestReaddirMyFolderWithFiles(t *testing.T) {
@@ -329,6 +377,7 @@ func TestReaddirMyFolderWithFiles(t *testing.T) {
 		}
 	}
 	checkDir(t, path.Join(mnt.Dir, PrivateName, "jdoe"), files)
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func testOneCreateThenRead(t *testing.T, p string) {
@@ -363,6 +412,7 @@ func TestCreateThenRead(t *testing.T) {
 
 	p := path.Join(mnt.Dir, PrivateName, "jdoe", "myfile")
 	testOneCreateThenRead(t, p)
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 // Tests that writing and reading multiple files works, implicitly
@@ -380,6 +430,7 @@ func TestMultipleCreateThenRead(t *testing.T) {
 	testOneCreateThenRead(t, p1)
 	p2 := path.Join(mnt.Dir, PrivateName, "jdoe", "myfile2")
 	testOneCreateThenRead(t, p2)
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestReadUnflushed(t *testing.T) {
@@ -408,6 +459,7 @@ func TestReadUnflushed(t *testing.T) {
 	if g, e := string(buf), input; g != e {
 		t.Errorf("bad file contents: %q != %q", g, e)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestMountAgain(t *testing.T) {
@@ -440,6 +492,7 @@ func TestMountAgain(t *testing.T) {
 			t.Errorf("bad file contents: %q != %q", g, e)
 		}
 	}()
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestCreateExecutable(t *testing.T) {
@@ -460,6 +513,7 @@ func TestCreateExecutable(t *testing.T) {
 	if g, e := fi.Mode().String(), `-rwxr-xr-x`; g != e {
 		t.Errorf("wrong mode for executable: %q != %q", g, e)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestMkdir(t *testing.T) {
@@ -480,6 +534,7 @@ func TestMkdir(t *testing.T) {
 	if g, e := fi.Mode().String(), `drwx------`; g != e {
 		t.Errorf("wrong mode for subdir: %q != %q", g, e)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestMkdirAndCreateDeep(t *testing.T) {
@@ -521,6 +576,7 @@ func TestMkdirAndCreateDeep(t *testing.T) {
 			t.Errorf("bad file contents: %q != %q", g, e)
 		}
 	}()
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestSymlink(t *testing.T) {
@@ -553,6 +609,7 @@ func TestSymlink(t *testing.T) {
 			t.Errorf("bad symlink target: %q != %q", g, e)
 		}
 	}()
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRename(t *testing.T) {
@@ -575,10 +632,7 @@ func TestRename(t *testing.T) {
 
 	checkDir(t, path.Join(mnt.Dir, PrivateName, "jdoe"), map[string]fileInfoCheck{
 		"new": func(fi os.FileInfo) error {
-			if fi.Size() != int64(len(input)) {
-				return fmt.Errorf("Bad file size: %d", fi.Size())
-			}
-			return nil
+			return mustBeFileWithSize(fi, int64(len(input)))
 		},
 	})
 
@@ -593,6 +647,7 @@ func TestRename(t *testing.T) {
 	if _, err := ioutil.ReadFile(p1); !os.IsNotExist(err) {
 		t.Errorf("old name still exists: %v", err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRenameOverwrite(t *testing.T) {
@@ -631,6 +686,7 @@ func TestRenameOverwrite(t *testing.T) {
 	if _, err := ioutil.ReadFile(p1); !os.IsNotExist(err) {
 		t.Errorf("old name still exists: %v", err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRenameCrossDir(t *testing.T) {
@@ -673,6 +729,7 @@ func TestRenameCrossDir(t *testing.T) {
 	if _, err := ioutil.ReadFile(p1); !os.IsNotExist(err) {
 		t.Errorf("old name still exists: %v", err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRenameCrossFolder(t *testing.T) {
@@ -726,6 +783,8 @@ func TestRenameCrossFolder(t *testing.T) {
 	if _, err := ioutil.ReadFile(p2); !os.IsNotExist(err) {
 		t.Errorf("new name exists even on error: %v", err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
+	testStateForPrivateFolder(t, config, "wsmith,jdoe")
 }
 
 func TestWriteThenRename(t *testing.T) {
@@ -758,10 +817,7 @@ func TestWriteThenRename(t *testing.T) {
 	// check that the new path has the right length still
 	checkDir(t, path.Join(mnt.Dir, PrivateName, "jdoe"), map[string]fileInfoCheck{
 		"new": func(fi os.FileInfo) error {
-			if fi.Size() != int64(len(input)) {
-				return fmt.Errorf("Bad file size: %d", fi.Size())
-			}
-			return nil
+			return mustBeFileWithSize(fi, int64(len(input)))
 		},
 	})
 
@@ -782,6 +838,7 @@ func TestWriteThenRename(t *testing.T) {
 	if _, err := ioutil.ReadFile(p1); !os.IsNotExist(err) {
 		t.Errorf("old name still exists: %v", err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestWriteThenRenameCrossDir(t *testing.T) {
@@ -820,10 +877,7 @@ func TestWriteThenRenameCrossDir(t *testing.T) {
 	// check that the new path has the right length still
 	checkDir(t, path.Join(mnt.Dir, PrivateName, "jdoe", "two"), map[string]fileInfoCheck{
 		"new": func(fi os.FileInfo) error {
-			if fi.Size() != int64(len(input)) {
-				return fmt.Errorf("Bad file size: %d", fi.Size())
-			}
-			return nil
+			return mustBeFileWithSize(fi, int64(len(input)))
 		},
 	})
 
@@ -844,6 +898,7 @@ func TestWriteThenRenameCrossDir(t *testing.T) {
 	if _, err := ioutil.ReadFile(p1); !os.IsNotExist(err) {
 		t.Errorf("old name still exists: %v", err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRemoveFile(t *testing.T) {
@@ -868,6 +923,7 @@ func TestRemoveFile(t *testing.T) {
 	if _, err := ioutil.ReadFile(p); !os.IsNotExist(err) {
 		t.Errorf("file still exists: %v", err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRemoveDir(t *testing.T) {
@@ -891,6 +947,7 @@ func TestRemoveDir(t *testing.T) {
 	if _, err := os.Stat(p); !os.IsNotExist(err) {
 		t.Errorf("file still exists: %v", err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRemoveDirNotEmpty(t *testing.T) {
@@ -917,6 +974,7 @@ func TestRemoveDirNotEmpty(t *testing.T) {
 	if _, err := ioutil.ReadFile(pFile); err != nil {
 		t.Errorf("file was lost: %v", err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRemoveFileWhileOpenWriting(t *testing.T) {
@@ -951,6 +1009,7 @@ func TestRemoveFileWhileOpenWriting(t *testing.T) {
 	if _, err := ioutil.ReadFile(p); !os.IsNotExist(err) {
 		t.Errorf("file still exists: %v", err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRemoveFileWhileOpenReading(t *testing.T) {
@@ -993,6 +1052,7 @@ func TestRemoveFileWhileOpenReading(t *testing.T) {
 	if _, err := ioutil.ReadFile(p); !os.IsNotExist(err) {
 		t.Errorf("file still exists: %v", err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRemoveFileWhileOpenReadingAcrossMounts(t *testing.T) {
@@ -1050,6 +1110,7 @@ func TestRemoveFileWhileOpenReadingAcrossMounts(t *testing.T) {
 	if _, err := ioutil.ReadFile(p1); !os.IsNotExist(err) {
 		t.Errorf("file still exists: %v", err)
 	}
+	testStateForPrivateFolder(t, config1, "user1,user2")
 }
 
 func TestRenameOverFileWhileOpenReadingAcrossMounts(t *testing.T) {
@@ -1124,6 +1185,7 @@ func TestRenameOverFileWhileOpenReadingAcrossMounts(t *testing.T) {
 	if g, e := string(buf), inputOther; g != e {
 		t.Errorf("bad file contents: %q != %q", g, e)
 	}
+	testStateForPrivateFolder(t, config1, "user1,user2")
 }
 
 func TestTruncateGrow(t *testing.T) {
@@ -1159,6 +1221,7 @@ func TestTruncateGrow(t *testing.T) {
 	if g, e := string(buf), input+strings.Repeat("\x00", newSize-len(input)); g != e {
 		t.Errorf("read wrong content: %q != %q", g, e)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestTruncateShrink(t *testing.T) {
@@ -1194,6 +1257,7 @@ func TestTruncateShrink(t *testing.T) {
 	if g, e := string(buf), input[:newSize]; g != e {
 		t.Errorf("read wrong content: %q != %q", g, e)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestChmodExec(t *testing.T) {
@@ -1220,6 +1284,7 @@ func TestChmodExec(t *testing.T) {
 	if g, e := fi.Mode().String(), `-rwxr-xr-x`; g != e {
 		t.Errorf("wrong mode: %q != %q", g, e)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestChmodNonExec(t *testing.T) {
@@ -1246,6 +1311,7 @@ func TestChmodNonExec(t *testing.T) {
 	if g, e := fi.Mode().String(), `-rw-r--r--`; g != e {
 		t.Errorf("wrong mode: %q != %q", g, e)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestChmodDir(t *testing.T) {
@@ -1268,6 +1334,7 @@ func TestChmodDir(t *testing.T) {
 	default:
 		t.Fatalf("expected a PathError, got %T: %v", err, err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestSetattrFileMtime(t *testing.T) {
@@ -1298,6 +1365,7 @@ func TestSetattrFileMtime(t *testing.T) {
 	if g, e := fi.ModTime(), mtime; !fsTimeEqual(g, e) {
 		t.Errorf("wrong mtime: %v !~= %v", g, e)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestSetattrFileMtimeNow(t *testing.T) {
@@ -1337,6 +1405,7 @@ func TestSetattrFileMtimeNow(t *testing.T) {
 	if g, e := fi.ModTime(), now; !timeEqualFuzzy(g, e, 1*time.Second) {
 		t.Errorf("mtime is wrong: %v !~= %v", g, e)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestSetattrDirMtime(t *testing.T) {
@@ -1366,6 +1435,7 @@ func TestSetattrDirMtime(t *testing.T) {
 	if g, e := fi.ModTime(), mtime; !fsTimeEqual(g, e) {
 		t.Errorf("wrong mtime: %v !~= %v", g, e)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestSetattrDirMtimeNow(t *testing.T) {
@@ -1404,6 +1474,7 @@ func TestSetattrDirMtimeNow(t *testing.T) {
 	if g, e := fi.ModTime(), now; !timeEqualFuzzy(g, e, 1*time.Second) {
 		t.Errorf("mtime is wrong: %v !~= %v", g, e)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestFsync(t *testing.T) {
@@ -1429,6 +1500,7 @@ func TestFsync(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatalf("close error: %v", err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestReaddirMyPublic(t *testing.T) {
@@ -1449,6 +1521,7 @@ func TestReaddirMyPublic(t *testing.T) {
 	}
 
 	checkDir(t, path.Join(mnt.Dir, PublicName, "jdoe"), files)
+	testStateForPublicFolder(t, config, "jdoe")
 }
 
 func TestReaddirOtherFolderAsReader(t *testing.T) {
@@ -1474,6 +1547,7 @@ func TestReaddirOtherFolderAsReader(t *testing.T) {
 	checkDir(t, path.Join(mnt.Dir, PrivateName, "jdoe#wsmith"), map[string]fileInfoCheck{
 		"myfile": nil,
 	})
+	testStateForPrivateFolder(t, config, "jdoe#wsmith")
 }
 
 func TestStatOtherFolder(t *testing.T) {
@@ -1504,6 +1578,7 @@ func TestStatOtherFolder(t *testing.T) {
 	default:
 		t.Fatalf("expected a PathError, got %T: %v", err, err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestStatOtherFolderFirstUse(t *testing.T) {
@@ -1525,6 +1600,7 @@ func TestStatOtherFolderFirstUse(t *testing.T) {
 	default:
 		t.Fatalf("expected a PathError, got %T: %v", err, err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestStatOtherFolderPublic(t *testing.T) {
@@ -1556,6 +1632,7 @@ func TestStatOtherFolderPublic(t *testing.T) {
 	if g, e := fi.Mode().String(), `drwxr-xr-x`; g != e {
 		t.Errorf("wrong mode for folder: %q != %q", g, e)
 	}
+	testStateForPublicFolder(t, config, "jdoe")
 }
 
 func TestStatOtherFolderPublicFirstUse(t *testing.T) {
@@ -1577,6 +1654,7 @@ func TestStatOtherFolderPublicFirstUse(t *testing.T) {
 	default:
 		t.Fatalf("expected a PathError, got %T: %v", err, err)
 	}
+	testStateForPublicFolder(t, config, "jdoe")
 }
 
 func TestReadPublicFile(t *testing.T) {
@@ -1607,6 +1685,7 @@ func TestReadPublicFile(t *testing.T) {
 	if g, e := string(buf), input; g != e {
 		t.Errorf("bad file contents: %q != %q", g, e)
 	}
+	testStateForPublicFolder(t, config, "jdoe")
 }
 
 func TestReaddirOtherFolderPublicAsAnyone(t *testing.T) {
@@ -1632,6 +1711,7 @@ func TestReaddirOtherFolderPublicAsAnyone(t *testing.T) {
 	checkDir(t, path.Join(mnt.Dir, PublicName, "jdoe"), map[string]fileInfoCheck{
 		"myfile": nil,
 	})
+	testStateForPublicFolder(t, config, "jdoe")
 }
 
 func TestReaddirOtherFolderAsAnyone(t *testing.T) {
@@ -1662,6 +1742,7 @@ func TestReaddirOtherFolderAsAnyone(t *testing.T) {
 	default:
 		t.Fatalf("expected a PathError, got %T: %v", err, err)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func syncFolderToServer(t *testing.T, tlf string, fs *FS) {
@@ -1741,6 +1822,7 @@ func TestInvalidateDataOnWrite(t *testing.T) {
 			t.Errorf("wrong content: %q != %q", g, e)
 		}
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestInvalidatePublicDataOnWrite(t *testing.T) {
@@ -1796,6 +1878,7 @@ func TestInvalidatePublicDataOnWrite(t *testing.T) {
 			t.Errorf("wrong content: %q != %q", g, e)
 		}
 	}
+	testStateForPublicFolder(t, config, "jdoe")
 }
 
 func TestInvalidateDataOnTruncate(t *testing.T) {
@@ -1851,6 +1934,7 @@ func TestInvalidateDataOnTruncate(t *testing.T) {
 			t.Errorf("wrong content: %q != %q", g, e)
 		}
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestInvalidateDataOnLocalWrite(t *testing.T) {
@@ -1921,6 +2005,7 @@ func TestInvalidateDataOnLocalWrite(t *testing.T) {
 			t.Errorf("wrong content: %q != %q", g, e)
 		}
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestInvalidateEntryOnDelete(t *testing.T) {
@@ -1959,6 +2044,7 @@ func TestInvalidateEntryOnDelete(t *testing.T) {
 	if buf, err := ioutil.ReadFile(path.Join(mnt2.Dir, PrivateName, "jdoe", "myfile")); !os.IsNotExist(err) {
 		t.Fatalf("expected ENOENT: %v: %q", err, buf)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func testForErrorText(t *testing.T, path string, expectedErr error,
@@ -2017,6 +2103,7 @@ func TestErrorFile(t *testing.T) {
 		expectedErr, "dir")
 	testForErrorText(t, path.Join(mnt.Dir, PrivateName, "jdoe", libkbfs.ErrorFile),
 		expectedErr, "dir")
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 type testMountObserver struct {
@@ -2104,10 +2191,7 @@ func TestInvalidateAcrossMounts(t *testing.T) {
 
 	checkDir(t, mydir2, map[string]fileInfoCheck{
 		"b": func(fi os.FileInfo) error {
-			if fi.Size() != int64(len(input1)) {
-				return fmt.Errorf("Bad file size: %d", fi.Size())
-			}
-			return nil
+			return mustBeFileWithSize(fi, int64(len(input1)))
 		},
 	})
 
@@ -2119,6 +2203,7 @@ func TestInvalidateAcrossMounts(t *testing.T) {
 	if g, e := string(buf), input1; g != e {
 		t.Errorf("wrong content: %q != %q", g, e)
 	}
+	testStateForPrivateFolder(t, config1, "user1,user2")
 }
 
 func TestInvalidateAppendAcrossMounts(t *testing.T) {
@@ -2190,6 +2275,7 @@ func TestInvalidateAppendAcrossMounts(t *testing.T) {
 	if g, e := string(buf), input1+input2; g != e {
 		t.Errorf("wrong content: %q != %q", g, e)
 	}
+	testStateForPrivateFolder(t, config1, "user1,user2")
 }
 
 func TestInvalidateRenameToUncachedDir(t *testing.T) {
@@ -2265,6 +2351,7 @@ func TestInvalidateRenameToUncachedDir(t *testing.T) {
 	if g, e := string(buf), input2; g != e {
 		t.Errorf("wrong content: %q != %q", g, e)
 	}
+	testStateForPrivateFolder(t, config1, "user1,user2")
 }
 
 func TestStatusFile(t *testing.T) {
@@ -2302,6 +2389,7 @@ func TestStatusFile(t *testing.T) {
 		t.Fatalf("Status file contents (%s) didn't match expected status %v",
 			buf, status)
 	}
+	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 // TODO: remove once we have automatic conflict resolution tests
@@ -2337,6 +2425,10 @@ func TestUnstageFile(t *testing.T) {
 		rootNode2.GetFolderBranch())
 	if err != nil {
 		t.Fatalf("Couldn't pause user 2 updates")
+	}
+	err = libkbfs.DisableCRForTesting(config2, rootNode2.GetFolderBranch())
+	if err != nil {
+		t.Fatalf("Couldn't disable user 2 CR")
 	}
 
 	// user1 writes a file and makes a few directories
@@ -2410,4 +2502,5 @@ func TestUnstageFile(t *testing.T) {
 	if g, e := string(buf), input1; g != e {
 		t.Errorf("wrong content: %q != %q", g, e)
 	}
+	testStateForPrivateFolder(t, config1, "user1,user2")
 }

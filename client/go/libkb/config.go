@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -20,8 +23,8 @@ type JSONConfigFile struct {
 	userConfigWrapper *UserConfigWrapper
 }
 
-func NewJSONConfigFile(s string) *JSONConfigFile {
-	return &JSONConfigFile{NewJSONFile(s, "config"), &UserConfigWrapper{}}
+func NewJSONConfigFile(g *GlobalContext, s string) *JSONConfigFile {
+	return &JSONConfigFile{NewJSONFile(g, s, "config"), &UserConfigWrapper{}}
 }
 
 type valueGetter func(*jsonw.Wrapper) (interface{}, error)
@@ -99,7 +102,7 @@ func (f JSONConfigFile) GetDurationAtPath(p string) (time.Duration, bool) {
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
-		G.Log.Warning("invalid time duration in config file: %s => %s", p, s)
+		f.G().Log.Warning("invalid time duration in config file: %s => %s", p, s)
 		return 0, false
 	}
 	return d, true
@@ -108,7 +111,7 @@ func (f JSONConfigFile) GetDurationAtPath(p string) (time.Duration, bool) {
 func (f JSONConfigFile) GetTopLevelString(s string) (ret string) {
 	var e error
 	f.jw.AtKey(s).GetStringVoid(&ret, &e)
-	G.Log.Debug("Config: mapping %s -> %s", s, ret)
+	f.G().Log.Debug("Config: mapping %s -> %s", s, ret)
 	return
 }
 
@@ -190,7 +193,7 @@ func (f *JSONConfigFile) SwitchUser(nu NormalizedUsername) error {
 	defer f.userConfigWrapper.Unlock()
 
 	if cu := f.getCurrentUser(); cu.Eq(nu) {
-		G.Log.Debug("| Already configured as user=%s", nu)
+		f.G().Log.Debug("| Already configured as user=%s", nu)
 		return nil
 	}
 
@@ -200,6 +203,27 @@ func (f *JSONConfigFile) SwitchUser(nu NormalizedUsername) error {
 
 	f.jw.SetKey("current_user", jsonw.NewString(nu.String()))
 	f.userConfigWrapper.userConfig = nil
+	return f.flush()
+}
+
+func (f *JSONConfigFile) NukeUser(nu NormalizedUsername) error {
+	f.userConfigWrapper.Lock()
+	defer f.userConfigWrapper.Unlock()
+
+	if cu := f.getCurrentUser(); cu.Eq(nu) {
+		err := f.jw.DeleteValueAtPath("current_user")
+		if err != nil {
+			return err
+		}
+	}
+
+	if !f.jw.AtKey("users").AtKey(nu.String()).IsNil() {
+		err := f.jw.DeleteValueAtPath("users." + nu.String())
+		if err != nil {
+			return err
+		}
+	}
+
 	return f.flush()
 }
 
@@ -243,7 +267,7 @@ func (f *JSONConfigFile) SetDeviceID(did keybase1.DeviceID) (err error) {
 	f.userConfigWrapper.Lock()
 	defer f.userConfigWrapper.Unlock()
 
-	G.Log.Debug("| Setting DeviceID to %v\n", did)
+	f.G().Log.Debug("| Setting DeviceID to %v\n", did)
 	var u *UserConfig
 	if u, err = f.getUserConfigWithLock(); err != nil {
 	} else if u == nil {
@@ -274,7 +298,7 @@ func (f *JSONConfigFile) SetUserConfig(u *UserConfig, overwrite bool) error {
 func (f *JSONConfigFile) setUserConfigWithLock(u *UserConfig, overwrite bool) error {
 
 	if u == nil {
-		G.Log.Debug("| SetUserConfig(nil)")
+		f.G().Log.Debug("| SetUserConfig(nil)")
 		f.jw.DeleteKey("current_user")
 		f.userConfigWrapper.userConfig = nil
 		return f.flush()
@@ -282,7 +306,7 @@ func (f *JSONConfigFile) setUserConfigWithLock(u *UserConfig, overwrite bool) er
 
 	parent := f.jw.AtKey("users")
 	un := u.GetUsername()
-	G.Log.Debug("| SetUserConfig(%s)", un)
+	f.G().Log.Debug("| SetUserConfig(%s)", un)
 	if parent.IsNil() {
 		parent = jsonw.NewDictionary()
 		f.jw.SetKey("users", parent)
@@ -412,6 +436,22 @@ func (f JSONConfigFile) GetDeviceID() (ret keybase1.DeviceID) {
 	return ret
 }
 
+func (f JSONConfigFile) GetTorMode() (ret TorMode, err error) {
+	if s, isSet := f.GetStringAtPath("tor.mode"); isSet {
+		ret, err = StringToTorMode(s)
+	}
+	return ret, err
+}
+
+func (f JSONConfigFile) GetTorHiddenAddress() string {
+	s, _ := f.GetStringAtPath("tor.hidden_address")
+	return s
+}
+func (f JSONConfigFile) GetTorProxy() string {
+	s, _ := f.GetStringAtPath("tor.proxy")
+	return s
+}
+
 func (f JSONConfigFile) GetProxy() string {
 	return f.GetTopLevelString("proxy")
 }
@@ -496,7 +536,7 @@ func (f JSONConfigFile) GetBundledCA(host string) (ret string) {
 	var err error
 	f.jw.AtKey("bundled_CAs").AtKey(host).GetStringVoid(&ret, &err)
 	if err == nil {
-		G.Log.Debug("Read bundled CA for %s", host)
+		f.G().Log.Debug("Read bundled CA for %s", host)
 	}
 	return ret
 }

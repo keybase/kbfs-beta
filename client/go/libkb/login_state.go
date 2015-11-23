@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -44,7 +47,7 @@ type LoginContext interface {
 	CreateStreamCacheViaStretch(passphrase string) error
 	PassphraseStreamCache() *PassphraseStreamCache
 	ClearStreamCache()
-	SetStreamGeneration(gen PassphraseGeneration)
+	SetStreamGeneration(gen PassphraseGeneration, nilPPStreamOK bool)
 	GetStreamGeneration() PassphraseGeneration
 
 	CreateLoginSessionWithSalt(emailOrUsername string, salt []byte) error
@@ -54,7 +57,8 @@ type LoginContext interface {
 
 	LocalSession() *Session
 	EnsureUsername(username NormalizedUsername)
-	SaveState(sessionID, csrf string, username NormalizedUsername, uid keybase1.UID) error
+	SaveState(sessionID, csrf string, username NormalizedUsername, uid keybase1.UID, deviceID keybase1.DeviceID) error
+	SaveStateTmp(sessionID, csrf string, username NormalizedUsername, uid keybase1.UID, deviceID keybase1.DeviceID) (string, error)
 
 	Keyring() (*SKBKeyringFile, error)
 	LockedLocalSecretKey(ska SecretKeyArg) (*SKB, error)
@@ -149,9 +153,6 @@ func (s *LoginState) Logout() error {
 	err := s.loginHandle(func(a LoginContext) error {
 		return s.logout(a)
 	}, nil, "logout")
-	if err == nil {
-		s.G().NotifyRouter.HandleLogout()
-	}
 	return err
 }
 
@@ -192,6 +193,17 @@ func (s *LoginState) GetPassphraseStream(ui SecretUI) (pps *PassphraseStream, er
 	s.G().Log.Debug("+ GetPassphraseStream() called")
 	defer func() { s.G().Log.Debug("- GetPassphraseStream() -> %s", ErrToOk(err)) }()
 
+	pps, err = s.GetPassphraseStreamForUser(ui, string(s.G().Env.GetUsername()))
+	return
+}
+
+// GetPassphraseStreamForUser either returns a cached, verified passphrase stream
+// (maybe from a previous login) or generates a new one via Login. It will
+// return the current Passphrase stream on success or an error on failure.
+func (s *LoginState) GetPassphraseStreamForUser(ui SecretUI, username string) (pps *PassphraseStream, err error) {
+	s.G().Log.Debug("+ GetPassphraseStreamForUser() called")
+	defer func() { s.G().Log.Debug("- GetPassphraseStreamForUser() -> %s", ErrToOk(err)) }()
+
 	pps, err = s.PassphraseStream()
 	if err != nil {
 		return nil, err
@@ -199,7 +211,10 @@ func (s *LoginState) GetPassphraseStream(ui SecretUI) (pps *PassphraseStream, er
 	if pps != nil {
 		return pps, nil
 	}
-	if err = s.verifyPassphraseWithServer(ui); err != nil {
+	err = s.loginHandle(func(lctx LoginContext) error {
+		return s.loginWithPromptHelper(lctx, username, nil, ui, true)
+	}, nil, "LoginState - GetPassphraseStreamForUser")
+	if err != nil {
 		return nil, err
 	}
 	pps, err = s.PassphraseStream()
@@ -321,9 +336,9 @@ func (s *LoginState) postLoginToServer(lctx LoginContext, eOu string, lgpw []byt
 	return &loginAPIResult{sessionID, csrfToken, uid, uname, PassphraseGeneration(ppGen)}, nil
 }
 
-func (s *LoginState) saveLoginState(lctx LoginContext, res *loginAPIResult) error {
-	lctx.SetStreamGeneration(res.ppGen)
-	return lctx.SaveState(res.sessionID, res.csrfToken, NewNormalizedUsername(res.username), res.uid)
+func (s *LoginState) saveLoginState(lctx LoginContext, res *loginAPIResult, nilPPStreamOK bool) error {
+	lctx.SetStreamGeneration(res.ppGen, nilPPStreamOK)
+	return lctx.SaveState(res.sessionID, res.csrfToken, NewNormalizedUsername(res.username), res.uid, s.G().Env.GetDeviceID())
 }
 
 func (r PostAuthProofRes) loginResult() (*loginAPIResult, error) {
@@ -420,7 +435,7 @@ func (s *LoginState) pubkeyLoginWithKey(lctx LoginContext, me *User, key Generic
 		return err
 	}
 
-	return s.saveLoginState(lctx, res)
+	return s.saveLoginState(lctx, res, true)
 }
 
 func (s *LoginState) checkLoggedIn(lctx LoginContext, username string, force bool) (loggedIn bool, err error) {
@@ -571,13 +586,14 @@ func (s *LoginState) passphraseLogin(lctx LoginContext, username, passphrase str
 		return
 	}
 
-	if err = s.stretchPassphraseIfNecessary(lctx, username, passphrase, secretUI, retryMsg); err != nil {
+	storeSecret, err := s.stretchPassphraseIfNecessary(lctx, username, passphrase, secretUI, retryMsg)
+	if err != nil {
 		return err
 	}
 
 	lgpw, err := s.computeLoginPw(lctx)
 	if err != nil {
-		return
+		return err
 	}
 
 	res, err := s.postLoginToServer(lctx, username, lgpw)
@@ -586,40 +602,66 @@ func (s *LoginState) passphraseLogin(lctx LoginContext, username, passphrase str
 		return err
 	}
 
-	if err := s.saveLoginState(lctx, res); err != nil {
+	if err := s.saveLoginState(lctx, res, false); err != nil {
 		return err
+	}
+
+	s.G().Log.Debug("passphraseLogin success")
+	if storeSecret {
+		s.G().Log.Debug("passphraseLogin: storeSecret set, so saving secret in secret store")
+		pps := lctx.PassphraseStreamCache().PassphraseStream()
+		if pps == nil {
+			return errors.New("nil passphrase stream")
+		}
+		lks := NewLKSec(pps, res.uid, s.G())
+		secret, err := lks.GetSecret(lctx)
+		if err != nil {
+			return err
+		}
+		secretStore := NewSecretStore(s.G(), NewNormalizedUsername(username))
+		// Ignore any errors storing the secret.
+		storeSecretErr := secretStore.StoreSecret(secret)
+		if storeSecretErr != nil {
+			s.G().Log.Warning("StoreSecret error: %s", storeSecretErr)
+		}
 	}
 
 	return nil
 }
 
-func (s *LoginState) stretchPassphraseIfNecessary(lctx LoginContext, un string, pp string, ui SecretUI, retry string) error {
+func (s *LoginState) stretchPassphraseIfNecessary(lctx LoginContext, un string, pp string, ui SecretUI, retry string) (storeSecret bool, err error) {
 	s.G().Log.Debug("+ stretchPassphraseIfNecessary (%s)", un)
 	defer s.G().Log.Debug("- stretchPassphraseIfNecessary")
 	if lctx.PassphraseStreamCache().Valid() {
 		s.G().Log.Debug("| stretchPassphraseIfNecessary: passphrase stream cached")
 		// already have stretched passphrase cached
-		return nil
-	}
-
-	arg := keybase1.GetKeybasePassphraseArg{
-		Username: un,
-		Retry:    retry,
+		return false, nil
 	}
 
 	if len(pp) == 0 {
 		if ui == nil {
-			return NoUIError{"secret"}
+			return false, NoUIError{"secret"}
 		}
 
-		var err error
 		s.G().Log.Debug("| stretchPassphraseIfNecessary: getting keybase passphrase via ui")
-		if pp, err = ui.GetKeybasePassphrase(arg); err != nil {
-			return err
+		arg := keybase1.GetKeybasePassphraseArg{
+			Username: un,
+			Retry:    retry,
 		}
+		res, err := ui.GetKeybasePassphrase(arg)
+		if err != nil {
+			return false, err
+		}
+
+		pp = res.Passphrase
+		storeSecret = res.StoreSecret
 	}
 
-	return lctx.CreateStreamCacheViaStretch(pp)
+	if err = lctx.CreateStreamCacheViaStretch(pp); err != nil {
+		return false, err
+	}
+
+	return storeSecret, nil
 }
 
 func (s *LoginState) verifyPassphraseWithServer(ui SecretUI) error {
@@ -647,7 +689,7 @@ func (s *LoginState) loginWithPromptHelper(lctx LoginContext, username string, l
 			Me:      me,
 			KeyType: DeviceSigningKeyType,
 		}
-		return keyrings.GetSecretKeyWithPrompt(lctx, ska, secretUI, "Login")
+		return keyrings.GetSecretKeyWithoutPrompt(lctx, ska)
 	}
 
 	// If we're forcing a login to check our passphrase (as in when we're called
@@ -756,7 +798,7 @@ func (s *LoginState) loginWithStoredSecret(lctx LoginContext, username string) e
 	}
 
 	getSecretKeyFn := func(keyrings *Keyrings, me *User) (GenericKey, error) {
-		secretRetriever := NewSecretStore(me.GetNormalizedName())
+		secretRetriever := NewSecretStore(s.G(), me.GetNormalizedName())
 		ska := SecretKeyArg{
 			Me:      me,
 			KeyType: DeviceSigningKeyType,
@@ -784,7 +826,7 @@ func (s *LoginState) loginWithPassphrase(lctx LoginContext, username, passphrase
 	getSecretKeyFn := func(keyrings *Keyrings, me *User) (GenericKey, error) {
 		var secretStorer SecretStorer
 		if storeSecret {
-			secretStorer = NewSecretStore(me.GetNormalizedName())
+			secretStorer = NewSecretStore(s.G(), me.GetNormalizedName())
 		}
 		key, err := keyrings.GetSecretKeyWithPassphrase(lctx, me, passphrase, secretStorer)
 		if err != nil {

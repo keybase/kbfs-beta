@@ -39,6 +39,7 @@ type SessionInfo struct {
 	UID            keybase1.UID
 	Token          string
 	CryptPublicKey CryptPublicKey
+	VerifyingKey   VerifyingKey
 }
 
 // All section references below are to https://keybase.io/blog/crypto
@@ -900,11 +901,6 @@ type IndirectFilePtr struct {
 type CommonBlock struct {
 	// is this block so big it requires indirect pointers?
 	IsInd bool
-	// these two fields needed to randomize the hash key for unencrypted files
-	path    string `codec:",omitempty"`
-	BlockNo uint32 `codec:",omitempty"`
-	// XXX: just used for randomization until we have encryption
-	Seed int64
 }
 
 // DirBlock is the contents of a directory
@@ -993,7 +989,9 @@ const (
 	// resolution needs to be done.
 	Merged MergeStatus = iota
 	// Unmerged means that the TLF is unmerged and conflict
-	// resolution needs to be done.
+	// resolution needs to be done. Metadata blocks which
+	// represent unmerged history should have a non-null
+	// branch ID defined.
 	Unmerged
 )
 

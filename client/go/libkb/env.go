@@ -1,6 +1,10 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
+	keybase1 "github.com/keybase/client/go/protocol"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -8,8 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	keybase1 "github.com/keybase/client/go/protocol"
 )
 
 type NullConfiguration struct{}
@@ -51,6 +53,9 @@ func (n NullConfiguration) GetSplitLogOutput() (bool, bool)               { retu
 func (n NullConfiguration) GetLogFile() string                            { return "" }
 func (n NullConfiguration) GetScraperTimeout() (time.Duration, bool)      { return 0, false }
 func (n NullConfiguration) GetAPITimeout() (time.Duration, bool)          { return 0, false }
+func (n NullConfiguration) GetTorMode() (TorMode, error)                  { return TorNone, nil }
+func (n NullConfiguration) GetTorHiddenAddress() string                   { return "" }
+func (n NullConfiguration) GetTorProxy() string                           { return "" }
 
 func (n NullConfiguration) GetUserConfig() (*UserConfig, error) { return nil, nil }
 func (n NullConfiguration) GetUserConfigForUsername(s NormalizedUsername) (*UserConfig, error) {
@@ -104,7 +109,7 @@ type TestParameters struct {
 	GPGOptions     []string
 	Debug          bool
 	Devel          bool // Whether we are in Devel Mode
-	SocketFile     string
+	RuntimeDir     string
 }
 
 func (tp TestParameters) GetDebug() (bool, bool) {
@@ -187,13 +192,20 @@ func (e *Env) getHomeFromCmdOrConfig() string {
 	)
 }
 
-func (e *Env) GetHome() string                     { return e.homeFinder.Home(false) }
-func (e *Env) GetConfigDir() string                { return e.homeFinder.ConfigDir() }
-func (e *Env) GetCacheDir() string                 { return e.homeFinder.CacheDir() }
-func (e *Env) GetDataDir() string                  { return e.homeFinder.DataDir() }
-func (e *Env) GetRuntimeDir() string               { return e.homeFinder.RuntimeDir() }
+func (e *Env) GetHome() string      { return e.homeFinder.Home(false) }
+func (e *Env) GetConfigDir() string { return e.homeFinder.ConfigDir() }
+func (e *Env) GetCacheDir() string  { return e.homeFinder.CacheDir() }
+func (e *Env) GetDataDir() string   { return e.homeFinder.DataDir() }
+func (e *Env) GetLogDir() string    { return e.homeFinder.LogDir() }
+
+func (e *Env) GetRuntimeDir() string {
+	return e.GetString(
+		func() string { return e.Test.RuntimeDir },
+		func() string { return e.homeFinder.RuntimeDir() },
+	)
+}
+
 func (e *Env) GetServiceSpawnDir() (string, error) { return e.homeFinder.ServiceSpawnDir() }
-func (e *Env) GetLogDir() string                   { return e.homeFinder.LogDir() }
 
 func (e *Env) getEnvInt(s string) (int, bool) {
 	v := os.Getenv(s)
@@ -411,7 +423,6 @@ func (e *Env) GetUsername() NormalizedUsername {
 
 func (e *Env) GetSocketFile() (ret string, err error) {
 	ret = e.GetString(
-		func() string { return e.Test.SocketFile },
 		func() string { return e.cmd.GetSocketFile() },
 		func() string { return os.Getenv("KEYBASE_SOCKET_FILE") },
 		func() string { return e.config.GetSocketFile() },
@@ -655,6 +666,10 @@ func (e *Env) GetLocalRPCDebug() string {
 	)
 }
 
+func (e *Env) GetDoLogForward() bool {
+	return e.GetLocalRPCDebug() == ""
+}
+
 func (e *Env) GetTimers() string {
 	return e.GetString(
 		func() string { return e.cmd.GetTimers() },
@@ -681,6 +696,40 @@ func (e *Env) GetLogFile() string {
 		func() string { return os.Getenv("KEYBASE_LOG_FILE") },
 		func() string { return e.config.GetLogFile() },
 		func() string { return filepath.Join(e.GetLogDir(), "keybase.log") },
+	)
+}
+
+func (e *Env) GetTorMode() TorMode {
+	var ret TorMode
+
+	pick := func(m TorMode, err error) {
+		if ret == TorNone && err == nil {
+			ret = m
+		}
+	}
+
+	pick(e.cmd.GetTorMode())
+	pick(StringToTorMode(os.Getenv("KEYBASE_TOR_MODE")))
+	pick(e.config.GetTorMode())
+
+	return ret
+}
+
+func (e *Env) GetTorHiddenAddress() string {
+	return e.GetString(
+		func() string { return e.cmd.GetTorHiddenAddress() },
+		func() string { return os.Getenv("KEYBASE_TOR_HIDDEN_ADDRESS") },
+		func() string { return e.config.GetTorHiddenAddress() },
+		func() string { return TorServerURI },
+	)
+}
+
+func (e *Env) GetTorProxy() string {
+	return e.GetString(
+		func() string { return e.cmd.GetTorProxy() },
+		func() string { return os.Getenv("KEYBASE_TOR_PROXY") },
+		func() string { return e.config.GetTorProxy() },
+		func() string { return TorProxy },
 	)
 }
 

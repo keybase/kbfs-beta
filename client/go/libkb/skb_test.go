@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -125,7 +128,7 @@ func TestBasicSecretStore(t *testing.T) {
 	defer tc.Cleanup()
 
 	lks := makeTestLKSec(t, G)
-	expectedSecret, err := lks.GetSecret()
+	expectedSecret, err := lks.GetSecret(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +157,7 @@ func TestCorruptSecretStore(t *testing.T) {
 	defer tc.Cleanup()
 
 	lks := makeTestLKSec(t, G)
-	expectedSecret, err := lks.GetSecret()
+	expectedSecret, err := lks.GetSecret(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

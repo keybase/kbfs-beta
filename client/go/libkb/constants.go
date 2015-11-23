@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -12,9 +15,12 @@ const (
 	DevelServerURI      = "http://localhost:3000"
 	StagingServerURI    = "https://stage0.keybase.io"
 	ProductionServerURI = "https://keybase.io"
+	TorServerURI        = "http://fncuwbiisyh6ak3i.onion"
 )
 
 type RunMode string
+
+var TorProxy = "localhost:9050"
 
 const (
 	DevelRunMode      RunMode = "devel"
@@ -130,6 +136,7 @@ const (
 	SCIdentificationExpired  = 1702
 	SCSelfNotFound           = 1703
 	SCBadKexPhrase           = 1704
+	SCNoUIDelegation         = 1705
 )
 
 const (

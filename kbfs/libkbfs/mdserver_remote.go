@@ -12,12 +12,24 @@ import (
 	"golang.org/x/net/context"
 )
 
+const (
+	// MdServerTokenType is the expected token type for mdserver authentication.
+	MdServerTokenType = "kbfs_mdserver_auth"
+	// MdServerTokenExpireIn is the TTL to use when constructing an authentication token.
+	MdServerTokenExpireIn = 2 * 60 * 60 // 2 hours
+	// MdServerClientName is the client name to include in an authentication token.
+	MdServerClientName = "libkbfs_mdserver_remote"
+	// MdServerClientVersion is the client version to include in an authentication token.
+	MdServerClientVersion = "1" // TODO: use some TBD build version
+)
+
 // MDServerRemote is an implementation of the MDServer interface.
 type MDServerRemote struct {
-	config Config
-	conn   *Connection
-	client keybase1.MetadataClient
-	log    logger.Logger
+	config    Config
+	conn      *Connection
+	client    keybase1.MetadataClient
+	log       logger.Logger
+	authToken *AuthToken
 
 	observerMu sync.Mutex // protects observers
 	observers  map[TlfID]chan<- error
@@ -32,6 +44,9 @@ var _ MDServer = (*MDServerRemote)(nil)
 // Test that MDServerRemote fully implements the KeyServer interface.
 var _ KeyServer = (*MDServerRemote)(nil)
 
+// Test that MDServerRemote fully implements the AuthTokenRefreshHandler interface.
+var _ AuthTokenRefreshHandler = (*MDServerRemote)(nil)
+
 // NewMDServerRemote returns a new instance of MDServerRemote.
 func NewMDServerRemote(config Config, srvAddr string) *MDServerRemote {
 	mdServer := &MDServerRemote{
@@ -39,7 +54,10 @@ func NewMDServerRemote(config Config, srvAddr string) *MDServerRemote {
 		observers: make(map[TlfID]chan<- error),
 		log:       config.MakeLogger(""),
 	}
-	conn := NewTLSConnection(config, srvAddr, MDServerErrorUnwrapper{}, mdServer)
+	mdServer.authToken = NewAuthToken(config,
+		MdServerTokenType, MdServerTokenExpireIn,
+		MdServerClientName, MdServerClientVersion, mdServer)
+	conn := NewTLSConnection(config, srvAddr, MDServerErrorUnwrapper{}, mdServer, true)
 	mdServer.conn = conn
 	mdServer.client = keybase1.MetadataClient{Cli: conn.GetClient()}
 	return mdServer
@@ -49,31 +67,16 @@ func NewMDServerRemote(config Config, srvAddr string) *MDServerRemote {
 func (md *MDServerRemote) OnConnect(ctx context.Context,
 	conn *Connection, client keybase1.GenericClient,
 	_ *rpc.Server) error {
-	// get UID, deviceKID and session token
-	uid, err := md.config.KBPKI().GetCurrentUID(ctx)
+
+	// get a new signature
+	signature, err := md.authToken.Sign(ctx)
 	if err != nil {
-		return err
-	}
-	key, err := md.config.KBPKI().GetCurrentCryptPublicKey(ctx)
-	if err != nil {
-		return err
-	}
-	token, err := md.config.KBPKI().GetCurrentToken(ctx)
-	if err != nil {
-		md.log.CWarningf(ctx, "MDServerRemote: error getting token %q", err)
 		return err
 	}
 
-	// authenticate
-	creds := keybase1.AuthenticateArg{
-		User:      uid,
-		DeviceKID: key.KID,
-		Sid:       token,
-	}
-
-	// Using md.client here would cause problematic recursion.
+	// authenticate -- using md.client here would cause problematic recursion.
 	c := keybase1.MetadataClient{Cli: cancelableClient{client}}
-	pingIntervalSeconds, err := c.Authenticate(ctx, creds)
+	pingIntervalSeconds, err := c.Authenticate(ctx, signature)
 	if err != nil {
 		return err
 	}
@@ -81,6 +84,19 @@ func (md *MDServerRemote) OnConnect(ctx context.Context,
 	// start pinging
 	md.resetPingTicker(pingIntervalSeconds)
 	return nil
+}
+
+// RefreshAuthToken implements the AuthTokenRefreshHandler interface.
+func (md *MDServerRemote) RefreshAuthToken(ctx context.Context) {
+	// get a new signature
+	signature, err := md.authToken.Sign(ctx)
+	if err != nil {
+		md.log.Debug("MDServerRemote: error signing auth token: %v", err)
+	}
+	// update authentication
+	if _, err := md.client.Authenticate(ctx, signature); err != nil {
+		md.log.Debug("MDServerRemote: error refreshing auth token: %v", err)
+	}
 }
 
 // Helper to reset a ping ticker.
@@ -128,12 +144,24 @@ func (md *MDServerRemote) OnConnectError(err error, wait time.Duration) {
 	// due to authentication, for example.
 	md.cancelObservers()
 	md.resetPingTicker(0)
+	if md.authToken != nil {
+		md.authToken.Shutdown()
+	}
+}
+
+// OnDoCommandError implements the ConnectionHandler interface.
+func (md *MDServerRemote) OnDoCommandError(err error, wait time.Duration) {
+	md.log.Warning("MDServerRemote: DoCommand error: %q; retrying in %s",
+		err, wait)
 }
 
 // OnDisconnected implements the ConnectionHandler interface.
 func (md *MDServerRemote) OnDisconnected() {
 	md.cancelObservers()
 	md.resetPingTicker(0)
+	if md.authToken != nil {
+		md.authToken.Shutdown()
+	}
 }
 
 // ShouldThrottle implements the ConnectionHandler interface.
@@ -164,7 +192,7 @@ func (md *MDServerRemote) signalObserverLocked(observerChan chan<- error, id Tlf
 
 // Helper used to retrieve metadata blocks from the MD server.
 func (md *MDServerRemote) get(ctx context.Context, id TlfID, handle *TlfHandle,
-	mStatus MergeStatus, start, stop MetadataRevision) (
+	bid BranchID, mStatus MergeStatus, start, stop MetadataRevision) (
 	TlfID, []*RootMetadataSigned, error) {
 	// figure out which args to send
 	if id == NullTlfID && handle == nil {
@@ -176,6 +204,7 @@ func (md *MDServerRemote) get(ctx context.Context, id TlfID, handle *TlfHandle,
 	arg := keybase1.GetMetadataArg{
 		StartRevision: start.Number(),
 		StopRevision:  stop.Number(),
+		BranchID:      bid.String(),
 		Unmerged:      mStatus == Unmerged,
 		LogTags:       LogTagsFromContextToMap(ctx),
 	}
@@ -213,7 +242,7 @@ func (md *MDServerRemote) get(ctx context.Context, id TlfID, handle *TlfHandle,
 // GetForHandle implements the MDServer interface for MDServerRemote.
 func (md *MDServerRemote) GetForHandle(ctx context.Context, handle *TlfHandle,
 	mStatus MergeStatus) (TlfID, *RootMetadataSigned, error) {
-	id, rmdses, err := md.get(ctx, NullTlfID, handle, mStatus,
+	id, rmdses, err := md.get(ctx, NullTlfID, handle, NullBranchID, mStatus,
 		MetadataRevisionUninitialized, MetadataRevisionUninitialized)
 	if err != nil {
 		return id, nil, err
@@ -226,8 +255,8 @@ func (md *MDServerRemote) GetForHandle(ctx context.Context, handle *TlfHandle,
 
 // GetForTLF implements the MDServer interface for MDServerRemote.
 func (md *MDServerRemote) GetForTLF(ctx context.Context, id TlfID,
-	mStatus MergeStatus) (*RootMetadataSigned, error) {
-	_, rmdses, err := md.get(ctx, id, nil, mStatus,
+	bid BranchID, mStatus MergeStatus) (*RootMetadataSigned, error) {
+	_, rmdses, err := md.get(ctx, id, nil, bid, mStatus,
 		MetadataRevisionUninitialized, MetadataRevisionUninitialized)
 	if err != nil {
 		return nil, err
@@ -240,9 +269,9 @@ func (md *MDServerRemote) GetForTLF(ctx context.Context, id TlfID,
 
 // GetRange implements the MDServer interface for MDServerRemote.
 func (md *MDServerRemote) GetRange(ctx context.Context, id TlfID,
-	mStatus MergeStatus, start, stop MetadataRevision) (
+	bid BranchID, mStatus MergeStatus, start, stop MetadataRevision) (
 	[]*RootMetadataSigned, error) {
-	_, rmds, err := md.get(ctx, id, nil, mStatus, start, stop)
+	_, rmds, err := md.get(ctx, id, nil, bid, mStatus, start, stop)
 	return rmds, err
 }
 
@@ -262,13 +291,14 @@ func (md *MDServerRemote) Put(ctx context.Context, rmds *RootMetadataSigned) err
 	return md.client.PutMetadata(ctx, arg)
 }
 
-// PruneUnmerged implements the MDServer interface for MDServerRemote.
-func (md *MDServerRemote) PruneUnmerged(ctx context.Context, id TlfID) error {
-	arg := keybase1.PruneUnmergedArg{
+// PruneBranch implementms the MDServer interface for MDServerRemote.
+func (md *MDServerRemote) PruneBranch(ctx context.Context, id TlfID, bid BranchID) error {
+	arg := keybase1.PruneBranchArg{
 		FolderID: id.String(),
+		BranchID: bid.String(),
 		LogTags:  LogTagsFromContextToMap(ctx),
 	}
-	return md.client.PruneUnmerged(ctx, arg)
+	return md.client.PruneBranch(ctx, arg)
 }
 
 // MetadataUpdate implements the MetadataUpdateProtocol interface.
@@ -362,6 +392,10 @@ func (md *MDServerRemote) Shutdown() {
 	md.cancelObservers()
 	// cancel the ping ticker
 	md.resetPingTicker(0)
+	// cancel the auth token ticker
+	if md.authToken != nil {
+		md.authToken.Shutdown()
+	}
 }
 
 //
@@ -378,10 +412,16 @@ func (md *MDServerRemote) GetTLFCryptKeyServerHalf(ctx context.Context,
 	if err != nil {
 		return TLFCryptKeyServerHalf{}, err
 	}
+	// get the crypt public key
+	cryptKey, err := md.config.KBPKI().GetCurrentCryptPublicKey(ctx)
+	if err != nil {
+		return TLFCryptKeyServerHalf{}, err
+	}
 
 	// get the key
 	arg := keybase1.GetKeyArg{
 		KeyHalfID: idBytes,
+		DeviceKID: cryptKey.KID.String(),
 		LogTags:   LogTagsFromContextToMap(ctx),
 	}
 	keyBytes, err := md.client.GetKey(ctx, arg)

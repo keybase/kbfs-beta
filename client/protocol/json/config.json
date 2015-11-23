@@ -175,6 +175,10 @@
       "type" : [ "null", "User" ]
     } ]
   }, {
+    "type" : "enum",
+    "name" : "ForkType",
+    "symbols" : [ "NONE_0", "AUTO_1", "WATCHDOG_2" ]
+  }, {
     "type" : "record",
     "name" : "Config",
     "fields" : [ {
@@ -204,6 +208,128 @@
     }, {
       "name" : "configPath",
       "type" : "string"
+    }, {
+      "name" : "versionShort",
+      "type" : "string"
+    }, {
+      "name" : "versionFull",
+      "type" : "string"
+    }, {
+      "name" : "isAutoForked",
+      "type" : "boolean"
+    }, {
+      "name" : "forkType",
+      "type" : "ForkType"
+    } ]
+  }, {
+    "type" : "enum",
+    "name" : "InstallStatus",
+    "doc" : "Install status describes state of install for a component or service.",
+    "symbols" : [ "UNKNOWN_0", "ERROR_1", "NOT_INSTALLED_2", "NEEDS_UPGRADE_3", "INSTALLED_4" ]
+  }, {
+    "type" : "enum",
+    "name" : "InstallAction",
+    "symbols" : [ "UNKNOWN_0", "NONE_1", "UPGRADE_2", "REINSTALL_3", "INSTALL_4" ]
+  }, {
+    "type" : "record",
+    "name" : "ServiceStatus",
+    "fields" : [ {
+      "name" : "version",
+      "type" : "string"
+    }, {
+      "name" : "label",
+      "type" : "string"
+    }, {
+      "name" : "pid",
+      "type" : "string"
+    }, {
+      "name" : "lastExitStatus",
+      "type" : "string"
+    }, {
+      "name" : "bundleVersion",
+      "type" : "string"
+    }, {
+      "name" : "installStatus",
+      "type" : "InstallStatus"
+    }, {
+      "name" : "installAction",
+      "type" : "InstallAction"
+    }, {
+      "name" : "status",
+      "type" : "Status"
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "ServicesStatus",
+    "fields" : [ {
+      "name" : "service",
+      "type" : {
+        "type" : "array",
+        "items" : "ServiceStatus"
+      }
+    }, {
+      "name" : "kbfs",
+      "type" : {
+        "type" : "array",
+        "items" : "ServiceStatus"
+      }
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "FuseMountInfo",
+    "fields" : [ {
+      "name" : "path",
+      "type" : "string"
+    }, {
+      "name" : "fstype",
+      "type" : "string"
+    }, {
+      "name" : "output",
+      "type" : "string"
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "FuseStatus",
+    "fields" : [ {
+      "name" : "version",
+      "type" : "string"
+    }, {
+      "name" : "bundleVersion",
+      "type" : "string"
+    }, {
+      "name" : "kextID",
+      "type" : "string"
+    }, {
+      "name" : "path",
+      "type" : "string"
+    }, {
+      "name" : "kextStarted",
+      "type" : "boolean"
+    }, {
+      "name" : "installStatus",
+      "type" : "InstallStatus"
+    }, {
+      "name" : "installAction",
+      "type" : "InstallAction"
+    }, {
+      "name" : "mountInfos",
+      "type" : {
+        "type" : "array",
+        "items" : "FuseMountInfo"
+      }
+    }, {
+      "name" : "status",
+      "type" : "Status"
+    } ]
+  }, {
+    "type" : "record",
+    "name" : "InstallComponent",
+    "fields" : [ {
+      "name" : "name",
+      "type" : "string"
+    }, {
+      "name" : "status",
+      "type" : "Status"
     } ]
   } ],
   "messages" : {

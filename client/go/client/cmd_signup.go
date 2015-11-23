@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package client
 
 import (
@@ -107,7 +110,6 @@ func (s *CmdSignup) ParseArgv(ctx *cli.Context) error {
 		}
 
 		s.passphrase = s.defaultPassphrase
-		s.prompter = NewPrompter(s.fields.ToList(), s.G().UI.GetTerminalUI())
 		s.doPrompt = false
 	} else {
 		s.doPrompt = true
@@ -212,7 +214,7 @@ func (s *CmdSignup) prompt() (err error) {
 
 	f := s.fields.passphraseRetry
 	if f.Disabled || libkb.IsYes(f.GetValue()) {
-		var res keybase1.GetNewPassphraseRes
+		var res keybase1.GetPassphraseRes
 		res, err = s.G().UI.GetSecretUI().GetNewPassphrase(arg)
 		if err != nil {
 			return

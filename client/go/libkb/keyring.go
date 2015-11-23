@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -50,8 +53,6 @@ func (g *GlobalContext) SKBFilenameForUser(un NormalizedUsername) string {
 	return strings.Replace(tmp, token, un.String(), -1)
 }
 
-// Note:  you need to be logged in as 'un' for this function to
-// work.  Otherwise, it just silently returns nil, nil.
 func LoadSKBKeyring(un NormalizedUsername, g *GlobalContext) (*SKBKeyringFile, error) {
 	if un.IsNil() {
 		return nil, NoUsernameError{}
@@ -321,6 +322,40 @@ func (k *Keyrings) GetSecretKeyWithPrompt(lctx LoginContext, ska SecretKeyArg, s
 	return key, err
 }
 
+func (k *Keyrings) GetSecretKeyWithoutPrompt(lctx LoginContext, ska SecretKeyArg) (key GenericKey, err error) {
+	k.G().Log.Debug("+ GetSecretKeyWithoutPrompt()")
+	defer func() {
+		k.G().Log.Debug("- GetSecretKeyWithoutPrompt() -> %s", ErrToOk(err))
+	}()
+
+	key = k.cachedSecretKey(lctx, ska)
+	if key != nil {
+		k.G().Log.Debug("  found cached secret key")
+		return key, err
+	}
+
+	k.G().Log.Debug("  no cached secret key, trying via secretStore")
+
+	// not cached, so try to unlock without prompting
+	if ska.Me == nil {
+		err = NoUsernameError{}
+		return nil, err
+	}
+	secretStore := NewSecretStore(k.G(), ska.Me.GetNormalizedName())
+
+	skb, _, err := k.GetSecretKeyLocked(lctx, ska)
+	if err != nil {
+		return nil, err
+	}
+
+	key, err = skb.UnlockNoPrompt(lctx, secretStore, nil)
+	if key != nil && err == nil {
+		k.setCachedSecretKey(lctx, ska, key)
+	}
+
+	return key, err
+}
+
 func (k *Keyrings) GetSecretKeyAndSKBWithPrompt(lctx LoginContext, ska SecretKeyArg, secretUI SecretUI, reason string) (key GenericKey, skb *SKB, err error) {
 	k.G().Log.Debug("+ GetSecretKeyAndSKBWithPrompt(%s)", reason)
 	defer func() {
@@ -334,7 +369,7 @@ func (k *Keyrings) GetSecretKeyAndSKBWithPrompt(lctx LoginContext, ska SecretKey
 	var secretStore SecretStore
 	if ska.Me != nil {
 		skb.SetUID(ska.Me.GetUID())
-		secretStore = NewSecretStore(ska.Me.GetNormalizedName())
+		secretStore = NewSecretStore(k.G(), ska.Me.GetNormalizedName())
 	}
 	if key, err = skb.PromptAndUnlock(lctx, reason, which, secretStore, secretUI, nil, ska.Me); err != nil {
 		key = nil

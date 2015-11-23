@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -12,6 +15,8 @@ import (
 
 type SessionReader interface {
 	APIArgs() (token, csrf string)
+	IsLoggedIn() bool
+	Invalidate()
 }
 
 type Session struct {
@@ -91,7 +96,7 @@ func (s *Session) SetUsername(username NormalizedUsername) {
 	s.username = &username
 }
 
-func (s *Session) SetLoggedIn(sessionID, csrfToken string, username NormalizedUsername, uid keybase1.UID) error {
+func (s *Session) SetLoggedIn(sessionID, csrfToken string, username NormalizedUsername, uid keybase1.UID, deviceID keybase1.DeviceID) error {
 	s.valid = true
 	s.uid = uid
 	s.username = &username
@@ -108,6 +113,13 @@ func (s *Session) SetLoggedIn(sessionID, csrfToken string, username NormalizedUs
 	s.GetDictionary().SetKey("session", jsonw.NewString(sessionID))
 
 	s.SetCsrf(csrfToken)
+
+	s.deviceID = deviceID
+	if s.file == nil {
+		return errors.New("no session file")
+	}
+	s.GetDictionary().SetKey("device_provisioned", jsonw.NewString(deviceID.String()))
+
 	return s.save()
 }
 
@@ -169,7 +181,7 @@ func (s *Session) Load() error {
 		return err
 	}
 
-	s.file = NewJSONFile(s.G().Env.GetSessionFilename(), "session")
+	s.file = NewJSONFile(s.G(), s.G().Env.GetSessionFilename(), "session")
 	err = s.file.Load(false)
 	s.loaded = true
 
@@ -275,11 +287,24 @@ func (s *Session) check() error {
 		}
 	} else {
 		s.G().Log.Notice("Stored session expired")
-		s.valid = false
+		s.Invalidate()
 	}
 
 	s.G().Log.Debug("- Checked session")
 	return nil
+}
+
+// Invalidate marks the session as invalid and posts a logout
+// notification.
+func (s *Session) Invalidate() {
+	s.G().Log.Debug("+ invalidating session")
+	s.valid = false
+	s.mtime = time.Time{}
+	s.token = ""
+	s.csrf = ""
+	s.checked = false
+	s.G().NotifyRouter.HandleLogout()
+	s.G().Log.Debug("- session invalidated")
 }
 
 func (s *Session) HasSessionToken() bool {
@@ -297,13 +322,10 @@ func (s *Session) postLogout() error {
 		Endpoint:    "logout",
 		NeedSession: true,
 	})
-	if err == nil {
-		s.valid = false
-		s.mtime = time.Time{}
-		s.token = ""
-		s.csrf = ""
-		s.checked = false
-	}
+
+	// Invalidate even if we hit an error.
+	s.Invalidate()
+
 	return err
 }
 

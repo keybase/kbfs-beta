@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package client
 
 import (
@@ -22,7 +25,7 @@ func GetRPCServer(g *libkb.GlobalContext) (ret *rpc.Server, xp rpc.Transporter, 
 		ret = rpc.NewServer(xp, libkb.WrapError)
 	}
 	if err != nil {
-		DiagnoseSocketError(err)
+		DiagnoseSocketError(g.UI, err)
 	}
 	return
 }
@@ -72,9 +75,9 @@ func RegisterProtocols(prots []rpc.Protocol) (err error) {
 	return RegisterProtocolsWithContext(prots, G)
 }
 
-func GetIdentifyClient() (cli keybase1.IdentifyClient, err error) {
+func GetIdentifyClient(g *libkb.GlobalContext) (cli keybase1.IdentifyClient, err error) {
 	var rcli *rpc.Client
-	if rcli, _, err = GetRPCClient(); err == nil {
+	if rcli, _, err = GetRPCClientWithContext(g); err == nil {
 		cli = keybase1.IdentifyClient{Cli: rcli}
 	}
 	return
@@ -144,14 +147,6 @@ func GetBTCClient(g *libkb.GlobalContext) (cli keybase1.BTCClient, err error) {
 	return
 }
 
-func GetDoctorClient() (cli keybase1.DoctorClient, err error) {
-	var rcli *rpc.Client
-	if rcli, _, err = GetRPCClient(); err == nil {
-		cli = keybase1.DoctorClient{Cli: rcli}
-	}
-	return
-}
-
 func GetCtlClient(g *libkb.GlobalContext) (cli keybase1.CtlClient, err error) {
 	var rcli *rpc.Client
 	if rcli, _, err = GetRPCClientWithContext(g); err == nil {
@@ -160,9 +155,9 @@ func GetCtlClient(g *libkb.GlobalContext) (cli keybase1.CtlClient, err error) {
 	return
 }
 
-func GetAccountClient() (cli keybase1.AccountClient, err error) {
+func GetAccountClient(g *libkb.GlobalContext) (cli keybase1.AccountClient, err error) {
 	var rcli *rpc.Client
-	if rcli, _, err = GetRPCClient(); err == nil {
+	if rcli, _, err = GetRPCClientWithContext(g); err == nil {
 		cli = keybase1.AccountClient{Cli: rcli}
 	}
 	return
@@ -174,4 +169,22 @@ func GetFavoriteClient() (cli keybase1.FavoriteClient, err error) {
 		cli = keybase1.FavoriteClient{Cli: rcli}
 	}
 	return
+}
+
+func GetNotifyCtlClient(g *libkb.GlobalContext) (cli keybase1.NotifyCtlClient, err error) {
+	rcli, _, err := GetRPCClientWithContext(g)
+	if err != nil {
+		return cli, err
+	}
+	cli = keybase1.NotifyCtlClient{Cli: rcli}
+	return cli, nil
+}
+
+func GetKBFSClient(g *libkb.GlobalContext) (cli keybase1.KbfsClient, err error) {
+	rcli, _, err := GetRPCClientWithContext(g)
+	if err != nil {
+		return cli, err
+	}
+	cli = keybase1.KbfsClient{Cli: rcli}
+	return cli, nil
 }

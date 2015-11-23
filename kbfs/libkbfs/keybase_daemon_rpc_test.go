@@ -29,6 +29,7 @@ func newKeybaseDaemonRPCWithFakeClient(t *testing.T) (
 	*KeybaseDaemonRPC, chan struct{}) {
 	ctlChan := make(chan struct{})
 	c := newKeybaseDaemonRPCWithClient(
+		nil,
 		cancelableClient{blockingClient{ctlChan}},
 		logger.NewTestLogger(t))
 	return c, ctlChan
@@ -75,6 +76,7 @@ func (c *fakeKeybaseClient) Call(ctx context.Context, s string, args interface{}
 			Username:        "fake username",
 			Token:           c.session.Token,
 			DeviceSubkeyKid: c.session.CryptPublicKey.KID,
+			DeviceSibkeyKid: c.session.VerifyingKey.KID,
 		}
 
 		c.currentSessionCalled = true
@@ -153,15 +155,18 @@ func testCurrentSession(
 func TestKeybaseDaemonSessionCache(t *testing.T) {
 	k := MakeLocalUserCryptPublicKeyOrBust(
 		libkb.NormalizedUsername("fake username"))
+	v := MakeLocalUserVerifyingKeyOrBust(
+		libkb.NormalizedUsername("fake username"))
 	session := SessionInfo{
 		UID:            keybase1.UID("fake uid"),
 		Token:          "fake token",
 		CryptPublicKey: k,
+		VerifyingKey:   v,
 	}
 
 	client := &fakeKeybaseClient{session: session}
 	c := newKeybaseDaemonRPCWithClient(
-		client, logger.NewTestLogger(t))
+		nil, client, logger.NewTestLogger(t))
 
 	// Should fill cache.
 	testCurrentSession(t, client, c, session, expectCall)
@@ -238,7 +243,7 @@ func TestKeybaseDaemonUserCache(t *testing.T) {
 	}
 	client := &fakeKeybaseClient{users: users}
 	c := newKeybaseDaemonRPCWithClient(
-		client, logger.NewTestLogger(t))
+		nil, client, logger.NewTestLogger(t))
 
 	// Should fill cache.
 	testLoadUserPlusKeys(t, client, c, uid1, name1, expectCall)

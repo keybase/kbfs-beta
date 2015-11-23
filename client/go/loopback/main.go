@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package keybase
 
 import (
@@ -32,7 +35,7 @@ func Init(homeDir string, runModeStr string, serverURI string, accessGroupOverri
 		if err != nil {
 			panic(err)
 		}
-		(service.NewService(false, g)).StartLoopbackServer()
+		(service.NewService(g, false)).StartLoopbackServer()
 		Reset()
 	})
 }

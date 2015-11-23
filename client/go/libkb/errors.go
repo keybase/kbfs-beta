@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -56,10 +59,21 @@ type ProofAPIError struct {
 	url string
 }
 
-// Might be overkill, let's revisit...
-//func (e *ProofApiError) Error() string {
-//	return fmt.Sprintf("%s (url=%s; code=%d)", e.Desc, e.url, int(e.Status))
-//}
+var ProofErrorDNSOverTor = &ProofErrorImpl{
+	Status: keybase1.ProofStatus_TOR_SKIPPED,
+	Desc:   "DNS proofs aren't reliable over Tor",
+}
+
+var ProofErrorHTTPOverTor = &ProofErrorImpl{
+	Status: keybase1.ProofStatus_TOR_SKIPPED,
+	Desc:   "HTTP proofs aren't reliable over Tor",
+}
+
+type TorSessionRequiredError struct{}
+
+func (t TorSessionRequiredError) Error() string {
+	return "We can't send out PII in Tor-Strict mode; but it's needed for this operation"
+}
 
 func NewProofAPIError(s keybase1.ProofStatus, u string, d string, a ...interface{}) *ProofAPIError {
 	base := NewProofError(s, d, a...)
@@ -435,13 +449,13 @@ func (e LoginRequiredError) Error() string {
 type ReloginRequiredError struct{}
 
 func (e ReloginRequiredError) Error() string {
-	return "Login required due to an unexpected error since your previous login."
+	return "Login required due to an unexpected error since your previous login"
 }
 
 type DeviceRequiredError struct{}
 
 func (e DeviceRequiredError) Error() string {
-	return "Provisioned device required; login to provision this device"
+	return "Login required"
 }
 
 //=============================================================================
@@ -668,11 +682,11 @@ func (e SelfTrackError) Error() string {
 //=============================================================================
 
 type NoUIError struct {
-	which string
+	Which string
 }
 
 func (e NoUIError) Error() string {
-	return fmt.Sprintf("no %s-UI was available", e.which)
+	return fmt.Sprintf("no %s-UI was available", e.Which)
 }
 
 //=============================================================================
@@ -1143,4 +1157,20 @@ type RetryExhaustedError struct {
 
 func (e RetryExhaustedError) Error() string {
 	return "Prompt attempts exhausted."
+}
+
+//=============================================================================
+
+type PGPPullLoggedOutError struct{}
+
+func (e PGPPullLoggedOutError) Error() string {
+	return "When running `pgp pull` logged out, you must specify users to pull keys for"
+}
+
+//=============================================================================
+
+type UIDelegationUnavailableError struct{}
+
+func (e UIDelegationUnavailableError) Error() string {
+	return "This process does not support UI delegation"
 }

@@ -1,7 +1,11 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -21,6 +25,17 @@ var webKeybaseFiles = []string{".well-known/keybase.txt", "keybase.txt"}
 
 func NewWebChecker(p RemoteProofChainLink) (*WebChecker, ProofError) {
 	return &WebChecker{p}, nil
+}
+
+func (rc *WebChecker) GetTorError() ProofError {
+	urlBase := rc.proof.ToDisplayString()
+
+	u, err := url.Parse(urlBase)
+	if err != nil || u.Scheme != "https" {
+		return ProofErrorHTTPOverTor
+	}
+
+	return nil
 }
 
 func (rc *WebChecker) CheckHint(h SigHint) ProofError {

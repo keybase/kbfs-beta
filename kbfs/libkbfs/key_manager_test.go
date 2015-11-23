@@ -68,6 +68,9 @@ func expectRekey(config *ConfigMock, rmd *RootMetadata) {
 	config.mockCrypto.EXPECT().GetTLFCryptKeyServerHalfID(gomock.Any(), gomock.Any(), gomock.Any()).Return(TLFCryptKeyServerHalfID{}, nil)
 	// now put the key into the cache
 	config.mockKcache.EXPECT().PutTLFCryptKey(rmd.ID, newKeyGen, TLFCryptKey{}).Return(nil)
+
+	// Ignore Notify calls for now
+	config.mockRep.EXPECT().Notify(gomock.Any(), gomock.Any()).AnyTimes()
 }
 
 func TestKeyManagerPublicTLFCryptKey(t *testing.T) {
@@ -296,7 +299,7 @@ func TestKeyManagerRekeyAddDevice(t *testing.T) {
 	kbfsOps2Dev2 := config2Dev2.KBFSOps()
 	_, _, err =
 		kbfsOps2Dev2.GetOrCreateRootNodeForHandle(ctx, h, MasterBranch)
-	if _, ok := err.(MDServerErrorUnauthorized); !ok {
+	if _, ok := err.(ReadAccessError); !ok {
 		t.Fatalf("Got unexpected error when reading with new key: %v", err)
 	}
 
@@ -360,7 +363,7 @@ func TestKeyManagerRekeyAddDevice(t *testing.T) {
 	// but device 1 should now fail
 	kbfsOps2 := config2.KBFSOps()
 	_, _, err = kbfsOps2.GetOrCreateRootNodeForHandle(ctx, h, MasterBranch)
-	if _, ok := err.(MDServerErrorUnauthorized); !ok {
+	if _, ok := err.(ReadAccessError); !ok {
 		t.Fatalf("Got unexpected error when reading with revoked key: %v", err)
 	}
 

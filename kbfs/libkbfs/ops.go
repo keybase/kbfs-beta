@@ -184,20 +184,41 @@ func (co *createOp) CheckConflict(renamer ConflictRenamer, mergedOp op) (
 	case *createOp:
 		// Conflicts if this creates the same name and one of them
 		// isn't creating a directory.
-		if realMergedOp.NewName == co.NewName &&
-			(realMergedOp.Type != Dir || co.Type != Dir) {
-			if realMergedOp.Type != Dir && co.Type == Dir {
+		sameName := (realMergedOp.NewName == co.NewName)
+		if sameName && (realMergedOp.Type != Dir || co.Type != Dir) {
+			if realMergedOp.Type != Dir &&
+				(co.Type == Dir || co.crSymPath != "") {
 				// Rename the merged entry only if the unmerged one is
-				// a directory and the merged one is not.
+				// a directory (or to-be-sympath'd directory) and the
+				// merged one is not.
 				return &renameMergedAction{
 					fromName: co.NewName,
 					toName:   co.NewName + renamer.GetConflictSuffix(mergedOp),
+					symPath:  co.crSymPath,
 				}, nil
 			}
 			// Otherwise rename the unmerged entry (guaranteed to be a file).
 			return &renameUnmergedAction{
 				fromName: co.NewName,
 				toName:   co.NewName + renamer.GetConflictSuffix(co),
+				symPath:  co.crSymPath,
+			}, nil
+		}
+
+		// If they are both directories, and one of them is a rename,
+		// then we have a conflict and need to rename the renamed one.
+		//
+		// TODO: Implement a better merging strategy for when an
+		// existing directory gets into a rename conflict with another
+		// existing or new directory.
+		if sameName && realMergedOp.Type == Dir && co.Type == Dir &&
+			(realMergedOp.renamed || co.renamed) {
+			// Always rename the unmerged one
+			return &copyUnmergedEntryAction{
+				fromName: co.NewName,
+				toName:   co.NewName + renamer.GetConflictSuffix(co),
+				symPath:  co.crSymPath,
+				unique:   true,
 			}, nil
 		}
 	}
@@ -281,22 +302,25 @@ func (ro *rmOp) GetDefaultAction(mergedPath path) crAction {
 // directories for the purposes of conflict resolution.
 type renameOp struct {
 	OpCommon
-	OldName string       `codec:"on"`
-	OldDir  blockUpdate  `codec:"od"`
-	NewName string       `codec:"nn"`
-	NewDir  blockUpdate  `codec:"nd"`
-	Renamed BlockPointer `codec:"re"`
+	OldName     string       `codec:"on"`
+	OldDir      blockUpdate  `codec:"od"`
+	NewName     string       `codec:"nn"`
+	NewDir      blockUpdate  `codec:"nd"`
+	Renamed     BlockPointer `codec:"re"`
+	RenamedType EntryType    `codec:"rt"`
 }
 
 func newRenameOp(oldName string, oldOldDir BlockPointer,
-	newName string, oldNewDir BlockPointer, renamed BlockPointer) *renameOp {
+	newName string, oldNewDir BlockPointer, renamed BlockPointer,
+	renamedType EntryType) *renameOp {
 	ro := &renameOp{
 		OpCommon: OpCommon{
 			customUpdates: make(map[BlockPointer]*blockUpdate),
 		},
-		OldName: oldName,
-		NewName: newName,
-		Renamed: renamed,
+		OldName:     oldName,
+		NewName:     newName,
+		Renamed:     renamed,
+		RenamedType: renamedType,
 	}
 	ro.OldDir.Unref = oldOldDir
 	ro.customUpdates[oldOldDir] = &ro.OldDir
@@ -397,6 +421,14 @@ func (so *syncOp) CheckConflict(renamer ConflictRenamer, mergedOp op) (
 			toName: mergedOp.getFinalPath().tailName() +
 				renamer.GetConflictSuffix(so),
 		}, nil
+	case *setAttrOp:
+		// Someone on the merged path explicitly set an attribute, so
+		// just copy the size and blockpointer over.
+		return &copyUnmergedAttrAction{
+			fromName: so.getFinalPath().tailName(),
+			toName:   mergedOp.getFinalPath().tailName(),
+			attr:     []attrChange{sizeAttr},
+		}, nil
 	}
 	return nil, nil
 }
@@ -414,6 +446,7 @@ type attrChange uint16
 const (
 	exAttr attrChange = iota
 	mtimeAttr
+	sizeAttr // only used during conflict resolution
 )
 
 func (ac attrChange) String() string {
@@ -422,6 +455,8 @@ func (ac attrChange) String() string {
 		return "ex"
 	case mtimeAttr:
 		return "mtime"
+	case sizeAttr:
+		return "size"
 	}
 	return "<invalid attrChange>"
 }
@@ -486,7 +521,7 @@ func (sao *setAttrOp) GetDefaultAction(mergedPath path) crAction {
 	return &copyUnmergedAttrAction{
 		fromName: sao.getFinalPath().tailName(),
 		toName:   mergedPath.tailName(),
-		attr:     sao.Attr,
+		attr:     []attrChange{sao.Attr},
 	}
 }
 
@@ -545,7 +580,7 @@ func invertOpForLocalNotifications(oldOp op) op {
 		newOp = newCreateOp(op.OldName, op.Dir.Ref, File)
 	case *renameOp:
 		newOp = newRenameOp(op.NewName, op.NewDir.Ref,
-			op.OldName, op.OldDir.Ref, op.Renamed)
+			op.OldName, op.OldDir.Ref, op.Renamed, op.RenamedType)
 	case *syncOp:
 		// Just replay the writes; for notifications purposes, they
 		// will do the right job of marking the right bytes as

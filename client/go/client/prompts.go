@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package client
 
 import (
@@ -33,7 +36,10 @@ const (
 	PromptDescriptorSignupDevice
 	PromptDescriptorSignupCode
 	PromptDescriptorChooseProvisioningMethod
+	PromptDescriptorChooseGPGMethod
 	PromptDescriptorChooseDeviceType
 	PromptDescriptorProvisionPhrase
 	PromptDescriptorProvisionDeviceName
+	PromptDescriptorExportSecretKeyFromGPG
+	PromptDescriptorDeprovisionWhichUser
 )

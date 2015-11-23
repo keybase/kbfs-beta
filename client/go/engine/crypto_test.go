@@ -1,6 +1,12 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package engine
 
 import (
+	"bytes"
+	"fmt"
+	"runtime/debug"
 	"testing"
 
 	"golang.org/x/crypto/nacl/box"
@@ -33,6 +39,33 @@ func TestCryptoSignED25519(t *testing.T) {
 	publicKey := libkb.NaclSigningKeyPublic(ret.PublicKey)
 	if !publicKey.Verify(msg, (*libkb.NaclSignature)(&ret.Sig)) {
 		t.Error(libkb.VerificationError{})
+	}
+}
+
+// Test that SignToString() signs the given message with the device
+// signing key and that the signature is verifiable and contains the message.
+func TestCryptoSignToString(t *testing.T) {
+	tc := SetupEngineTest(t, "crypto")
+	defer tc.Cleanup()
+
+	u := CreateAndSignupFakeUser(tc, "fu")
+	secretUI := &libkb.TestSecretUI{Passphrase: u.Passphrase}
+
+	msg := []byte("test message")
+	signature, err := SignToString(tc.G, secretUI, keybase1.SignToStringArg{
+		Msg: msg,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, msg2, _, err := libkb.NaclVerifyAndExtract(signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(msg, msg2) {
+		t.Fatal(fmt.Errorf("message mismatch, expected: %s, got: %s",
+			string(msg), string(msg2)))
 	}
 }
 
@@ -169,6 +202,7 @@ func cachedSecretKey(tc libkb.TestContext, ktype libkb.SecretKeyType) (key libkb
 func assertCachedSecretKey(tc libkb.TestContext, ktype libkb.SecretKeyType) {
 	skey, err := cachedSecretKey(tc, ktype)
 	if err != nil {
+		debug.PrintStack()
 		tc.T.Fatalf("error getting cached secret key: %s", err)
 	}
 	if skey == nil {
@@ -197,6 +231,12 @@ func TestCachedSecretKey(t *testing.T) {
 
 	u := CreateAndSignupFakeUser(tc, "login")
 
+	assertCachedSecretKey(tc, libkb.DeviceSigningKeyType)
+	assertCachedSecretKey(tc, libkb.DeviceEncryptionKeyType)
+
+	Logout(tc)
+	u.LoginOrBust(tc)
+
 	assertNotCachedSecretKey(tc, libkb.DeviceSigningKeyType)
 	assertNotCachedSecretKey(tc, libkb.DeviceEncryptionKeyType)
 
@@ -214,7 +254,6 @@ func TestCachedSecretKey(t *testing.T) {
 	Logout(tc)
 	u.LoginOrBust(tc)
 
-	// login caches this...
-	assertCachedSecretKey(tc, libkb.DeviceSigningKeyType)
+	assertNotCachedSecretKey(tc, libkb.DeviceSigningKeyType)
 	assertNotCachedSecretKey(tc, libkb.DeviceEncryptionKeyType)
 }

@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package client
 
 import (
@@ -24,7 +27,7 @@ func (c *CmdPassphraseChange) Run() error {
 		return err
 	}
 
-	if err := passphraseChange(newChangeArg(pp, false)); err != nil {
+	if err := passphraseChange(G, newChangeArg(pp, false)); err != nil {
 		GlobUI.Println()
 		GlobUI.Println("There was a problem during the standard update of your passphrase.")
 		GlobUI.Printf("\n%s\n\n", err)

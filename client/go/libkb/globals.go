@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 //
 // globals
 //
@@ -28,33 +31,36 @@ import (
 type ShutdownHook func() error
 
 type GlobalContext struct {
-	Log              logger.Logger   // Handles all logging
-	Env              *Env            // Env variables, cmdline args & config
-	Keyrings         *Keyrings       // Gpg Keychains holding keys
-	API              API             // How to make a REST call to the server
-	ResolveCache     *ResolveCache   // cache of resolve results
-	LocalDb          *JSONLocalDb    // Local DB for cache
-	MerkleClient     *MerkleClient   // client for querying server's merkle sig tree
-	XAPI             ExternalAPI     // for contacting Twitter, Github, etc.
-	Output           io.Writer       // where 'Stdout'-style output goes
-	ProofCache       *ProofCache     // where to cache proof results
-	FavoriteCache    *favcache.Cache // where to cache favorite folders
-	GpgClient        *GpgCLI         // A standard GPG-client (optional)
-	ShutdownHooks    []ShutdownHook  // on shutdown, fire these...
-	SocketInfo       Socket          // which socket to bind/connect to
-	socketWrapperMu  sync.RWMutex
-	SocketWrapper    *SocketWrapper    // only need one connection per
-	LoopbackListener *LoopbackListener // If we're in loopback mode, we'll connect through here
-	XStreams         *ExportedStreams  // a table of streams we've exported to the daemon (or vice-versa)
-	Timers           *TimerSet         // Which timers are currently configured on
-	IdentifyCache    *IdentifyCache    // cache of IdentifyOutcomes
-	UserCache        *UserCache        // cache of Users
-	UI               UI                // Interact with the UI
-	Service          bool              // whether we're in server mode
-	shutdownOnce     sync.Once         // whether we've shut down or not
-	loginStateMu     sync.RWMutex      // protects loginState pointer, which gets destroyed on logout
-	loginState       *LoginState       // What phase of login the user's in
-	NotifyRouter     *NotifyRouter     // How to route notifications
+	Log               logger.Logger   // Handles all logging
+	Env               *Env            // Env variables, cmdline args & config
+	Keyrings          *Keyrings       // Gpg Keychains holding keys
+	API               API             // How to make a REST call to the server
+	ResolveCache      *ResolveCache   // cache of resolve results
+	LocalDb           *JSONLocalDb    // Local DB for cache
+	MerkleClient      *MerkleClient   // client for querying server's merkle sig tree
+	XAPI              ExternalAPI     // for contacting Twitter, Github, etc.
+	Output            io.Writer       // where 'Stdout'-style output goes
+	ProofCache        *ProofCache     // where to cache proof results
+	FavoriteCache     *favcache.Cache // where to cache favorite folders
+	GpgClient         *GpgCLI         // A standard GPG-client (optional)
+	ShutdownHooks     []ShutdownHook  // on shutdown, fire these...
+	SocketInfo        Socket          // which socket to bind/connect to
+	socketWrapperMu   sync.RWMutex
+	SocketWrapper     *SocketWrapper     // only need one connection per
+	LoopbackListener  *LoopbackListener  // If we're in loopback mode, we'll connect through here
+	XStreams          *ExportedStreams   // a table of streams we've exported to the daemon (or vice-versa)
+	Timers            *TimerSet          // Which timers are currently configured on
+	IdentifyCache     *IdentifyCache     // cache of IdentifyOutcomes
+	UserCache         *UserCache         // cache of Users
+	UI                UI                 // Interact with the UI
+	Service           bool               // whether we're in server mode
+	shutdownOnce      sync.Once          // whether we've shut down or not
+	loginStateMu      sync.RWMutex       // protects loginState pointer, which gets destroyed on logout
+	loginState        *LoginState        // What phase of login the user's in
+	ConnectionManager *ConnectionManager // keep tabs on all active client connections
+	NotifyRouter      *NotifyRouter      // How to route notifications
+	UIRouter          UIRouter           // How to route UIs
+	ExitCode          keybase1.ExitCode  // Value to return to OS on Exit()
 }
 
 func NewGlobalContext() *GlobalContext {
@@ -77,7 +83,16 @@ func (g *GlobalContext) Init() {
 	g.Env = NewEnv(nil, nil)
 	g.Service = false
 	g.createLoginState()
-	g.NotifyRouter = NewNotifyRouter()
+}
+
+func (g *GlobalContext) SetService() {
+	g.Service = true
+	g.ConnectionManager = NewConnectionManager()
+	g.NotifyRouter = NewNotifyRouter(g)
+}
+
+func (g *GlobalContext) SetUIRouter(u UIRouter) {
+	g.UIRouter = u
 }
 
 // requires lock on loginStateMu before calling
@@ -137,7 +152,7 @@ func (g *GlobalContext) PushShutdownHook(sh ShutdownHook) {
 }
 
 func (g *GlobalContext) ConfigureConfig() error {
-	c := NewJSONConfigFile(g.Env.GetConfigFilename())
+	c := NewJSONConfigFile(g, g.Env.GetConfigFilename())
 	err := c.Load(false)
 	if err != nil {
 		return err
@@ -175,7 +190,7 @@ func (g *GlobalContext) StartupMessage() {
 }
 
 func (g *GlobalContext) ConfigureAPI() error {
-	iapi, xapi, err := NewAPIEngines(g.Env, g)
+	iapi, xapi, err := NewAPIEngines(g)
 	if err != nil {
 		return fmt.Errorf("Failed to configure API access: %s", err)
 	}
@@ -188,7 +203,7 @@ func (g *GlobalContext) ConfigureCaches() error {
 	g.ResolveCache = NewResolveCache()
 	g.IdentifyCache = NewIdentifyCache()
 	g.UserCache = NewUserCache(g.Env.GetUserCacheMaxAge())
-	g.ProofCache = NewProofCache(g.Env.GetProofCacheSize())
+	g.ProofCache = NewProofCache(g, g.Env.GetProofCacheSize())
 	g.FavoriteCache = favcache.New()
 
 	// We consider the local DB as a cache; it's caching our
@@ -226,6 +241,14 @@ func (g *GlobalContext) Shutdown() error {
 			g.NotifyRouter.Shutdown()
 		}
 
+		if g.UIRouter != nil {
+			g.UIRouter.Shutdown()
+		}
+
+		if g.ConnectionManager != nil {
+			g.ConnectionManager.Shutdown()
+		}
+
 		if g.UI != nil {
 			epick.Push(g.UI.Shutdown())
 		}
@@ -248,6 +271,8 @@ func (g *GlobalContext) Shutdown() error {
 		}
 
 		err = epick.Error()
+
+		g.Log.Debug("exiting shutdown code=%d; err=%v", g.ExitCode, err)
 	})
 
 	// Make a little bit of a statement if we wind up here a second time

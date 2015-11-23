@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package client
 
 import (
@@ -12,12 +15,12 @@ import (
 	rpc "github.com/keybase/go-framed-msgpack-rpc"
 )
 
-func NewCmdPGPVerify(cl *libcmdline.CommandLine) cli.Command {
+func NewCmdPGPVerify(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.Command {
 	return cli.Command{
 		Name:  "verify",
 		Usage: "PGP verify message or file signatures for keybase users",
 		Action: func(c *cli.Context) {
-			cl.ChooseCommand(&CmdPGPVerify{}, "verify", c)
+			cl.ChooseCommand(&CmdPGPVerify{Contextified: libkb.NewContextified(g)}, "verify", c)
 		},
 		Flags: []cli.Flag{
 			cli.BoolFlag{
@@ -49,6 +52,7 @@ func NewCmdPGPVerify(cl *libcmdline.CommandLine) cli.Command {
 }
 
 type CmdPGPVerify struct {
+	libkb.Contextified
 	UnixFilter
 	trackOptions     keybase1.TrackOptions
 	detachedFilename string
@@ -63,8 +67,8 @@ func (c *CmdPGPVerify) Run() error {
 	}
 	protocols := []rpc.Protocol{
 		NewStreamUIProtocol(),
-		NewSecretUIProtocol(G),
-		NewIdentifyTrackUIProtocol(),
+		NewSecretUIProtocol(c.G()),
+		NewIdentifyTrackUIProtocol(c.G()),
 	}
 	if err := RegisterProtocols(protocols); err != nil {
 		return err

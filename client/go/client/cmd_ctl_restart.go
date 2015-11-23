@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package client
 
 import (
@@ -8,6 +11,7 @@ import (
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
+	keybase1 "github.com/keybase/client/go/protocol"
 )
 
 func NewCmdCtlRestart(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.Command {
@@ -31,20 +35,34 @@ func (s *CmdCtlRestart) ParseArgv(ctx *cli.Context) error {
 }
 
 func (s *CmdCtlRestart) Run() error {
+	configCli, err := GetConfigClient(s.G())
+	if err != nil {
+		return err
+	}
+	config, err := configCli.GetConfig(context.TODO(), 0)
+	if err != nil {
+		return err
+	}
+
 	cli, err := GetCtlClient(s.G())
 	if err != nil {
 		return err
 	}
-	if err = cli.Stop(context.TODO(), 0); err != nil {
-		G.Log.Warning("Stop failed: %s", err)
+	if err = cli.Stop(context.TODO(), keybase1.StopArg{ExitCode: keybase1.ExitCode_RESTART}); err != nil {
+		s.G().Log.Warning("Stop failed: %s", err)
 		return err
 	}
 
-	// Wait a few seconds before the server stops
-	G.Log.Info("Delaying for shutdown...")
-	time.Sleep(2 * time.Second)
-	G.Log.Info("Restart")
-	return ForkServer(s.G().Env.GetCommandLine(), s.G())
+	// If the watchdog started this process, it will do the restarting.
+	// Otherwise we have to.
+	if config.ForkType != keybase1.ForkType_WATCHDOG {
+		// Wait a few seconds before the server stops
+		s.G().Log.Info("Delaying for shutdown...")
+		time.Sleep(2 * time.Second)
+		s.G().Log.Info("Restart")
+		_, err = ForkServer(s.G(), s.G().Env.GetCommandLine(), config.ForkType)
+	}
+	return err
 }
 
 func (s *CmdCtlRestart) GetUsage() libkb.Usage {

@@ -480,17 +480,6 @@ func (_mr *_MockKeybaseDaemonRecorder) LoadUserPlusKeys(arg0, arg1 interface{}) 
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "LoadUserPlusKeys", arg0, arg1)
 }
 
-func (_m *MockKeybaseDaemon) CurrentUID(ctx context.Context, sessionID int) (protocol.UID, error) {
-	ret := _m.ctrl.Call(_m, "CurrentUID", ctx, sessionID)
-	ret0, _ := ret[0].(protocol.UID)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-func (_mr *_MockKeybaseDaemonRecorder) CurrentUID(arg0, arg1 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "CurrentUID", arg0, arg1)
-}
-
 func (_m *MockKeybaseDaemon) CurrentSession(ctx context.Context, sessionID int) (SessionInfo, error) {
 	ret := _m.ctrl.Call(_m, "CurrentSession", ctx, sessionID)
 	ret0, _ := ret[0].(SessionInfo)
@@ -531,6 +520,16 @@ func (_m *MockKeybaseDaemon) FavoriteList(ctx context.Context, sessionID int) ([
 
 func (_mr *_MockKeybaseDaemonRecorder) FavoriteList(arg0, arg1 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "FavoriteList", arg0, arg1)
+}
+
+func (_m *MockKeybaseDaemon) Notify(ctx context.Context, notification *protocol.FSNotification) error {
+	ret := _m.ctrl.Call(_m, "Notify", ctx, notification)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+func (_mr *_MockKeybaseDaemonRecorder) Notify(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "Notify", arg0, arg1)
 }
 
 func (_m *MockKeybaseDaemon) Shutdown() {
@@ -593,6 +592,17 @@ func (_m *MockKBPKI) GetCurrentCryptPublicKey(ctx context.Context) (CryptPublicK
 
 func (_mr *_MockKBPKIRecorder) GetCurrentCryptPublicKey(arg0 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetCurrentCryptPublicKey", arg0)
+}
+
+func (_m *MockKBPKI) GetCurrentVerifyingKey(ctx context.Context) (VerifyingKey, error) {
+	ret := _m.ctrl.Call(_m, "GetCurrentVerifyingKey", ctx)
+	ret0, _ := ret[0].(VerifyingKey)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+func (_mr *_MockKBPKIRecorder) GetCurrentVerifyingKey(arg0 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetCurrentVerifyingKey", arg0)
 }
 
 func (_m *MockKBPKI) ResolveAssertion(ctx context.Context, input string) (protocol.UID, error) {
@@ -667,6 +677,16 @@ func (_m *MockKBPKI) FavoriteList(ctx context.Context) ([]protocol.Folder, error
 
 func (_mr *_MockKBPKIRecorder) FavoriteList(arg0 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "FavoriteList", arg0)
+}
+
+func (_m *MockKBPKI) Notify(ctx context.Context, notification *protocol.FSNotification) error {
+	ret := _m.ctrl.Call(_m, "Notify", ctx, notification)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+func (_mr *_MockKBPKIRecorder) Notify(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "Notify", arg0, arg1)
 }
 
 // Mock of KeyManager interface
@@ -771,6 +791,22 @@ func (_m *MockReporter) AllKnownErrors() []ReportedError {
 
 func (_mr *_MockReporterRecorder) AllKnownErrors() *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "AllKnownErrors")
+}
+
+func (_m *MockReporter) Notify(ctx context.Context, notification *protocol.FSNotification) {
+	_m.ctrl.Call(_m, "Notify", ctx, notification)
+}
+
+func (_mr *_MockReporterRecorder) Notify(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "Notify", arg0, arg1)
+}
+
+func (_m *MockReporter) Shutdown() {
+	_m.ctrl.Call(_m, "Shutdown")
+}
+
+func (_mr *_MockReporterRecorder) Shutdown() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "Shutdown")
 }
 
 // Mock of MDCache interface
@@ -990,6 +1026,17 @@ func (_mr *_MockCryptoRecorder) MakeRandomTlfID(arg0 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "MakeRandomTlfID", arg0)
 }
 
+func (_m *MockCrypto) MakeRandomBranchID() (BranchID, error) {
+	ret := _m.ctrl.Call(_m, "MakeRandomBranchID")
+	ret0, _ := ret[0].(BranchID)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+func (_mr *_MockCryptoRecorder) MakeRandomBranchID() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "MakeRandomBranchID")
+}
+
 func (_m *MockCrypto) MakeMdID(md *RootMetadata) (MdID, error) {
 	ret := _m.ctrl.Call(_m, "MakeMdID", md)
 	ret0, _ := ret[0].(MdID)
@@ -1123,6 +1170,17 @@ func (_m *MockCrypto) Sign(ctx context.Context, msg []byte) (SignatureInfo, erro
 
 func (_mr *_MockCryptoRecorder) Sign(arg0, arg1 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "Sign", arg0, arg1)
+}
+
+func (_m *MockCrypto) SignToString(ctx context.Context, msg []byte) (string, error) {
+	ret := _m.ctrl.Call(_m, "SignToString", ctx, msg)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+func (_mr *_MockCryptoRecorder) SignToString(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "SignToString", arg0, arg1)
 }
 
 func (_m *MockCrypto) Verify(msg []byte, sigInfo SignatureInfo) error {
@@ -1342,15 +1400,15 @@ func (_mr *_MockMDOpsRecorder) GetForTLF(arg0, arg1 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetForTLF", arg0, arg1)
 }
 
-func (_m *MockMDOps) GetUnmergedForTLF(ctx context.Context, id TlfID) (*RootMetadata, error) {
-	ret := _m.ctrl.Call(_m, "GetUnmergedForTLF", ctx, id)
+func (_m *MockMDOps) GetUnmergedForTLF(ctx context.Context, id TlfID, bid BranchID) (*RootMetadata, error) {
+	ret := _m.ctrl.Call(_m, "GetUnmergedForTLF", ctx, id, bid)
 	ret0, _ := ret[0].(*RootMetadata)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-func (_mr *_MockMDOpsRecorder) GetUnmergedForTLF(arg0, arg1 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetUnmergedForTLF", arg0, arg1)
+func (_mr *_MockMDOpsRecorder) GetUnmergedForTLF(arg0, arg1, arg2 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetUnmergedForTLF", arg0, arg1, arg2)
 }
 
 func (_m *MockMDOps) GetRange(ctx context.Context, id TlfID, start MetadataRevision, stop MetadataRevision) ([]*RootMetadata, error) {
@@ -1364,15 +1422,15 @@ func (_mr *_MockMDOpsRecorder) GetRange(arg0, arg1, arg2, arg3 interface{}) *gom
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetRange", arg0, arg1, arg2, arg3)
 }
 
-func (_m *MockMDOps) GetUnmergedRange(ctx context.Context, id TlfID, start MetadataRevision, stop MetadataRevision) ([]*RootMetadata, error) {
-	ret := _m.ctrl.Call(_m, "GetUnmergedRange", ctx, id, start, stop)
+func (_m *MockMDOps) GetUnmergedRange(ctx context.Context, id TlfID, bid BranchID, start MetadataRevision, stop MetadataRevision) ([]*RootMetadata, error) {
+	ret := _m.ctrl.Call(_m, "GetUnmergedRange", ctx, id, bid, start, stop)
 	ret0, _ := ret[0].([]*RootMetadata)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-func (_mr *_MockMDOpsRecorder) GetUnmergedRange(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetUnmergedRange", arg0, arg1, arg2, arg3)
+func (_mr *_MockMDOpsRecorder) GetUnmergedRange(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetUnmergedRange", arg0, arg1, arg2, arg3, arg4)
 }
 
 func (_m *MockMDOps) Put(ctx context.Context, rmd *RootMetadata) error {
@@ -1385,14 +1443,14 @@ func (_mr *_MockMDOpsRecorder) Put(arg0, arg1 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "Put", arg0, arg1)
 }
 
-func (_m *MockMDOps) PutUnmerged(ctx context.Context, rmd *RootMetadata) error {
-	ret := _m.ctrl.Call(_m, "PutUnmerged", ctx, rmd)
+func (_m *MockMDOps) PutUnmerged(ctx context.Context, rmd *RootMetadata, bid BranchID) error {
+	ret := _m.ctrl.Call(_m, "PutUnmerged", ctx, rmd, bid)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-func (_mr *_MockMDOpsRecorder) PutUnmerged(arg0, arg1 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "PutUnmerged", arg0, arg1)
+func (_mr *_MockMDOpsRecorder) PutUnmerged(arg0, arg1, arg2 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "PutUnmerged", arg0, arg1, arg2)
 }
 
 // Mock of KeyOps interface
@@ -1534,26 +1592,26 @@ func (_mr *_MockMDServerRecorder) GetForHandle(arg0, arg1, arg2 interface{}) *go
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetForHandle", arg0, arg1, arg2)
 }
 
-func (_m *MockMDServer) GetForTLF(ctx context.Context, id TlfID, mStatus MergeStatus) (*RootMetadataSigned, error) {
-	ret := _m.ctrl.Call(_m, "GetForTLF", ctx, id, mStatus)
+func (_m *MockMDServer) GetForTLF(ctx context.Context, id TlfID, bid BranchID, mStatus MergeStatus) (*RootMetadataSigned, error) {
+	ret := _m.ctrl.Call(_m, "GetForTLF", ctx, id, bid, mStatus)
 	ret0, _ := ret[0].(*RootMetadataSigned)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-func (_mr *_MockMDServerRecorder) GetForTLF(arg0, arg1, arg2 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetForTLF", arg0, arg1, arg2)
+func (_mr *_MockMDServerRecorder) GetForTLF(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetForTLF", arg0, arg1, arg2, arg3)
 }
 
-func (_m *MockMDServer) GetRange(ctx context.Context, id TlfID, mStatus MergeStatus, start MetadataRevision, stop MetadataRevision) ([]*RootMetadataSigned, error) {
-	ret := _m.ctrl.Call(_m, "GetRange", ctx, id, mStatus, start, stop)
+func (_m *MockMDServer) GetRange(ctx context.Context, id TlfID, bid BranchID, mStatus MergeStatus, start MetadataRevision, stop MetadataRevision) ([]*RootMetadataSigned, error) {
+	ret := _m.ctrl.Call(_m, "GetRange", ctx, id, bid, mStatus, start, stop)
 	ret0, _ := ret[0].([]*RootMetadataSigned)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-func (_mr *_MockMDServerRecorder) GetRange(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetRange", arg0, arg1, arg2, arg3, arg4)
+func (_mr *_MockMDServerRecorder) GetRange(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetRange", arg0, arg1, arg2, arg3, arg4, arg5)
 }
 
 func (_m *MockMDServer) Put(ctx context.Context, rmds *RootMetadataSigned) error {
@@ -1566,14 +1624,14 @@ func (_mr *_MockMDServerRecorder) Put(arg0, arg1 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "Put", arg0, arg1)
 }
 
-func (_m *MockMDServer) PruneUnmerged(ctx context.Context, id TlfID) error {
-	ret := _m.ctrl.Call(_m, "PruneUnmerged", ctx, id)
+func (_m *MockMDServer) PruneBranch(ctx context.Context, id TlfID, bid BranchID) error {
+	ret := _m.ctrl.Call(_m, "PruneBranch", ctx, id, bid)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-func (_mr *_MockMDServerRecorder) PruneUnmerged(arg0, arg1 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "PruneUnmerged", arg0, arg1)
+func (_mr *_MockMDServerRecorder) PruneBranch(arg0, arg1, arg2 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "PruneBranch", arg0, arg1, arg2)
 }
 
 func (_m *MockMDServer) RegisterForUpdate(ctx context.Context, id TlfID, currHead MetadataRevision) (<-chan error, error) {
@@ -2537,16 +2595,24 @@ func (_m *MockcrAction) EXPECT() *_MockcrActionRecorder {
 	return _m.recorder
 }
 
-func (_m *MockcrAction) do(config Config, unmergedMostRecent BlockPointer, mergedMostRecent BlockPointer, unmergedOps []op, mergedOps []op, unmergedBlock *DirBlock, mergedBlock *DirBlock) ([]op, []op, error) {
-	ret := _m.ctrl.Call(_m, "do", config, unmergedMostRecent, mergedMostRecent, unmergedOps, mergedOps, unmergedBlock, mergedBlock)
-	ret0, _ := ret[0].([]op)
-	ret1, _ := ret[1].([]op)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
+func (_m *MockcrAction) do(ctx context.Context, unmergedCopier fileBlockDeepCopier, mergedCopier fileBlockDeepCopier, unmergedBlock *DirBlock, mergedBlock *DirBlock) error {
+	ret := _m.ctrl.Call(_m, "do", ctx, unmergedCopier, mergedCopier, unmergedBlock, mergedBlock)
+	ret0, _ := ret[0].(error)
+	return ret0
 }
 
-func (_mr *_MockcrActionRecorder) do(arg0, arg1, arg2, arg3, arg4, arg5, arg6 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "do", arg0, arg1, arg2, arg3, arg4, arg5, arg6)
+func (_mr *_MockcrActionRecorder) do(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "do", arg0, arg1, arg2, arg3, arg4)
+}
+
+func (_m *MockcrAction) updateOps(unmergedMostRecent BlockPointer, mergedMostRecent BlockPointer, mergedBlock *DirBlock, unmergedChains *crChains, mergedChains *crChains) error {
+	ret := _m.ctrl.Call(_m, "updateOps", unmergedMostRecent, mergedMostRecent, mergedBlock, unmergedChains, mergedChains)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+func (_mr *_MockcrActionRecorder) updateOps(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "updateOps", arg0, arg1, arg2, arg3, arg4)
 }
 
 func (_m *MockcrAction) String() string {

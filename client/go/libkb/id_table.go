@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -916,6 +919,7 @@ type IdentityTable struct {
 	cryptocurrency   []*CryptocurrencyChainLink
 	checkResult      *CheckResult
 	eldest           keybase1.KID
+	Contextified
 }
 
 func (idt *IdentityTable) GetActiveProofsFor(st ServiceType) (ret []RemoteProofChainLink) {
@@ -940,7 +944,7 @@ func (idt *IdentityTable) insertLink(l TypedChainLink) {
 }
 
 func (idt *IdentityTable) MarkCheckResult(err ProofError) {
-	idt.checkResult = NewNowCheckResult(err)
+	idt.checkResult = NewNowCheckResult(idt.G(), err)
 }
 
 func NewTypedChainLink(cl *ChainLink) (ret TypedChainLink, w Warning) {
@@ -992,8 +996,9 @@ func NewTypedChainLink(cl *ChainLink) (ret TypedChainLink, w Warning) {
 	return
 }
 
-func NewIdentityTable(eldest keybase1.KID, sc *SigChain, h *SigHints) (*IdentityTable, error) {
+func NewIdentityTable(g *GlobalContext, eldest keybase1.KID, sc *SigChain, h *SigHints) (*IdentityTable, error) {
 	ret := &IdentityTable{
+		Contextified:     NewContextified(g),
 		sigChain:         sc,
 		revocations:      make(map[keybase1.SigID]bool),
 		links:            make(map[keybase1.SigID]TypedChainLink),
@@ -1147,6 +1152,7 @@ type LinkCheckResult struct {
 	link              RemoteProofChainLink
 	trackedProofState keybase1.ProofState
 	position          int
+	torWarning        bool
 }
 
 func (l LinkCheckResult) GetDiff() TrackDiff      { return l.diff }
@@ -1154,6 +1160,7 @@ func (l LinkCheckResult) GetError() error         { return l.err }
 func (l LinkCheckResult) GetHint() *SigHint       { return l.hint }
 func (l LinkCheckResult) GetCached() *CheckResult { return l.cached }
 func (l LinkCheckResult) GetPosition() int        { return l.position }
+func (l LinkCheckResult) GetTorWarning() bool     { return l.torWarning }
 
 func ComputeRemoteDiff(tracked, observed keybase1.ProofState) TrackDiff {
 	if observed == tracked {
@@ -1169,7 +1176,7 @@ func ComputeRemoteDiff(tracked, observed keybase1.ProofState) TrackDiff {
 func (idt *IdentityTable) proofRemoteCheck(hasPreviousTrack, forceRemoteCheck bool, res *LinkCheckResult) {
 	p := res.link
 
-	G.Log.Debug("+ RemoteCheckProof %s", p.ToDebugString())
+	idt.G().Log.Debug("+ RemoteCheckProof %s", p.ToDebugString())
 	doCache := false
 	sid := p.GetSigID()
 
@@ -1181,26 +1188,19 @@ func (idt *IdentityTable) proofRemoteCheck(hasPreviousTrack, forceRemoteCheck bo
 		}
 
 		if doCache {
-			G.Log.Debug("| Caching results under key=%s", sid)
-			if cacheErr := G.ProofCache.Put(sid, res.err); cacheErr != nil {
-				G.Log.Warning("proof cache put error: %s", cacheErr)
+			idt.G().Log.Debug("| Caching results under key=%s", sid)
+			if cacheErr := idt.G().ProofCache.Put(sid, res.err); cacheErr != nil {
+				idt.G().Log.Warning("proof cache put error: %s", cacheErr)
 			}
 		}
 
-		G.Log.Debug("- RemoteCheckProof %s", p.ToDebugString())
+		idt.G().Log.Debug("- RemoteCheckProof %s", p.ToDebugString())
 	}()
 
 	res.hint = idt.sigHints.Lookup(sid)
 	if res.hint == nil {
 		res.err = NewProofError(keybase1.ProofStatus_NO_HINT, "No server-given hint for sig=%s", sid)
 		return
-	}
-
-	if !forceRemoteCheck {
-		if res.cached = G.ProofCache.Get(sid); res.cached != nil {
-			res.err = res.cached.Status
-			return
-		}
 	}
 
 	var pc ProofChecker
@@ -1210,17 +1210,30 @@ func (idt *IdentityTable) proofRemoteCheck(hasPreviousTrack, forceRemoteCheck bo
 		return
 	}
 
+	if idt.G().Env.GetTorMode().Enabled() {
+		if e := pc.GetTorError(); e != nil {
+			res.torWarning = true
+		}
+	}
+
+	if !forceRemoteCheck {
+		if res.cached = idt.G().ProofCache.Get(sid); res.cached != nil {
+			res.err = res.cached.Status
+			return
+		}
+	}
+
 	// From this point on in the function, we'll be putting our results into
 	// cache (in the defer above).
 	doCache = true
 
 	if res.err = pc.CheckHint(*res.hint); res.err != nil {
-		G.Log.Debug("| Hint failed with error: %s", res.err.Error())
+		idt.G().Log.Debug("| Hint failed with error: %s", res.err.Error())
 		return
 	}
 
 	if res.err = pc.CheckStatus(*res.hint); res.err != nil {
-		G.Log.Debug("| Check status failed with error: %s", res.err.Error())
+		idt.G().Log.Debug("| Check status failed with error: %s", res.err.Error())
 		return
 	}
 

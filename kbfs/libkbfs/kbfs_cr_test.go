@@ -129,6 +129,7 @@ func TestBasicMDUpdate(t *testing.T) {
 		rootNode1.GetFolderBranch(), "Node 1")
 	checkStatus(t, ctx, kbfsOps2, false, userName1, nil,
 		rootNode2.GetFolderBranch(), "Node 2")
+	TestStateForTlf(t, ctx, config1, rootNode1.GetFolderBranch().Tlf)
 }
 
 func testMultipleMDUpdates(t *testing.T, unembedChanges bool) {
@@ -211,6 +212,7 @@ func testMultipleMDUpdates(t *testing.T, unembedChanges bool) {
 	if _, ok := entries["c"]; !ok {
 		t.Fatalf("User 2 doesn't see file c")
 	}
+	TestStateForTlf(t, ctx, config1, rootNode1.GetFolderBranch().Tlf)
 }
 
 func TestMultipleMDUpdates(t *testing.T) {
@@ -276,6 +278,8 @@ func TestUnmergedAfterRestart(t *testing.T) {
 		t.Fatalf("Couldn't sync file: %v", err)
 	}
 
+	DisableCRForTesting(config1, rootNode1.GetFolderBranch())
+
 	// Now when user 1 tries to write to file 1 and sync, it will
 	// become unmerged.  Because this happens in the same goroutine as
 	// the above Sync, we can be sure that the updater on client 1
@@ -304,6 +308,8 @@ func TestUnmergedAfterRestart(t *testing.T) {
 	defer config1B.Shutdown()
 	config2B := ConfigAsUser(config1.(*ConfigLocal), userName2)
 	defer config2B.Shutdown()
+
+	DisableCRForTesting(config1B, rootNode1.GetFolderBranch())
 
 	readAndCompareData(t, config1B, ctx, h, data1, userName1)
 	readAndCompareData(t, config2B, ctx, h, data2, userName2)
@@ -351,6 +357,7 @@ func TestUnmergedAfterRestart(t *testing.T) {
 		rootNode1.GetFolderBranch(), "Node 1 (after unstage)")
 	checkStatus(t, ctx, config2B.KBFSOps(), false, userName2, nil,
 		rootNode2.GetFolderBranch(), "Node 2 (after unstage)")
+	TestStateForTlf(t, ctx, config1B, rootNode1.GetFolderBranch().Tlf)
 }
 
 // Tests that multiple users can write to the same file sequentially
@@ -427,4 +434,6 @@ func TestMultiUserWrite(t *testing.T) {
 	}
 
 	readAndCompareData(t, config2, ctx, h, data3, userName2)
+	config1.KBFSOps().SyncFromServer(ctx, rootNode1.GetFolderBranch())
+	TestStateForTlf(t, ctx, config1, rootNode1.GetFolderBranch().Tlf)
 }

@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package engine
 
 import (
@@ -178,8 +181,8 @@ func TestPassphraseChangeAfterPubkeyLogin(t *testing.T) {
 
 	secui := u.NewSecretUI()
 	u.LoginWithSecretUI(secui, tc.G)
-	if !secui.CalledGetSecret {
-		t.Errorf("get secret not called")
+	if !secui.CalledGetKBPassphrase {
+		t.Errorf("get keybase passphrase not called")
 	}
 
 	newPassphrase := "password1234"
@@ -276,6 +279,7 @@ func TestPassphraseChangeUnknownNoPSCache(t *testing.T) {
 
 	tc.G.LoginState().Account(func(a *libkb.Account) {
 		a.ClearStreamCache()
+		a.ClearCachedSecretKeys()
 	}, "clear stream cache")
 
 	newPassphrase := "password1234"
@@ -309,7 +313,7 @@ func TestPassphraseChangeUnknownBackupKey(t *testing.T) {
 
 	ctx := &Context{
 		LogUI:    tc.G.UI.GetLogUI(),
-		LoginUI:  libkb.TestLoginUI{},
+		LoginUI:  &libkb.TestLoginUI{},
 		SecretUI: &libkb.TestSecretUI{},
 	}
 	beng := NewPaperKey(tc.G)
@@ -351,7 +355,7 @@ func TestPassphraseChangeLoggedOutBackupKey(t *testing.T) {
 
 	ctx := &Context{
 		LogUI:    tc.G.UI.GetLogUI(),
-		LoginUI:  libkb.TestLoginUI{},
+		LoginUI:  &libkb.TestLoginUI{},
 		SecretUI: &libkb.TestSecretUI{},
 	}
 	beng := NewPaperKey(tc.G)
@@ -406,7 +410,7 @@ func TestPassphraseChangeLoggedOutBackupKeySecretStore(t *testing.T) {
 	secretUI := libkb.TestSecretUI{}
 	ctx := &Context{
 		LogUI:    tc.G.UI.GetLogUI(),
-		LoginUI:  libkb.TestLoginUI{},
+		LoginUI:  &libkb.TestLoginUI{},
 		SecretUI: &secretUI,
 	}
 	beng := NewPaperKey(tc.G)
@@ -529,7 +533,7 @@ func TestPassphraseChangeLoggedOutBackupKeyPlusPGP(t *testing.T) {
 
 	ctx := &Context{
 		LogUI:    tc.G.UI.GetLogUI(),
-		LoginUI:  libkb.TestLoginUI{},
+		LoginUI:  &libkb.TestLoginUI{},
 		SecretUI: &libkb.TestSecretUI{},
 	}
 	beng := NewPaperKey(tc.G)
@@ -603,7 +607,7 @@ func TestPassphraseChangeLoggedOutBackupKeySecretStorePGP(t *testing.T) {
 	secretUI := libkb.TestSecretUI{}
 	ctx = &Context{
 		LogUI:    tc.G.UI.GetLogUI(),
-		LoginUI:  libkb.TestLoginUI{},
+		LoginUI:  &libkb.TestLoginUI{},
 		SecretUI: &secretUI,
 	}
 	beng := NewPaperKey(tc.G)

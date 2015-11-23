@@ -5,9 +5,10 @@ protocol provisionUi {
 
   enum ProvisionMethod {
     DEVICE_0,
-    GPG_1,
-    PAPER_KEY_2,
-    PASSPHRASE_3
+    PAPER_KEY_1,
+    PASSPHRASE_2,
+    GPG_IMPORT_3,
+    GPG_SIGN_4
   }
   /**
     Called during device provisioning for the user to select a
@@ -26,11 +27,19 @@ protocol provisionUi {
   DeviceType chooseDeviceType(int sessionID);
 
   /**
+   SecretResponse should be returned by DisplayAndPromptSecret.  Use either secret or phrase.
+   */
+  record SecretResponse {
+    bytes secret;
+    string phrase;
+  }
+
+  /**
    DisplayAndPromptSecret displays a secret that the user can enter into the other device.
    It also can return a secret that the user enters into this device (from the other device). 
    If it does not return a secret, it will be canceled when this device receives the secret via kex2.
    */
-  bytes DisplayAndPromptSecret(int sessionID, bytes secret, string phrase, DeviceType otherDeviceType);
+  SecretResponse DisplayAndPromptSecret(int sessionID, bytes secret, string phrase, DeviceType otherDeviceType);
 
   /**
    DisplaySecretExchanged is called when the kex2 secret has successfully been exchanged by the two

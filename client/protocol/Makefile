@@ -20,22 +20,22 @@ build-stamp: \
 	json/crypto.json \
 	json/ctl.json \
 	json/debugging.json \
+	json/delegate_ui_ctl.json \
 	json/device.json \
-	json/doctor.json \
-	json/doctor_ui.json \
 	json/favorite.json \
 	json/gpg_ui.json \
 	json/identify.json \
 	json/identify_ui.json \
+	json/kbfs.json \
 	json/kex2provisioner.json \
 	json/kex2provisionee.json \
-	json/locksmith_ui.json \
 	json/log_ui.json \
 	json/login.json \
 	json/login_ui.json \
 	json/metadata.json \
 	json/metadata_update.json \
 	json/notify_ctl.json \
+	json/notify_fs.json \
 	json/notify_session.json \
 	json/notify_users.json \
 	json/pgp.json \
@@ -74,11 +74,11 @@ swift-build-stamp: build-stamp
 	date > $@
 
 clean:
-	rm -rf json/*.json ../go/protocol/keybase_v1.go objc/* js/keybase_v1.js swift/*
+	rm -rf json/*.json ../go/protocol/keybase_v1.go js/keybase_v1.js swift/*
 
 deps:
 	npm install
 
-build: build-stamp ../go/protocol/keybase_v1.go objc-build-stamp js/keybase_v1.js
+build: build-stamp ../go/protocol/keybase_v1.go js/keybase_v1.js
 
 .PHONY: test setup config

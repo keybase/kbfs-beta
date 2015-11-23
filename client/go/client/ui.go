@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package client
 
 import (
@@ -12,6 +15,7 @@ import (
 
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
+	rpc "github.com/keybase/go-framed-msgpack-rpc"
 )
 
 type UI struct {
@@ -42,6 +46,10 @@ func (ui *IdentifyUI) Start(username string) {
 
 func (ui BaseIdentifyUI) DisplayTrackStatement(stmt string) error {
 	return ui.parent.Output(stmt)
+}
+
+func (ui BaseIdentifyUI) ReportTrackToken(_ libkb.IdentifyCacheToken) error {
+	return nil
 }
 
 func (ui BaseIdentifyUI) Finish() {
@@ -120,7 +128,11 @@ func (ui IdentifyTrackUI) Confirm(o *keybase1.IdentifyOutcome) (confirmed bool, 
 			", but they haven't proven their identity. Still track them?"
 		promptDefault = libkb.PromptDefaultNo
 	case keybase1.TrackStatus_NEW_FAIL_PROOFS:
-		prompt = "Some proofs failed; still track " + username + "?"
+		verb := "track"
+		if o.ForPGPPull {
+			verb = "pull PGP key for"
+		}
+		prompt = "Some proofs failed; still " + verb + " " + username + "?"
 		promptDefault = libkb.PromptDefaultNo
 	default:
 		prompt = "Is this the " + ColorString("bold", username) + " you wanted?"
@@ -155,7 +167,6 @@ func (ui IdentifyTrackUI) Confirm(o *keybase1.IdentifyOutcome) (confirmed bool, 
 			return
 		}
 	}
-
 	confirmed = true
 	return
 }
@@ -192,6 +203,10 @@ type LinkCheckResultWrapper struct {
 
 func (w LinkCheckResultWrapper) GetDiff() *keybase1.TrackDiff {
 	return w.lcr.Diff
+}
+
+func (w LinkCheckResultWrapper) GetTorWarning() bool {
+	return w.lcr.TorWarning
 }
 
 func (w LinkCheckResultWrapper) GetError() error {
@@ -303,10 +318,16 @@ func (ui BaseIdentifyUI) FinishWebProofCheck(p keybase1.RemoteProof, l keybase1.
 	okColor := "yellow"
 
 	if err := lcr.GetError(); err == nil {
+		torWarning := ""
+		if lcr.GetTorWarning() {
+			okColor = "red"
+			torWarning = ", " + ColorString("bold", "but the result isn't reliable over Tor")
+		}
+
 		if s.GetProtocol() == "dns" {
 			msg += (CHECK + " " + lcrs + "admin of " +
 				ColorString(okColor, "DNS") + " zone " +
-				ColorString(okColor, s.GetDomain()) +
+				ColorString(okColor, s.GetDomain()) + torWarning +
 				": found TXT entry " + lcr.GetHint().GetCheckText())
 		} else {
 			var color string
@@ -317,7 +338,7 @@ func (ui BaseIdentifyUI) FinishWebProofCheck(p keybase1.RemoteProof, l keybase1.
 			}
 			msg += (CHECK + " " + lcrs + "admin of " +
 				ColorString(color, s.GetHostname()) + " via " +
-				ColorString(color, strings.ToUpper(s.GetProtocol())) +
+				ColorString(color, strings.ToUpper(s.GetProtocol())) + torWarning +
 				": " + lcr.GetHint().GetHumanURL())
 		}
 	} else {
@@ -397,14 +418,6 @@ func (ui *UI) GetGPGUI() libkb.GPGUI {
 	return NewGPGUI(ui.GetTerminalUI(), false)
 }
 
-func (ui *UI) GetLocksmithUI() libkb.LocksmithUI {
-	return LocksmithUI{ui}
-}
-
-func (ui *UI) GetDoctorUI() libkb.DoctorUI {
-	return DoctorUI{parent: ui}
-}
-
 func (ui *UI) GetProvisionUI(role libkb.KexRole) libkb.ProvisionUI {
 	return ProvisionUI{parent: ui, role: role}
 }
@@ -477,110 +490,6 @@ func (p ProveUI) DisplayRecheckWarning(_ context.Context, arg keybase1.DisplayRe
 
 //============================================================
 
-type LocksmithUI struct {
-	parent *UI
-}
-
-func (d LocksmithUI) PromptDeviceName(_ context.Context, _ int) (string, error) {
-	return PromptWithChecker(PromptDescriptorLocksmithDeviceName, d.parent, "Enter a public name for this device", false, libkb.CheckDeviceName)
-}
-
-func (d LocksmithUI) DeviceNameTaken(_ context.Context, arg keybase1.DeviceNameTakenArg) error {
-	d.parent.Output(fmt.Sprintf("Device name %q is already in use.  Please enter a unique device name.\n", arg.Name))
-	return nil
-}
-
-func (d LocksmithUI) SelectSigner(_ context.Context, arg keybase1.SelectSignerArg) (res keybase1.SelectSignerRes, err error) {
-	d.parent.Output("How would you like to sign this install of Keybase?\n\n")
-	w := new(tabwriter.Writer)
-	w.Init(d.parent.OutputWriter(), 5, 0, 3, ' ', 0)
-
-	optcount := 0
-	for i, dev := range arg.Devices {
-		var req string
-		switch dev.Type {
-		case libkb.DeviceTypeDesktop:
-			req = "requires access to that device"
-		case libkb.DeviceTypeMobile:
-			req = "requires your device"
-		default:
-			return res, fmt.Errorf("unknown device type: %q", dev.Type)
-		}
-
-		fmt.Fprintf(w, "(%d) with your device named %q\t(%s)\n", i+1, dev.Name, req)
-		optcount++
-	}
-
-	if arg.HasPGP {
-		fmt.Fprintf(w, "(%d) using PGP\t(requires access to your PGP key)\n", optcount+1)
-		optcount++
-	}
-
-	if arg.HasPaperBackupKey {
-		fmt.Fprintf(w, "(%d) using a paper backup key\t(that you wrote down during signup/login)\n", optcount+1)
-		optcount++
-	}
-
-	w.Flush()
-
-	ret, err := PromptSelectionOrCancel(PromptDescriptorLocksmithSigningOption, d.parent, "Choose a signing option", 1, optcount)
-	if err != nil {
-		if err == ErrInputCanceled {
-			res.Action = keybase1.SelectSignerAction_CANCEL
-			return res, nil
-		}
-		return res, err
-	}
-
-	res.Action = keybase1.SelectSignerAction_SIGN
-	res.Signer = &keybase1.DeviceSigner{}
-	if ret <= len(arg.Devices) {
-		res.Signer.Kind = keybase1.DeviceSignerKind_DEVICE
-		res.Signer.DeviceID = &(arg.Devices[ret-1].DeviceID)
-		res.Signer.DeviceName = &(arg.Devices[ret-1].Name)
-	} else if ret == len(arg.Devices)+1 {
-		if arg.HasPGP {
-			res.Signer.Kind = keybase1.DeviceSignerKind_PGP
-		} else {
-			res.Signer.Kind = keybase1.DeviceSignerKind_PAPER_BACKUP_KEY
-		}
-	} else if ret == len(arg.Devices)+2 {
-		res.Signer.Kind = keybase1.DeviceSignerKind_PAPER_BACKUP_KEY
-	}
-
-	return res, nil
-}
-
-func (d LocksmithUI) DeviceSignAttemptErr(_ context.Context, arg keybase1.DeviceSignAttemptErrArg) error {
-	return nil
-}
-
-func (d LocksmithUI) DisplaySecretWords(_ context.Context, arg keybase1.DisplaySecretWordsArg) error {
-	d.parent.Printf("\nUsing the terminal at %q, type this:\n\n", arg.DeviceNameExisting)
-	d.parent.Printf("\tkeybase device add \"%s\"\n\n", arg.Secret)
-	return nil
-}
-
-func (d LocksmithUI) KexStatus(_ context.Context, arg keybase1.KexStatusArg) error {
-	G.Log.Debug("kex status: %s (%d)", arg.Msg, arg.Code)
-	return nil
-}
-
-func (d LocksmithUI) DisplayProvisionSuccess(_ context.Context, arg keybase1.DisplayProvisionSuccessArg) error {
-
-	d.parent.Printf(CHECK + " Success! You are logged in as " + ColorString("bold", arg.Username) + "\n")
-	// turn on when kbfs active:
-	if false {
-		d.parent.Printf("  - your keybase public directory is available at /keybase/public/%s\n", arg.Username)
-		d.parent.Printf("  - your keybase encrypted directory is available at /keybase/private/%s\n", arg.Username)
-	}
-
-	d.parent.Printf("  - type `keybase help` for more info.\n")
-	return nil
-}
-
-//============================================================
-
 type LoginUI struct {
 	parent   libkb.TerminalUI
 	noPrompt bool
@@ -591,8 +500,8 @@ func NewLoginUI(t libkb.TerminalUI, noPrompt bool) LoginUI {
 }
 
 func (l LoginUI) GetEmailOrUsername(_ context.Context, _ int) (string, error) {
-	return PromptWithChecker(PromptDescriptorLoginUsername, l.parent, "Your keybase username or email", false,
-		libkb.CheckEmailOrUsername)
+	return PromptWithChecker(PromptDescriptorLoginUsername, l.parent, "Your keybase username", false,
+		libkb.CheckUsername)
 }
 
 func (l LoginUI) PromptRevokePaperKeys(_ context.Context, arg keybase1.PromptRevokePaperKeysArg) (bool, error) {
@@ -704,7 +613,7 @@ func (ui *UI) Shutdown() error {
 	return err
 }
 
-func (ui SecretUI) GetNewPassphrase(earg keybase1.GetNewPassphraseArg) (eres keybase1.GetNewPassphraseRes, err error) {
+func (ui SecretUI) GetNewPassphrase(earg keybase1.GetNewPassphraseArg) (eres keybase1.GetPassphraseRes, err error) {
 
 	arg := libkb.PromptArg{
 		TerminalPrompt: earg.TerminalPrompt,
@@ -753,15 +662,15 @@ func (ui SecretUI) GetNewPassphrase(earg keybase1.GetNewPassphraseArg) (eres key
 	return
 }
 
-func (ui SecretUI) GetKeybasePassphrase(arg keybase1.GetKeybasePassphraseArg) (text string, err error) {
+func (ui SecretUI) GetKeybasePassphrase(arg keybase1.GetKeybasePassphraseArg) (res keybase1.GetPassphraseRes, err error) {
 	desc := fmt.Sprintf("Please enter the Keybase passphrase for %s (12+ characters)", arg.Username)
-	text, _, err = ui.ppprompt(libkb.PromptArg{
+	res.Passphrase, res.StoreSecret, err = ui.ppprompt(libkb.PromptArg{
 		TerminalPrompt: "keybase passphrase",
 		PinentryPrompt: "Your passphrase",
 		PinentryDesc:   desc,
 		Checker:        &libkb.CheckPassphraseSimple,
 		RetryMessage:   arg.Retry,
-		UseSecretStore: false,
+		UseSecretStore: true,
 	})
 	return
 }
@@ -777,6 +686,24 @@ func (ui SecretUI) GetPaperKeyPassphrase(arg keybase1.GetPaperKeyPassphraseArg) 
 		UseSecretStore: false,
 	})
 	return
+}
+
+func (ui SecretUI) GetPassphrase(pin keybase1.GUIEntryArg, term *keybase1.SecretEntryArg) (res keybase1.GetPassphraseRes, err error) {
+	// if this gets called, then the delegate ui wasn't available.
+	// so only use the terminal
+	if term == nil {
+		term = &keybase1.SecretEntryArg{
+			Prompt:         pin.Prompt,
+			UseSecretStore: pin.Features.SecretStorage.Allow,
+		}
+	}
+	s, err := ui.parent.Terminal.GetSecret(term)
+	if err != nil {
+		return res, err
+	}
+	res.Passphrase = s.Text
+	res.StoreSecret = s.StoreSecret
+	return res, nil
 }
 
 func (ui SecretUI) ppprompt(arg libkb.PromptArg) (text string, storeSecret bool, err error) {
@@ -901,6 +828,10 @@ func sentencePunctuate(s string) string {
 // GetTerminalUI returns the main client UI, which happens to be a terminal UI
 func (ui *UI) GetTerminalUI() libkb.TerminalUI { return ui }
 
+// GetDumbOutput returns the main client UI, which happens to also be a
+// dumb output UI too.
+func (ui *UI) GetDumbOutputUI() libkb.DumbOutputUI { return ui }
+
 func (ui *UI) PromptYesNo(_ libkb.PromptDescriptor, p string, def libkb.PromptDefault) (ret bool, err error) {
 	return ui.Terminal.PromptYesNo(p, def)
 }
@@ -982,4 +913,12 @@ func (ui *UI) Println(a ...interface{}) (int, error) {
 	return fmt.Fprintln(ui.OutputWriter(), a...)
 }
 
+func (ui *UI) PrintfStderr(format string, a ...interface{}) (n int, err error) {
+	return fmt.Fprintf(os.Stderr, format, a...)
+}
+
 //=====================================================
+
+func NewLoginUIProtocol(g *libkb.GlobalContext) rpc.Protocol {
+	return keybase1.LoginUiProtocol(g.UI.GetLoginUI())
+}

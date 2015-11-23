@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -215,7 +218,9 @@ func doChainTest(t *testing.T, testCase TestCase) {
 
 	// Check the expected results: total unrevoked links, sibkeys, and subkeys.
 	unrevokedCount := 0
-	idtable, err := NewIdentityTable(eldestKID, &sigchain, nil)
+
+	// XXX we should really contextify this
+	idtable, err := NewIdentityTable(nil, eldestKID, &sigchain, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

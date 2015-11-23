@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -20,6 +23,8 @@ type TwitterChecker struct {
 func NewTwitterChecker(p RemoteProofChainLink) (*TwitterChecker, ProofError) {
 	return &TwitterChecker{p}, nil
 }
+
+func (rc *TwitterChecker) GetTorError() ProofError { return nil }
 
 func (rc *TwitterChecker) CheckHint(h SigHint) ProofError {
 	wantedURL := ("https://twitter.com/" + strings.ToLower(rc.proof.GetRemoteUsername()) + "/")

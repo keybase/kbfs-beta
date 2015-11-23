@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -9,10 +12,10 @@ import (
 //       file, update that script.
 
 // Version as MAJOR.MINOR.PATCH
-const Version = "1.0.0"
+const Version = "1.0.1"
 
 // Build number
-const Build = "41"
+const Build = "0"
 
 // VersionString returns semantic version string.
 func VersionString() string {

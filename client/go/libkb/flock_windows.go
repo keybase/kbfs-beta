@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 // +build windows
 
 package libkb
@@ -17,7 +20,7 @@ func (f *LockPIDFile) Lock() (err error) {
 	}
 	access := uint32(syscall.GENERIC_READ | syscall.GENERIC_WRITE)
 	createmode := uint32(syscall.OPEN_ALWAYS)
-	sharemode := uint32(0) // os.Open always uses FILE_SHARE_READ | FILE_SHARE_WRITE
+	sharemode := uint32(syscall.FILE_SHARE_READ) // os.Open always uses FILE_SHARE_READ | FILE_SHARE_WRITE
 	var sa *syscall.SecurityAttributes
 	r, err := syscall.CreateFile(pathp, access, sharemode, sa, createmode, syscall.FILE_ATTRIBUTE_NORMAL, 0)
 	if err != nil {

@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package engine
 
 import (
@@ -17,7 +20,7 @@ func TestTrackToken(t *testing.T) {
 
 func trackWithToken(tc libkb.TestContext, fu *FakeUser, username string) {
 	idUI := &FakeIdentifyUI{}
-	idarg := &IDEngineArg{UserAssertion: username}
+	idarg := &keybase1.IdentifyArg{UserAssertion: username}
 	ctx := &Context{
 		LogUI:      tc.G.UI.GetLogUI(),
 		IdentifyUI: idUI,

@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package client
 
 import (
@@ -24,14 +27,18 @@ func (s *SecretUIServer) GetSecret(_ context.Context, arg keybase1.GetSecretArg)
 	return
 }
 
-func (s *SecretUIServer) GetNewPassphrase(_ context.Context, arg keybase1.GetNewPassphraseArg) (keybase1.GetNewPassphraseRes, error) {
+func (s *SecretUIServer) GetNewPassphrase(_ context.Context, arg keybase1.GetNewPassphraseArg) (keybase1.GetPassphraseRes, error) {
 	return s.eng.GetNewPassphrase(arg)
 }
 
-func (s *SecretUIServer) GetKeybasePassphrase(_ context.Context, arg keybase1.GetKeybasePassphraseArg) (string, error) {
+func (s *SecretUIServer) GetKeybasePassphrase(_ context.Context, arg keybase1.GetKeybasePassphraseArg) (keybase1.GetPassphraseRes, error) {
 	return s.eng.GetKeybasePassphrase(arg)
 }
 
 func (s *SecretUIServer) GetPaperKeyPassphrase(_ context.Context, arg keybase1.GetPaperKeyPassphraseArg) (string, error) {
 	return s.eng.GetPaperKeyPassphrase(arg)
+}
+
+func (s *SecretUIServer) GetPassphrase(_ context.Context, arg keybase1.GetPassphraseArg) (keybase1.GetPassphraseRes, error) {
+	return s.eng.GetPassphrase(arg.Pinentry, arg.Terminal)
 }

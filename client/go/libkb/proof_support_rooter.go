@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 // +build !production
 
 package libkb
@@ -22,6 +25,8 @@ type RooterChecker struct {
 func NewRooterChecker(p RemoteProofChainLink) (*RooterChecker, ProofError) {
 	return &RooterChecker{p}, nil
 }
+
+func (rc *RooterChecker) GetTorError() ProofError { return nil }
 
 func (rc *RooterChecker) CheckHint(h SigHint) (err ProofError) {
 	G.Log.Debug("+ Rooter check hint: %v", h)

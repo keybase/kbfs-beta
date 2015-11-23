@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 // +build !windows
 
 // gexpect is not windows friendly
@@ -14,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ThomasRooney/gexpect"
+	"github.com/keybase/gexpect"
 )
 
 // compileBinary compiles the keybase main binary via `go install`.  It installs

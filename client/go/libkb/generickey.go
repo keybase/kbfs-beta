@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -114,4 +117,8 @@ func ParseGenericKey(bundle string) (GenericKey, error) {
 
 func isPGPBundle(armored string) bool {
 	return strings.HasPrefix(armored, "-----BEGIN PGP")
+}
+
+func GenericKeyEqual(k1, k2 GenericKey) bool {
+	return k1.GetKID().Equal(k2.GetKID())
 }

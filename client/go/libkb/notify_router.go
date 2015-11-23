@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -19,6 +22,7 @@ type setObj struct {
 // NotifyRouter routes notifications to the various active RPC
 // connections. It's careful only to route to those who are interested
 type NotifyRouter struct {
+	Contextified
 	cm         *ConnectionManager
 	state      map[ConnectionID]keybase1.NotificationChannels
 	setCh      chan setObj
@@ -28,13 +32,14 @@ type NotifyRouter struct {
 
 // NewNotifyRouter makes a new notification router; we should only
 // make one of these per process.
-func NewNotifyRouter() *NotifyRouter {
+func NewNotifyRouter(g *GlobalContext) *NotifyRouter {
 	ret := &NotifyRouter{
-		cm:         NewConnectionManager(),
-		state:      make(map[ConnectionID]keybase1.NotificationChannels),
-		setCh:      make(chan setObj),
-		getCh:      make(chan getObj),
-		shutdownCh: make(chan struct{}),
+		Contextified: NewContextified(g),
+		cm:           g.ConnectionManager,
+		state:        make(map[ConnectionID]keybase1.NotificationChannels),
+		setCh:        make(chan setObj),
+		getCh:        make(chan getObj),
+		shutdownCh:   make(chan struct{}),
 	}
 	go ret.run()
 	return ret
@@ -42,7 +47,6 @@ func NewNotifyRouter() *NotifyRouter {
 
 func (n *NotifyRouter) Shutdown() {
 	n.shutdownCh <- struct{}{}
-	n.cm.Shutdown()
 }
 
 func (n *NotifyRouter) setNotificationChannels(id ConnectionID, val keybase1.NotificationChannels) {
@@ -72,6 +76,9 @@ func (n *NotifyRouter) run() {
 // established for this server.  The caller should pass in the Transporter
 // and also the channel that will get messages when the chanel closes.
 func (n *NotifyRouter) AddConnection(xp rpc.Transporter, ch chan error) ConnectionID {
+	if n == nil {
+		return 0
+	}
 	id := n.cm.AddConnection(xp, ch)
 	n.setNotificationChannels(id, keybase1.NotificationChannels{})
 	return id
@@ -86,6 +93,10 @@ func (n *NotifyRouter) SetChannels(i ConnectionID, nc keybase1.NotificationChann
 // HandleLogout is called whenever the current user logged out. It will broadcast
 // the message to all connections who care about such a mesasge.
 func (n *NotifyRouter) HandleLogout() {
+	if n == nil {
+		return
+	}
+	n.G().Log.Debug("+ Sending logout notfication")
 	// For all connections we currently have open...
 	n.cm.ApplyAll(func(id ConnectionID, xp rpc.Transporter) bool {
 		// If the connection wants the `Session` notification type
@@ -100,12 +111,16 @@ func (n *NotifyRouter) HandleLogout() {
 		}
 		return true
 	})
+	n.G().Log.Debug("- Logout notification sent")
 }
 
 // HandleUserChanged is called whenever we know that a given user has
 // changed (and must be cache-busted). It will broadcast the messages
 // to all curious listeners.
 func (n *NotifyRouter) HandleUserChanged(uid keybase1.UID) {
+	if n == nil {
+		return
+	}
 	// For all connections we currently have open...
 	n.cm.ApplyAll(func(id ConnectionID, xp rpc.Transporter) bool {
 		// If the connection wants the `Users` notification type
@@ -116,6 +131,28 @@ func (n *NotifyRouter) HandleUserChanged(uid keybase1.UID) {
 				(keybase1.NotifyUsersClient{
 					Cli: rpc.NewClient(xp, ErrorUnwrapper{}),
 				}).UserChanged(context.TODO(), uid)
+			}()
+		}
+		return true
+	})
+}
+
+// HandleFSActivity is called for any KBFS notification. It will broadcast the messages
+// to all curious listeners.
+func (n *NotifyRouter) HandleFSActivity(activity keybase1.FSNotification) {
+	if n == nil {
+		return
+	}
+	// For all connections we currently have open...
+	n.cm.ApplyAll(func(id ConnectionID, xp rpc.Transporter) bool {
+		// If the connection wants the `Kbfs` notification type
+		if n.getNotificationChannels(id).Kbfs {
+			// In the background do...
+			go func() {
+				// A send of a `FSActivity` RPC with the notification
+				(keybase1.NotifyFSClient{
+					Cli: rpc.NewClient(xp, ErrorUnwrapper{}),
+				}).FSActivity(context.TODO(), activity)
 			}()
 		}
 		return true

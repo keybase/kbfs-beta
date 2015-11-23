@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -25,6 +28,8 @@ const (
 func NewRedditChecker(p RemoteProofChainLink) (*RedditChecker, ProofError) {
 	return &RedditChecker{p}, nil
 }
+
+func (rc *RedditChecker) GetTorError() ProofError { return nil }
 
 func (rc *RedditChecker) CheckHint(h SigHint) ProofError {
 	if strings.HasPrefix(strings.ToLower(h.apiURL), RedditSub) {

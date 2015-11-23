@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -31,6 +34,8 @@ func (rc *CoinbaseChecker) CheckHint(h SigHint) ProofError {
 	}
 	return NewProofError(keybase1.ProofStatus_BAD_API_URL, "Bad hint from server; URL should be %q; got %q", wanted, h.apiURL)
 }
+
+func (rc *CoinbaseChecker) GetTorError() ProofError { return nil }
 
 func (rc *CoinbaseChecker) CheckStatus(h SigHint) ProofError {
 	res, err := G.XAPI.GetHTML(APIArg{

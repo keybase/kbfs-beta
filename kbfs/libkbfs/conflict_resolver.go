@@ -1,8 +1,10 @@
 package libkbfs
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/keybase/client/go/logger"
@@ -141,6 +143,9 @@ func (cr *ConflictResolver) Resolve(unmerged MetadataRevision,
 func (cr *ConflictResolver) Wait(ctx context.Context) error {
 	c := make(chan struct{}, 1)
 	go func() {
+		// TODO: From the WaitGroup documentation, it's unclear what
+		// happens if you call Wait() when there are no outstanding
+		// CRs, so we might want to avoid calling Wait in that case.
 		cr.inputGroup.Wait()
 		c <- struct{}{}
 	}()
@@ -153,13 +158,39 @@ func (cr *ConflictResolver) Wait(ctx context.Context) error {
 	}
 }
 
+// shutdownLocked requires that the caller hold shutdownLock for writing.
+func (cr *ConflictResolver) shutdownLocked() {
+	cr.shutdown = true
+	close(cr.inputChan)
+}
+
 // Shutdown cancels any ongoing resolutions and stops any background
 // goroutines.
 func (cr *ConflictResolver) Shutdown() {
 	cr.shutdownLock.Lock()
 	defer cr.shutdownLock.Unlock()
-	cr.shutdown = true
-	close(cr.inputChan)
+	cr.shutdownLocked()
+}
+
+// Pause cancels any ongoing resolutions and prevents any new ones from
+// starting.
+func (cr *ConflictResolver) Pause() {
+	cr.shutdownLock.Lock()
+	defer cr.shutdownLock.Unlock()
+	cr.shutdownLocked()
+	cr.inputChan = make(chan conflictInput)
+}
+
+// Restart re-enables conflict resolution.
+func (cr *ConflictResolver) Restart() {
+	cr.shutdownLock.Lock()
+	defer cr.shutdownLock.Unlock()
+	if !cr.shutdown {
+		return
+	}
+
+	cr.shutdown = false
+	go cr.processInput()
 }
 
 func (cr *ConflictResolver) checkDone(ctx context.Context) error {
@@ -273,24 +304,32 @@ func (sp crSortedPaths) Swap(i, j int) {
 	sp[j], sp[i] = sp[i], sp[j]
 }
 
-func (cr *ConflictResolver) getUnmergedPaths(ctx context.Context,
-	unmergedChains *crChains, mostRecentUnmergedMD *RootMetadata) (
-	[]path, error) {
+// getPathsFromChains returns a sorted slice of most recent paths to
+// all the nodes in the given CR chains that were directly modified
+// during a branch, and which existed at both the start and the end of
+// the branch.  This represents the paths that need to be checked for
+// conflicts.  The paths are sorted by descending path length.  It
+// uses the corresponding node cache when looking up paths, which must
+// at least contain the most recent root node of the branch.  Note
+// that if a path cannot be found, the corresponding chain is
+// completely removed from the set of CR chains.
+func (cr *ConflictResolver) getPathsFromChains(ctx context.Context,
+	chains *crChains, nodeCache NodeCache) ([]path, error) {
 	newPtrs := make(map[BlockPointer]bool)
 	var ptrs []BlockPointer
-	for ptr, chain := range unmergedChains.byMostRecent {
+	for ptr, chain := range chains.byMostRecent {
 		newPtrs[ptr] = true
 		// We only care about the paths for ptrs that are directly
 		// affected by operations and were live through the entire
 		// unmerged branch.
-		if len(chain.ops) > 0 && !unmergedChains.isCreated(chain.original) &&
-			!unmergedChains.isDeleted(chain.original) {
+		if len(chain.ops) > 0 && !chains.isCreated(chain.original) &&
+			!chains.isDeleted(chain.original) {
 			ptrs = append(ptrs, ptr)
 		}
 	}
 
-	nodeMap, err := cr.fbo.searchForNodes(ctx, cr.fbo.nodeCache, ptrs, newPtrs,
-		mostRecentUnmergedMD)
+	nodeMap, err := cr.fbo.searchForNodes(ctx, nodeCache, ptrs, newPtrs,
+		chains.mostRecentMD)
 	if err != nil {
 		return nil, err
 	}
@@ -299,7 +338,7 @@ func (cr *ConflictResolver) getUnmergedPaths(ctx context.Context,
 	for ptr, n := range nodeMap {
 		if n == nil {
 			cr.log.CDebugf(ctx, "Ignoring pointer with no found path: %v", ptr)
-			unmergedChains.removeChain(ptr)
+			chains.removeChain(ptr)
 			continue
 		}
 
@@ -310,7 +349,7 @@ func (cr *ConflictResolver) getUnmergedPaths(ctx context.Context,
 		paths = append(paths, p)
 
 		// update the unmerged final paths
-		chain, ok := unmergedChains.byMostRecent[ptr]
+		chain, ok := chains.byMostRecent[ptr]
 		if !ok {
 			cr.log.CErrorf(ctx, "Couldn't find chain for found path: %v", ptr)
 			continue
@@ -323,6 +362,116 @@ func (cr *ConflictResolver) getUnmergedPaths(ctx context.Context,
 	// Order by descending path length.
 	sort.Sort(crSortedPaths(paths))
 	return paths, nil
+}
+
+// checkPathForMerge checks whether the given unmerged chain and path
+// contains any newly-created subdirectories that were created
+// simultaneously in the merged branch as well.  If so, it recursively
+// checks that directory as well.  It returns a slice of any new
+// unmerged paths that need to be checked for conflicts later in
+// conflict resolution, for all subdirectories of the given path.
+func (cr *ConflictResolver) checkPathForMerge(ctx context.Context,
+	unmergedChain *crChain, unmergedPath path, unmergedChains *crChains,
+	mergedChains *crChains) ([]path, error) {
+	mergedChain, ok := mergedChains.byOriginal[unmergedChain.original]
+	if !ok {
+		// No corresponding merged chain means we don't have to merge
+		// any directories.
+		return nil, nil
+	}
+
+	// Find instances of the same directory being created in both
+	// branches.  Only merge completely new directories -- anything
+	// involving a rename will result in a conflict for now.
+	//
+	// TODO: have a better merge strategy for renamed directories!
+	mergedCreates := make(map[string]BlockPointer) // entry -> original
+	for _, op := range mergedChain.ops {
+		cop, ok := op.(*createOp)
+		if !ok || cop.Type != Dir || len(cop.Refs()) == 0 || cop.renamed {
+			continue
+		}
+		mergedCreates[cop.NewName] = cop.Refs()[0]
+	}
+
+	if len(mergedCreates) == 0 {
+		return nil, nil
+	}
+
+	var newUnmergedPaths []path
+	for _, op := range unmergedChain.ops {
+		cop, ok := op.(*createOp)
+		if !ok || cop.Type != Dir || len(cop.Refs()) == 0 || cop.renamed {
+			continue
+		}
+
+		// Is there a corresponding merged create?
+		mergedOriginal, ok := mergedCreates[cop.NewName]
+		if !ok {
+			continue
+		}
+		unmergedOriginal := cop.Refs()[0]
+
+		cr.log.CDebugf(ctx, "Merging name %s in %v (unmerged original %v "+
+			"changed to %v)", cop.NewName, unmergedChain.mostRecent,
+			unmergedOriginal, mergedOriginal)
+		// Change the original to match the merged original, so we can
+		// check for conflicts later.  Note that the most recent will
+		// stay the same, so we can still match the unmerged path
+		// correctly.
+		err := unmergedChains.changeOriginal(unmergedOriginal, mergedOriginal)
+		if err != nil {
+			return nil, err
+		}
+
+		unmergedChain, ok := unmergedChains.byOriginal[mergedOriginal]
+		if !ok {
+			return nil, fmt.Errorf("Change original (%v -> %v) didn't work",
+				unmergedOriginal, mergedOriginal)
+		}
+		newPath := *unmergedPath.ChildPathNoPtr(cop.NewName)
+		newPath.path[len(newPath.path)-1].BlockPointer =
+			unmergedChain.mostRecent
+		// recurse for this chain
+		newPaths, err := cr.checkPathForMerge(ctx, unmergedChain, newPath,
+			unmergedChains, mergedChains)
+		if err != nil {
+			return nil, err
+		}
+		// Add any further subdirectories that need merging under this
+		// subdirectory.
+		newUnmergedPaths = append(newUnmergedPaths, newPaths...)
+		// Then add this create's path.
+		newUnmergedPaths = append(newUnmergedPaths, newPath)
+	}
+	return newUnmergedPaths, nil
+}
+
+// findCreatedDirsToMerge finds directories that were created in both
+// the unmerged and merged branches, and resets the original unmerged
+// pointer to match the original merged pointer. It returns a slice of
+// new unmerged paths that need to be combined with the unmergedPaths
+// slice.
+func (cr *ConflictResolver) findCreatedDirsToMerge(ctx context.Context,
+	unmergedPaths []path, unmergedChains *crChains, mergedChains *crChains) (
+	[]path, error) {
+	var newUnmergedPaths []path
+	for _, unmergedPath := range unmergedPaths {
+		unmergedChain, ok :=
+			unmergedChains.byMostRecent[unmergedPath.tailPointer()]
+		if !ok {
+			return nil, fmt.Errorf("findCreatedDirsToMerge: No unmerged chain "+
+				"for most recent %v", unmergedPath.tailPointer())
+		}
+
+		newPaths, err := cr.checkPathForMerge(ctx, unmergedChain, unmergedPath,
+			unmergedChains, mergedChains)
+		if err != nil {
+			return nil, err
+		}
+		newUnmergedPaths = append(newUnmergedPaths, newPaths...)
+	}
+	return newUnmergedPaths, nil
 }
 
 type createMapKey struct {
@@ -387,30 +536,27 @@ func (cr *ConflictResolver) resolveMergedPathTail(ctx context.Context,
 			BlockPointer: currOriginal,
 			Name:         name,
 		})
-		currPath = *currPath.parentPath()
-		currOriginal, err =
-			unmergedChains.originalFromMostRecent(currPath.tailPointer())
+		parentPath := *currPath.parentPath()
+		parentOriginal, err :=
+			unmergedChains.originalFromMostRecent(parentPath.tailPointer())
 		if err != nil {
 			cr.log.CDebugf(ctx, "Couldn't find original pointer for %v",
-				currPath.tailPointer())
+				parentPath.tailPointer())
 			return path{}, BlockPointer{}, nil, err
 		}
 
-		recreateOps = append(recreateOps, newCreateOp(name, currOriginal,
-			File /*placeholder type, will look up actual type later*/))
-	}
-	if len(recreateOps) > 0 {
-		// The final recreateOp (the one closest to the root) can
-		// actually use the most recent merged pointer, since we know
-		// the parent directory exists.
-		lastCreateOriginal := recreateOps[len(recreateOps)-1].Dir.Unref
-		mergedMostRecent, err :=
-			mergedChains.mostRecentFromOriginal(lastCreateOriginal)
+		_, de, err :=
+			cr.fbo.getEntry(ctx, unmergedChains.mostRecentMD, currPath)
 		if err != nil {
-			// This directory wasn't touched on the merged branch
-			mergedMostRecent = lastCreateOriginal
+			return path{}, BlockPointer{}, nil, err
 		}
-		recreateOps[len(recreateOps)-1].Dir.Unref = mergedMostRecent
+		co := newCreateOp(name, parentOriginal, de.Type)
+		co.AddUpdate(parentOriginal, parentOriginal)
+		co.setFinalPath(parentPath)
+		co.AddRefBlock(currOriginal)
+		recreateOps = append(recreateOps, co)
+		currOriginal = parentOriginal
+		currPath = parentPath
 	}
 
 	// Now we have the latest pointer along the path that is
@@ -487,16 +633,53 @@ func (cr *ConflictResolver) resolveMergedPathTail(ctx context.Context,
 // parent directory needing the create has been deleted, then the
 // unref ptr in the createOp contains the original pointer for the
 // directory rather than the most recent merged pointer.
+//
+// It also potentially returns a new slice of unmerged paths that the
+// caller should combine with the existing slice, corresponding to
+// deleted unmerged chains that still have relevant operations to
+// resolve.
 func (cr *ConflictResolver) resolveMergedPaths(ctx context.Context,
-	unmergedPaths []path, unmergedChains *crChains, mergedChains *crChains,
-	mostRecentMergedMD *RootMetadata) (
-	map[BlockPointer]path, []*createOp, error) {
+	unmergedPaths []path, unmergedChains *crChains, mergedChains *crChains) (
+	map[BlockPointer]path, []*createOp, []path, error) {
 	// maps each most recent unmerged pointer to the corresponding
 	// most recent merged path.
 	mergedPaths := make(map[BlockPointer]path)
 
-	if len(unmergedPaths) == 0 {
-		return mergedPaths, nil, nil
+	chainsToSearchFor := make(map[BlockPointer][]BlockPointer)
+	var ptrs []BlockPointer
+
+	// While we're at it, find any deleted unmerged chains containing
+	// operations, where the corresponding merged chain has changed.
+	// The unmerged ops will need to be re-applied in that case.
+	var newUnmergedPaths []path
+	for original, unmergedChain := range unmergedChains.byOriginal {
+		if !unmergedChains.isDeleted(original) || len(unmergedChain.ops) == 0 {
+			continue
+		}
+		mergedChain, ok := mergedChains.byOriginal[original]
+		if !ok || len(mergedChain.ops) == 0 {
+			continue
+		}
+
+		cr.log.CDebugf(ctx, "A modified unmerged path %v was deleted but "+
+			"also modified in the merged branch %v",
+			unmergedChain.mostRecent, mergedChain.mostRecent)
+
+		// Fake the unmerged path, it doesn't matter
+		unmergedPath := path{
+			FolderBranch: cr.fbo.folderBranch,
+			path:         []pathNode{{BlockPointer: unmergedChain.mostRecent}},
+		}
+		chainsToSearchFor[mergedChain.mostRecent] =
+			append(chainsToSearchFor[mergedChain.mostRecent],
+				unmergedChain.mostRecent)
+		ptrs = append(ptrs, mergedChain.mostRecent)
+		newUnmergedPaths = append(newUnmergedPaths, unmergedPath)
+	}
+
+	// Skip out early if there's nothing to do.
+	if len(unmergedPaths) == 0 && len(ptrs) == 0 {
+		return mergedPaths, nil, nil, nil
 	}
 
 	// For each unmerged path, find the corresponding most recent
@@ -506,12 +689,11 @@ func (cr *ConflictResolver) resolveMergedPaths(ctx context.Context,
 	createsSeen := make(map[createMapKey]bool)
 	// maps a merged most recent pointer to the set of unmerged most
 	// recent pointers that need some of their path filled in.
-	chainsToSearchFor := make(map[BlockPointer][]BlockPointer)
 	for _, p := range unmergedPaths {
 		mergedPath, mostRecent, ops, err := cr.resolveMergedPathTail(
 			ctx, p, unmergedChains, mergedChains)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 
 		// Save any recreateOps we've haven't seen yet.
@@ -541,29 +723,28 @@ func (cr *ConflictResolver) resolveMergedPaths(ctx context.Context,
 	mergedNodeCache := newNodeCacheStandard(cr.fbo.folderBranch)
 	// Initialize the root node.  There will always be at least one
 	// unmerged path.
-	mergedNodeCache.GetOrCreate(mostRecentMergedMD.data.Dir.BlockPointer,
+	mergedNodeCache.GetOrCreate(mergedChains.mostRecentMD.data.Dir.BlockPointer,
 		unmergedPaths[0].path[0].Name, nil)
 
 	newPtrs := make(map[BlockPointer]bool)
 	for ptr := range mergedChains.byMostRecent {
 		newPtrs[ptr] = true
 	}
-	ptrs := make([]BlockPointer, 0, len(chainsToSearchFor))
 	for ptr := range chainsToSearchFor {
 		ptrs = append(ptrs, ptr)
 	}
 
 	nodeMap, err := cr.fbo.searchForNodes(ctx, mergedNodeCache, ptrs, newPtrs,
-		mostRecentMergedMD)
+		mergedChains.mostRecentMD)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	for ptr, n := range nodeMap {
 		if n == nil {
 			// All the pointers we're looking for should definitely be
 			// findable in the merged branch somewhere.
-			return nil, nil, NodeNotFoundError{ptr}
+			return nil, nil, nil, NodeNotFoundError{ptr}
 		}
 
 		p := mergedNodeCache.PathFromNode(n)
@@ -591,41 +772,42 @@ func (cr *ConflictResolver) resolveMergedPaths(ctx context.Context,
 		}
 	}
 
-	return mergedPaths, recreateOps, nil
+	return mergedPaths, recreateOps, newUnmergedPaths, nil
 }
 
 func (cr *ConflictResolver) buildChainsAndPaths(ctx context.Context) (
 	unmergedChains *crChains, mergedChains *crChains, unmergedPaths []path,
-	mergedPaths map[BlockPointer]path, recreateOps []*createOp, err error) {
+	mergedPaths map[BlockPointer]path, recreateOps []*createOp,
+	unmerged []*RootMetadata, err error) {
 	// Fetch the merged and unmerged MDs
 	unmerged, merged, err := cr.getMDs(ctx)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, err
 	}
 
 	if u, m := len(unmerged), len(merged); u == 0 || m == 0 {
 		cr.log.CDebugf(ctx, "Skipping merge process due to empty MD list: "+
 			"%d unmerged, %d merged", u, m)
-		return nil, nil, nil, nil, nil, nil
+		return nil, nil, nil, nil, nil, nil, nil
 	}
 
 	// Update the current input to reflect the MDs we'll actually be
 	// working with.
 	err = cr.updateCurrInput(ctx, unmerged, merged)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, err
 	}
 
 	// Canceled before we start the heavy lifting?
 	err = cr.checkDone(ctx)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, err
 	}
 
 	// Make the chains
 	unmergedChains, mergedChains, err = cr.makeChains(ctx, unmerged, merged)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, err
 	}
 
 	// TODO: if the root node didn't change in either chain, we can
@@ -635,34 +817,49 @@ func (cr *ConflictResolver) buildChainsAndPaths(ctx context.Context) (
 	// Get the full path for every most recent unmerged pointer with a
 	// chain of unmerged operations, and which was not created or
 	// deleted within in the unmerged branch.
-	unmergedPaths, err = cr.getUnmergedPaths(ctx, unmergedChains,
-		unmerged[len(unmerged)-1])
+	unmergedPaths, err = cr.getPathsFromChains(ctx, unmergedChains,
+		cr.fbo.nodeCache)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, err
+	}
+
+	// Add in any directory paths that were created in both branches.
+	newUnmergedPaths, err := cr.findCreatedDirsToMerge(ctx, unmergedPaths,
+		unmergedChains, mergedChains)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, err
+	}
+	unmergedPaths = append(unmergedPaths, newUnmergedPaths...)
+	if len(newUnmergedPaths) > 0 {
+		sort.Sort(crSortedPaths(unmergedPaths))
 	}
 
 	// Find the corresponding path in the merged branch for each of
 	// these unmerged paths, and the set of any createOps needed to
 	// apply these unmerged operations in the merged branch.
-	mergedPaths, recreateOps, err =
-		cr.resolveMergedPaths(ctx, unmergedPaths, unmergedChains,
-			mergedChains, merged[len(merged)-1])
+	mergedPaths, recreateOps, newUnmergedPaths, err =
+		cr.resolveMergedPaths(ctx, unmergedPaths, unmergedChains, mergedChains)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, err
+	}
+	unmergedPaths = append(unmergedPaths, newUnmergedPaths...)
+	if len(newUnmergedPaths) > 0 {
+		sort.Sort(crSortedPaths(unmergedPaths))
 	}
 
 	return unmergedChains, mergedChains, unmergedPaths, mergedPaths,
-		recreateOps, nil
+		recreateOps, unmerged, nil
 }
 
 // addRecreateOpsToUnmergedChains inserts each recreateOp, into its
 // appropriate unmerged chain, creating one if it doesn't exist yet.
-// It also adds entries as necessary to mergedPaths.
+// It also adds entries as necessary to mergedPaths, and returns a
+// slice of new unmergedPaths to be added.
 func (cr *ConflictResolver) addRecreateOpsToUnmergedChains(ctx context.Context,
 	recreateOps []*createOp, unmergedChains *crChains, mergedChains *crChains,
-	mergedPaths map[BlockPointer]path) error {
+	mergedPaths map[BlockPointer]path) ([]path, error) {
 	if len(recreateOps) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// First create a lookup table that maps every block pointer in
@@ -678,13 +875,14 @@ func (cr *ConflictResolver) addRecreateOpsToUnmergedChains(ctx context.Context,
 	kbpki := cr.config.KBPKI()
 	uid, err := kbpki.GetCurrentUID(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	writerName, err := kbpki.GetNormalizedUsername(ctx, uid)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
+	var newUnmergedPaths []path
 	for _, rop := range recreateOps {
 		rop.setWriterName(writerName)
 
@@ -699,54 +897,55 @@ func (cr *ConflictResolver) addRecreateOpsToUnmergedChains(ctx context.Context,
 			origTargetPtr = ptr
 		} else if _, ok := err.(NoChainFoundError); !ok {
 			// An unexpected error!
-			return err
+			return nil, err
 		}
 
 		chain, ok := unmergedChains.byOriginal[origTargetPtr]
-		if ok {
-			chain.ops = append([]op{rop}, chain.ops...)
-		} else {
-			oldUnref := rop.Dir.Unref
-			rop.Dir.Unref = origTargetPtr
-			rop.Dir.Ref = rop.Dir.Unref // so that most recent == original
-			err := unmergedChains.makeChainForOp(rop)
-			if err != nil {
-				return err
-			}
-			rop.Dir.Unref = oldUnref
-			rop.Dir.Ref = BlockPointer{}
-			chain = unmergedChains.byOriginal[origTargetPtr]
+		if !ok {
+			return nil, fmt.Errorf("recreateOp for %v has no chain",
+				origTargetPtr)
 		}
+		if len(chain.ops) == 0 {
+			newUnmergedPaths = append(newUnmergedPaths, rop.getFinalPath())
+		}
+		chain.ops = append([]op{rop}, chain.ops...)
 
 		// Look up the corresponding unmerged most recent pointer, and
 		// check whether there's a merged path for it yet.  If not,
 		// create one by looking it up in the lookup table (created
 		// above) and taking the appropriate subpath.
-		mergedPath, ok := mergedPaths[chain.mostRecent]
+		_, ok = mergedPaths[chain.mostRecent]
 		if !ok {
-			key, ok := keys[rop.Dir.Unref]
+			mergedMostRecent := chain.original
+			if !mergedChains.isDeleted(chain.original) {
+				if mChain, ok := mergedChains.byOriginal[chain.original]; ok {
+					mergedMostRecent = mChain.mostRecent
+				}
+			}
+			key, ok := keys[mergedMostRecent]
 			if !ok {
-				return fmt.Errorf("Couldn't find a merged path containing the "+
-					"target of a recreate op: %v", rop.Dir.Unref)
+				return nil, fmt.Errorf("Couldn't find a merged path "+
+					"containing the target of a recreate op: %v",
+					mergedMostRecent)
 			}
 			currPath := mergedPaths[key]
-			for currPath.tailPointer() != rop.Dir.Unref &&
+			for currPath.tailPointer() != mergedMostRecent &&
 				currPath.hasValidParent() {
 				currPath = *currPath.parentPath()
 			}
-			mergedPath = currPath
 			mergedPaths[chain.mostRecent] = currPath
 		}
-		rop.setFinalPath(mergedPath)
 	}
-	return nil
+
+	return newUnmergedPaths, nil
 }
 
 // fixRenameCycles checks every unmerged createOp associated with a
 // rename to see if it will cause a cycle.  If so, it makes it a
 // symlink create operation instead.
-func (cr *ConflictResolver) fixRenameCycles(unmergedChains *crChains,
-	mergedChains *crChains, mergedPaths map[BlockPointer]path) error {
+func (cr *ConflictResolver) fixRenameCycles(ctx context.Context,
+	unmergedChains *crChains, mergedChains *crChains,
+	mergedPaths map[BlockPointer]path) ([]path, error) {
 	// For every renamed block pointer in the unmerged chains:
 	//   * Check if any BlockPointer in its merged path contains a relative of
 	//     itself
@@ -754,91 +953,243 @@ func (cr *ConflictResolver) fixRenameCycles(unmergedChains *crChains,
 	//     symlink creation to the new merged path instead.
 	// So, if in the merged branch someone did `mv b/ a/` and in the unmerged
 	// branch someone did `mv a/ b/`, the conflict resolution would end up with
-	// `a/b/a` where the second a is a symlink to "../../".
+	// `a/b/a` where the second a is a symlink to "../".
+	//
+	// To calculate what the symlink should be, consider the following:
+	//   * The unmerged path for the new parent of ptr P is u_1/u_2/.../u_n
+	//   * u_i is the largest i <= n such that the corresponding block
+	//     can be mapped to a node in merged branch (pointer m_j).
+	//   * The full path to m_j in the merged branch is m_1/m_2/m_3/.../m_j
+	//   * For a rename cycle to occur, some m_x where x <= j must be a
+	//     descendant of P's original pointer.
+	//   * The full merged path to the parent of the second copy of P will
+	//     then be: m_1/m_2/.../m_x/.../m_j/u_i+1/.../u_n.
+	//   * Then, the symlink to put under P's name in u_n is "../"*((n-i)+(j-x))
+	// In the case that u_n is a directory that was newly-created in the
+	// unmerged branch, we also need to construct a complete corresponding
+	// merged path, for use in later stages (like executing actions).  This
+	// merged path is just m_1/.../m_j/u_i+1/.../u_n, using the most recent
+	// unmerged pointers.
+	var newUnmergedPaths []path
+	var removeRenames []BlockPointer
 	for ptr, info := range unmergedChains.renamedOriginals {
 		// The merged path is keyed by the most recent unmerged tail
 		// pointer.
 		parent, err :=
 			unmergedChains.mostRecentFromOriginal(info.originalNewParent)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		mergedPath, ok := mergedPaths[parent]
+		unmergedWalkBack := 0 // (n-i) in the equation above
+		var unmergedPath path
 		if !ok {
-			// There should definitely be a merged path for this
-			// parent, since it has a create operation.
-			return fmt.Errorf("fixRenameCycles: couldn't find merged path "+
-				"for %v", parent)
+			// If this parent was newly created in the unmerged
+			// branch, we need to look up its earliest parent that
+			// existed in both branches.
+			if !unmergedChains.isCreated(info.originalNewParent) {
+				// There should definitely be a merged path for this
+				// parent, since it has a create operation.
+				return nil, fmt.Errorf("fixRenameCycles: couldn't find merged "+
+					"path for %v", parent)
+			}
+
+			// Reuse some code by creating a new chains object
+			// consisting of only this node.
+			newChains := newCRChainsEmpty()
+			chain := unmergedChains.byOriginal[info.originalNewParent]
+			newChains.byOriginal[chain.original] = chain
+			newChains.byMostRecent[chain.mostRecent] = chain
+			// Fake out the rest of the chains to populate newPtrs
+			for _, c := range unmergedChains.byOriginal {
+				if c.original == chain.original {
+					continue
+				}
+				newChain := &crChain{
+					original:   c.original,
+					mostRecent: c.mostRecent,
+				}
+				newChains.byOriginal[c.original] = newChain
+				newChains.byMostRecent[c.mostRecent] = newChain
+			}
+			newChains.mostRecentMD = unmergedChains.mostRecentMD
+			unmergedPaths, err := cr.getPathsFromChains(ctx, newChains,
+				cr.fbo.nodeCache)
+			if err != nil {
+				return nil, err
+			}
+
+			if len(unmergedPaths) != 1 {
+				return nil, fmt.Errorf("fixRenameCycles: couldn't find the "+
+					"unmerged path for %v", info.originalNewParent)
+			}
+			unmergedPath = unmergedPaths[0]
+			// Look backwards to find the first parent with a merged path.
+			n := len(unmergedPath.path) - 1
+			for i := n; i >= 0; i-- {
+				mergedPath, ok = mergedPaths[unmergedPath.path[i].BlockPointer]
+				if ok {
+					unmergedWalkBack = n - i
+					break
+				}
+			}
+			if !ok {
+				return nil, fmt.Errorf("fixRenameCycles: couldn't find any "+
+					"merged path for any parents of %v", parent)
+			}
 		}
 
-		for i, pn := range mergedPath.path {
+		for x, pn := range mergedPath.path {
 			original, err :=
 				mergedChains.originalFromMostRecent(pn.BlockPointer)
 			if err != nil {
 				// This node wasn't changed in the merged branch
 				original = pn.BlockPointer
 			}
+
+			if original != ptr {
+				continue
+			}
+
 			// If any node on this path matches the renamed pointer,
 			// we have a cycle.
-			if original == ptr {
-				chain, ok := unmergedChains.byMostRecent[parent]
-				if !ok {
-					return fmt.Errorf("fixRenameCycles: no chain for parent %v",
-						parent)
-				}
+			chain, ok := unmergedChains.byMostRecent[parent]
+			if !ok {
+				return nil, fmt.Errorf("fixRenameCycles: no chain for "+
+					"parent %v", parent)
+			}
 
-				found := false
-				for _, op := range chain.ops {
-					switch cop := op.(type) {
-					case *createOp:
-						if !cop.renamed || cop.NewName != info.newName {
+			found := false
+		outer:
+			for _, op := range chain.ops {
+				switch cop := op.(type) {
+				case *createOp:
+					if !cop.renamed || cop.NewName != info.newName {
+						continue
+					}
+
+					j := len(mergedPath.path) - 1
+					// (j-x) in the above equation
+					mergedWalkBack := j - x
+					walkBack := unmergedWalkBack + mergedWalkBack
+
+					// Mark this as a symlink, and the resolver
+					// will take care of making it a symlink in
+					// the merged branch later. No need to copy
+					// since this createOp must have been created
+					// as part of conflict resolution.
+					symPath := "./" + strings.Repeat("../", walkBack)
+					cop.Type = Sym
+					cop.crSymPath = symPath
+					cr.log.CDebugf(ctx, "Creating symlink %s at "+
+						"merged path %s", symPath, mergedPath)
+
+					if unmergedWalkBack > 0 {
+						cr.log.CDebugf(ctx, "Adding new unmerged path %s",
+							unmergedPath)
+						newUnmergedPaths = append(newUnmergedPaths,
+							unmergedPath)
+						// Fake a merged path to make sure these
+						// actions will be taken.
+						mergedLen := len(mergedPath.path)
+						pLen := mergedLen + unmergedWalkBack
+						p := path{
+							FolderBranch: mergedPath.FolderBranch,
+							path:         make([]pathNode, pLen),
+						}
+						unmergedStart := len(unmergedPath.path) -
+							unmergedWalkBack
+						copy(p.path[:mergedLen], mergedPath.path)
+						copy(p.path[mergedLen:],
+							unmergedPath.path[unmergedStart:])
+						mergedPaths[unmergedPath.tailPointer()] = p
+					}
+
+					// invert the op in the merged chains
+					invertCreate := newRmOp(info.newName,
+						info.originalNewParent)
+					invertRm := newCreateOp(info.oldName,
+						info.originalOldParent, cop.Type)
+					invertRm.renamed = true
+					invertRm.AddRefBlock(ptr)
+
+					mergedNewMostRecent := info.originalNewParent
+					mrPtr, err := mergedChains.
+						mostRecentFromOriginal(info.originalNewParent)
+					if err == nil {
+						// A satisfactory chain was found.
+						mergedNewMostRecent = mrPtr
+					} else if _, ok := err.(NoChainFoundError); !ok {
+						// An unexpected error!
+						return nil, err
+					}
+					mergedOldMostRecent := info.originalOldParent
+					mrPtr, err = mergedChains.
+						mostRecentFromOriginal(info.originalOldParent)
+					if err == nil {
+						// A satisfactory chain was found.
+						mergedOldMostRecent = mrPtr
+					} else if _, ok := err.(NoChainFoundError); !ok {
+						// An unexpected error!
+						return nil, err
+					}
+					prependOpsToChain(mergedOldMostRecent, mergedChains,
+						invertRm)
+					prependOpsToChain(mergedNewMostRecent, mergedChains,
+						invertCreate)
+					newInfo := renameInfo{
+						originalOldParent: info.originalNewParent,
+						oldName:           info.newName,
+						originalNewParent: info.originalOldParent,
+						newName:           info.oldName,
+					}
+					if newInfo2, ok := mergedChains.renamedOriginals[ptr]; ok {
+						// move it from the existing location
+						newInfo = newInfo2
+						newInfo.originalOldParent = info.originalNewParent
+						newInfo.oldName = info.newName
+					}
+					cr.log.CDebugf(ctx, "Putting new merged rename info "+
+						"%v -> %v", ptr, newInfo)
+					mergedChains.renamedOriginals[ptr] = newInfo
+
+					// Fix up the corresponding rmOp to make sure
+					// that it gets dropped
+					oldParentChain :=
+						unmergedChains.byOriginal[info.originalOldParent]
+					for _, oldOp := range oldParentChain.ops {
+						ro, ok := oldOp.(*rmOp)
+						if !ok {
 							continue
 						}
-
-						// Mark this as a symlink, and the resolver
-						// will take care of making it a symlink in
-						// the merged branch later. No need to copy
-						// since this createOp must have been created
-						// as part of conflict resolution.
-						cop.Type = Sym
-						symPath := "./"
-						for j := len(mergedPath.path); j > i; j-- {
-							symPath += "../"
+						if ro.OldName == info.oldName {
+							// No need to copy since this createOp
+							// must have been created as part of
+							// conflict resolution.
+							ro.dropThis = true
+							break
 						}
-						cop.crSymPath = symPath
-
-						// Fix up the corresponding rmOp to make sure
-						// that it gets dropped
-						oldParentChain :=
-							unmergedChains.byOriginal[info.originalOldParent]
-						for _, oldOp := range oldParentChain.ops {
-							ro, ok := oldOp.(*rmOp)
-							if !ok {
-								continue
-							}
-							if ro.OldName == info.oldName {
-								// No need to copy since this createOp
-								// must have been created as part of
-								// conflict resolution.
-								ro.dropThis = true
-								break
-							}
-						}
-
-						found = true
-						break
 					}
-				}
-				if !found {
-					return fmt.Errorf("fixRenameCycles: couldn't find rename "+
-						"op corresponding to %v,%s in parent %v",
-						ptr, info.newName, parent)
+
+					found = true
+					break outer
 				}
 			}
+			if !found {
+				return nil, fmt.Errorf("fixRenameCycles: couldn't find "+
+					"rename op corresponding to %v,%s in parent %v",
+					ptr, info.newName, parent)
+			}
+			removeRenames = append(removeRenames, ptr)
 		}
 	}
-	return nil
+
+	for _, ptr := range removeRenames {
+		delete(unmergedChains.renamedOriginals, ptr)
+	}
+
+	return newUnmergedPaths, nil
 }
 
 // getActionsToMerge returns the set of actions needed to merge each
@@ -846,8 +1197,8 @@ func (cr *ConflictResolver) fixRenameCycles(unmergedChains *crChains,
 // the corresponding merged path.
 func (cr *ConflictResolver) getActionsToMerge(unmergedChains *crChains,
 	mergedChains *crChains, mergedPaths map[BlockPointer]path) (
-	map[BlockPointer][]crAction, error) {
-	actionMap := make(map[BlockPointer][]crAction)
+	map[BlockPointer]crActionList, error) {
+	actionMap := make(map[BlockPointer]crActionList)
 	for unmergedMostRecent, unmergedChain := range unmergedChains.byMostRecent {
 		original := unmergedChain.original
 		// If this is a file that has been deleted in the merged
@@ -865,13 +1216,7 @@ func (cr *ConflictResolver) getActionsToMerge(unmergedChains *crChains,
 			continue
 		}
 
-		actions, err := unmergedChain.getActionsToMerge(
-			cr.config.ConflictRenamer(), mergedPath, mergedChain)
-		if err != nil {
-			return nil, err
-		}
-
-		// Now check for nodes that have been deleted in the unmerged
+		// First check for nodes that have been deleted in the unmerged
 		// branch, but modified in the merged branch, and drop those
 		// unmerged operations.
 		for _, op := range unmergedChain.ops {
@@ -887,9 +1232,7 @@ func (cr *ConflictResolver) getActionsToMerge(unmergedChains *crChains,
 				}
 
 				if _, ok := mergedChains.byOriginal[unrefOriginal]; ok {
-					// This operation removes a node that was modified
-					// in the merged branch, so we have to drop it.
-					actions = append(actions, &dropUnmergedAction{op: ro})
+					ro.dropThis = true
 				}
 			}
 
@@ -902,6 +1245,12 @@ func (cr *ConflictResolver) getActionsToMerge(unmergedChains *crChains,
 			}
 		}
 
+		actions, err := unmergedChain.getActionsToMerge(
+			cr.config.ConflictRenamer(), mergedPath, mergedChain)
+		if err != nil {
+			return nil, err
+		}
+
 		if len(actions) > 0 {
 			actionMap[mergedPath.tailPointer()] = actions
 		}
@@ -910,32 +1259,324 @@ func (cr *ConflictResolver) getActionsToMerge(unmergedChains *crChains,
 	return actionMap, nil
 }
 
+// collapseActions combines file updates with their parent directory
+// updates, because conflict resolution only happens within a
+// directory (i.e., files are merged directly, they are just
+// renamed/copied).  It also collapses each action list to get rid of
+// redundant actions.
+func collapseActions(unmergedChains *crChains,
+	mergedPaths map[BlockPointer]path,
+	actionMap map[BlockPointer]crActionList) {
+	for unmergedMostRecent, chain := range unmergedChains.byMostRecent {
+		if !chain.isFile() {
+			continue
+		}
+
+		// Find the parent directory path and combine
+		p, ok := mergedPaths[unmergedMostRecent]
+		if !ok {
+			continue
+		}
+
+		fileActions, ok := actionMap[p.tailPointer()]
+		if !ok {
+			continue
+		}
+
+		parentPath := *p.parentPath()
+		mergedParent := parentPath.tailPointer()
+		parentActions := actionMap[mergedParent]
+		combinedActions := append(parentActions, fileActions...)
+		actionMap[mergedParent] = combinedActions
+		mergedPaths[unmergedMostRecent] = parentPath
+		delete(actionMap, p.tailPointer())
+	}
+
+	for ptr, actions := range actionMap {
+		actionMap[ptr] = actions.collapse()
+	}
+}
+
 func (cr *ConflictResolver) computeActions(ctx context.Context,
 	unmergedChains *crChains, mergedChains *crChains,
 	mergedPaths map[BlockPointer]path, recreateOps []*createOp) (
-	map[BlockPointer][]crAction, error) {
+	map[BlockPointer]crActionList, []path, error) {
 	// Process all the recreateOps, adding them to the appropriate
 	// unmerged chains.
-	err := cr.addRecreateOpsToUnmergedChains(ctx, recreateOps, unmergedChains,
-		mergedChains, mergedPaths)
+	newUnmergedPaths, err := cr.addRecreateOpsToUnmergedChains(
+		ctx, recreateOps, unmergedChains, mergedChains, mergedPaths)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Fix any rename cycles by turning the corresponding unmerged
 	// createOp into a symlink entry type.
-	err = cr.fixRenameCycles(unmergedChains, mergedChains, mergedPaths)
+	moreNewUnmergedPaths, err := cr.fixRenameCycles(ctx, unmergedChains,
+		mergedChains, mergedPaths)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	newUnmergedPaths = append(newUnmergedPaths, moreNewUnmergedPaths...)
 
 	actionMap, err :=
 		cr.getActionsToMerge(unmergedChains, mergedChains, mergedPaths)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return actionMap, nil
+	// Finally, merged the file actions back into their parent
+	// directory action list, and collapse everything together.
+	collapseActions(unmergedChains, mergedPaths, actionMap)
+	return actionMap, newUnmergedPaths, nil
+}
+
+func (cr *ConflictResolver) fetchDirBlockCopy(ctx context.Context,
+	md *RootMetadata, dir path, lbc localBcache) (*DirBlock, error) {
+	ptr := dir.tailPointer()
+	// TODO: lock lbc if we parallelize
+	if block, ok := lbc[ptr]; ok {
+		return block, nil
+	}
+	block, err := cr.fbo.getBlockForReading(ctx, md, dir, NewDirBlock)
+	if err != nil {
+		return nil, err
+	}
+	dblock, ok := block.(*DirBlock)
+	if !ok {
+		return nil, NotDirError{dir}
+	}
+	dblock = dblock.DeepCopy()
+	lbc[ptr] = dblock
+	return dblock, nil
+}
+
+// fileBlockMap maps latest merged block pointer to a map of final
+// merged name -> file block.
+type fileBlockMap map[BlockPointer]map[string]*FileBlock
+
+func (cr *ConflictResolver) makeFileBlockDeepCopy(ctx context.Context,
+	md *RootMetadata, mergedMostRecent BlockPointer, parentPath path,
+	name string, ptr BlockPointer, blocks fileBlockMap) (
+	BlockPointer, error) {
+	file := *parentPath.ChildPathNoPtr(name)
+	file.path[len(file.path)-1].BlockPointer = ptr
+	block, err := cr.fbo.getBlockForReading(ctx, md, file, NewFileBlock)
+	if err != nil {
+		return BlockPointer{}, err
+	}
+	fblock, ok := block.(*FileBlock)
+	if !ok {
+		return BlockPointer{}, NotFileError{file}
+	}
+	fblock = fblock.DeepCopy()
+	newPtr := ptr
+	uid, err := cr.config.KBPKI().GetCurrentUID(ctx)
+	if err != nil {
+		return BlockPointer{}, err
+	}
+	if fblock.IsInd {
+		newID, err := cr.config.Crypto().MakeTemporaryBlockID()
+		if err != nil {
+			return BlockPointer{}, err
+		}
+		newPtr = BlockPointer{
+			ID:       newID,
+			KeyGen:   md.LatestKeyGeneration(),
+			DataVer:  cr.config.DataVersion(),
+			Creator:  uid,
+			RefNonce: zeroBlockRefNonce,
+		}
+	} else {
+		newPtr.RefNonce, err = cr.config.Crypto().MakeBlockRefNonce()
+		if err != nil {
+			return BlockPointer{}, err
+		}
+		newPtr.SetWriter(uid)
+	}
+
+	if _, ok := blocks[mergedMostRecent]; !ok {
+		blocks[mergedMostRecent] = make(map[string]*FileBlock)
+	}
+
+	// Dup all of the leaf blocks.
+	// TODO: deal with multiple levels of indirection.
+	if fblock.IsInd {
+		for i, ptr := range fblock.IPtrs {
+			// Generate a new nonce for each one.
+			ptr.RefNonce, err = cr.config.Crypto().MakeBlockRefNonce()
+			if err != nil {
+				return BlockPointer{}, err
+			}
+			ptr.SetWriter(uid)
+			fblock.IPtrs[i] = ptr
+		}
+	}
+
+	blocks[mergedMostRecent][name] = fblock
+	return newPtr, nil
+}
+
+func (cr *ConflictResolver) doActions(ctx context.Context,
+	unmergedChains *crChains, mergedChains *crChains,
+	unmergedPaths []path, mergedPaths map[BlockPointer]path,
+	actionMap map[BlockPointer]crActionList, lbc localBcache,
+	newFileBlocks fileBlockMap) error {
+	// For each set of actions:
+	//   * Find the corresponding chains
+	//   * Make a reference to each slice of ops
+	//   * Get the unmerged block.
+	//   * Get the merged block if it's not already in the local cache, and
+	//     make a copy.
+	//   * Get the merged block
+	//   * Do each action, updating the ops references to the returned ones
+	// At the end, the local block cache should contain all the
+	// updated merged blocks.  A future phase will update the pointers
+	// in standard Merkle-tree-fashion.
+	doneActions := make(map[BlockPointer]bool)
+	for _, unmergedPath := range unmergedPaths {
+		unmergedMostRecent := unmergedPath.tailPointer()
+		unmergedChain, ok :=
+			unmergedChains.byMostRecent[unmergedMostRecent]
+		if !ok {
+			return fmt.Errorf("Couldn't find unmerged chain for %v",
+				unmergedMostRecent)
+		}
+
+		// If this is a file that has been deleted in the merged
+		// branch, a corresponding recreate op will take care of it,
+		// no need to do anything here.
+
+		// find the corresponding merged path
+		mergedPath, ok := mergedPaths[unmergedMostRecent]
+		if !ok {
+			// This most likely means that the file was created or
+			// deleted in the unmerged branch and thus has no
+			// corresponding merged path yet.
+			continue
+		}
+		if unmergedChain.isFile() {
+			// The unmerged path is actually the parent (the merged
+			// path was already corrected above).
+			unmergedPath = *unmergedPath.parentPath()
+		}
+
+		actions := actionMap[mergedPath.tailPointer()]
+		// Now get the directory blocks.
+		unmergedBlock, err := cr.fetchDirBlockCopy(ctx,
+			unmergedChains.mostRecentMD, unmergedPath, lbc)
+		if err != nil {
+			return err
+		}
+
+		// recreateOps update the merged paths using original
+		// pointers; but if other stuff happened in the block before
+		// it was deleted (such as other removes) we want to preserve
+		// those.
+		var mergedBlock *DirBlock
+		if mergedChains.isDeleted(mergedPath.tailPointer()) {
+			mergedBlock = NewDirBlock().(*DirBlock)
+			lbc[mergedPath.tailPointer()] = mergedBlock
+		} else {
+			mergedBlock, err = cr.fetchDirBlockCopy(ctx,
+				mergedChains.mostRecentMD, mergedPath, lbc)
+			if err != nil {
+				return err
+			}
+		}
+
+		if len(actions) > 0 && !doneActions[mergedPath.tailPointer()] {
+			// Make sure we don't try to execute the same actions twice.
+			doneActions[mergedPath.tailPointer()] = true
+
+			// Any file block copies, keyed by their new temporary block
+			// IDs, and later we will ready them.
+			unmergedFetcher := func(ctx context.Context, name string,
+				ptr BlockPointer) (BlockPointer, error) {
+				return cr.makeFileBlockDeepCopy(ctx,
+					unmergedChains.mostRecentMD, mergedPath.tailPointer(),
+					unmergedPath, name, ptr, newFileBlocks)
+			}
+			mergedFetcher := func(ctx context.Context, name string,
+				ptr BlockPointer) (BlockPointer, error) {
+				return cr.makeFileBlockDeepCopy(ctx, mergedChains.mostRecentMD,
+					mergedPath.tailPointer(), mergedPath, name,
+					ptr, newFileBlocks)
+			}
+
+			// Execute each action and save the modified ops back into
+			// each chain.
+			for _, action := range actions {
+				swap, newPtr, err := action.swapUnmergedBlock(unmergedChains,
+					mergedChains, unmergedBlock)
+				if err != nil {
+					return err
+				}
+				uBlock := unmergedBlock
+				if swap {
+					cr.log.CDebugf(ctx, "Swapping out block %v for %v",
+						newPtr, unmergedPath.tailPointer())
+					if newPtr == zeroPtr {
+						// Use this merged block
+						uBlock = mergedBlock
+					} else {
+						// Fetch the specified one (fake the full
+						// path).  Don't need to make a copy since this
+						// will just be a source block.
+						dir := path{
+							FolderBranch: mergedPath.FolderBranch,
+							path:         []pathNode{{BlockPointer: newPtr}},
+						}
+						block, err := cr.fbo.getBlockForReading(ctx,
+							mergedChains.mostRecentMD, dir, NewDirBlock)
+						if err != nil {
+							return err
+						}
+						dBlock, ok := block.(*DirBlock)
+						if !ok {
+							return NotDirError{dir}
+						}
+						uBlock = dBlock
+					}
+				}
+
+				err = action.do(ctx, unmergedFetcher, mergedFetcher, uBlock,
+					mergedBlock)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		// Now update the ops related to this exact path (not the ops
+		// for its parent!).
+		for _, action := range actions {
+			// unmergedMostRecent is for the correct pointer, but
+			// mergedPath may be for the parent in the case of files
+			// so we need to find the real mergedMostRecent pointer.
+			mergedMostRecent := unmergedChain.original
+			mergedChain, ok := mergedChains.byOriginal[unmergedChain.original]
+			if ok {
+				mergedMostRecent = mergedChain.mostRecent
+			}
+
+			err := action.updateOps(unmergedMostRecent, mergedMostRecent,
+				unmergedBlock, mergedBlock, unmergedChains, mergedChains)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// CRWrapError wraps an error that happens during conflict resolution.
+type CRWrapError struct {
+	err error
+}
+
+// String implements the Stringer interface for CRWrapError.
+func (e CRWrapError) String() string {
+	return "Conflict resolution error: " + e.err.Error()
 }
 
 func (cr *ConflictResolver) doResolve(ctx context.Context, ci conflictInput) {
@@ -944,6 +1585,9 @@ func (cr *ConflictResolver) doResolve(ctx context.Context, ci conflictInput) {
 	defer cr.inputGroup.Done()
 	defer func() {
 		cr.log.CDebugf(ctx, "Finished conflict resolution: %v", err)
+		if err != nil {
+			cr.config.Reporter().Report(RptE, CRWrapError{err})
+		}
 	}()
 
 	// Canceled before we even got started?
@@ -961,13 +1605,14 @@ func (cr *ConflictResolver) doResolve(ctx context.Context, ci conflictInput) {
 	//   * A set of "recreate" ops that must be applied on the merged branch
 	//     to recreate any directories that were modified in the unmerged
 	//     branch but removed in the merged branch.
-	unmergedChains, mergedChains, _, mergedPaths, recreateOps, err :=
-		cr.buildChainsAndPaths(ctx)
+	unmergedChains, mergedChains, unmergedPaths, mergedPaths, recOps,
+		_, err := cr.buildChainsAndPaths(ctx)
 	if err != nil {
 		return
 	}
-	if unmergedChains == nil {
+	if unmergedChains == nil || len(mergedPaths) == 0 {
 		// nothing to do
+		cr.log.CDebugf(ctx, "No updates to resolve")
 		return
 	}
 
@@ -975,6 +1620,14 @@ func (cr *ConflictResolver) doResolve(ctx context.Context, ci conflictInput) {
 	if err != nil {
 		return
 	}
+
+	if status, _, err := cr.fbo.status.getStatus(ctx); err == nil {
+		if statusString, err := json.Marshal(status); err == nil {
+			cr.log.CInfof(ctx, "Current status during conflict resolution "+
+				"(input %v): %s", cr.currInput, statusString)
+		}
+	}
+	cr.log.CDebugf(ctx, "Recreate ops: %s", recOps)
 
 	// Step 2: Figure out which actions need to be taken in the merged
 	// branch to best reflect the unmerged changes.  The result of
@@ -984,8 +1637,51 @@ func (cr *ConflictResolver) doResolve(ctx context.Context, ci conflictInput) {
 	// actions contains the logic needed to manipulate the data into
 	// the final merged state, including the resolution of any
 	// conflicts that occurred between the two branches.
-	_, err = cr.computeActions(ctx, unmergedChains, mergedChains,
-		mergedPaths, recreateOps)
+	actionMap, newUnmergedPaths, err := cr.computeActions(ctx, unmergedChains,
+		mergedChains, mergedPaths, recOps)
+	if err != nil {
+		return
+	}
+
+	// Insert the new unmerged paths as needed
+	if len(newUnmergedPaths) > 0 {
+		unmergedPaths = append(unmergedPaths, newUnmergedPaths...)
+		sort.Sort(crSortedPaths(unmergedPaths))
+	}
+
+	err = cr.checkDone(ctx)
+	if err != nil {
+		return
+	}
+
+	cr.log.CDebugf(ctx, "Action map: %v", actionMap)
+
+	// Step 3: Apply the actions by looking up the corresponding
+	// unmerged dir entry and copying it to a copy of the
+	// corresponding merged block.  Keep these dirty block copies in a
+	// local dirty cache, keyed by corresponding merged most recent
+	// pointer.
+	//
+	// At the same time, construct two sets of ops: one that will be
+	// put into the final MD object that gets merged, and one that
+	// needs to be played through as notifications locally to get any
+	// local caches synchronized with the final merged state.
+	//
+	// * This will be taken care of by each crAction.updateOps()
+	// method, which modifies the unmerged and merged ops for a
+	// particular chain.  After all the crActions are applied, the
+	// "unmerged" ops need to be pushed as part of the MD update,
+	// while the "merged" ops need to be applied locally.
+
+	// lbc contains the modified directory blocks we need to sync
+	lbc := make(localBcache)
+	// newFileBlocks contains the copies of the file blocks we need to
+	// sync.  If a block is indirect, we need to put it and add new
+	// references for all indirect pointers inside it.  If it is not
+	// an indirect block, just add a new reference to the block.
+	newFileBlocks := make(fileBlockMap)
+	err = cr.doActions(ctx, unmergedChains, mergedChains, unmergedPaths,
+		mergedPaths, actionMap, lbc, newFileBlocks)
 	if err != nil {
 		return
 	}
@@ -994,26 +1690,6 @@ func (cr *ConflictResolver) doResolve(ctx context.Context, ci conflictInput) {
 	if err != nil {
 		return
 	}
-
-	// TODO:
-	// * Apply the actions by looking up the corresponding unmerged dir
-	//   entry and copying it to a copy of the corresponding merged block.
-	//   Keep these dirty block copies in a local dirty cache, keyed by
-	//   corresponding merged most recent pointer.
-	// * At the same time, construct two sets of ops: one that will be put
-	//   into the final MD object that gets merged, and one that needs to be
-	//   played through as notifications locally to get any local caches
-	//   synchronized with the final merged state.
-	//   * This will be taken care of by each crAction.do() method, which
-	//     modifies the unmerged and merged ops for a particular chain.  After
-	//     all the crActions are applied, the "unmerged" ops need to be pushed
-	//     as part of the MD update, while the "merged" ops need to be applied
-	//     locally.
-	// * Once all the new blocks are ready, calculate the resolvedChain paths
-	//   and arrange them into a tree.  Do a recursive descent and
-	//   syncBlockLocked each branch (filling in the new BlockChanges in a
-	//   new MD object)
-	// * Finally attempt to put the final MD object.  If successful, send
-	//   out all the notifyOps to observers.
-	// Release all locks and reset the currInput, we're done!
+	cr.log.CDebugf(ctx, "Executed all actions, %d updated directory blocks",
+		len(lbc))
 }

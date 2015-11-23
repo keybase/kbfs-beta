@@ -60,12 +60,12 @@ func (cc *crChain) collapse() {
 }
 
 func (cc *crChain) getActionsToMerge(renamer ConflictRenamer, mergedPath path,
-	mergedChain *crChain) ([]crAction, error) {
+	mergedChain *crChain) (crActionList, error) {
 	// Check each op against all ops in the corresponding merged
 	// chain, looking for conflicts.  If there is a conflict, return
 	// it as part of the action list.  If there are no conflicts for
 	// that op, return the op's default actions.
-	var actions []crAction
+	var actions crActionList
 	for _, unmergedOp := range cc.ops {
 		conflict := false
 		if mergedChain != nil {
@@ -88,6 +88,21 @@ func (cc *crChain) getActionsToMerge(renamer ConflictRenamer, mergedPath path,
 	}
 
 	return actions, nil
+}
+
+func (cc *crChain) isFile() bool {
+	if len(cc.ops) == 0 {
+		return false
+	}
+
+	// If the first op is setAttr or sync, this is a file chain.
+	switch cc.ops[0].(type) {
+	case *syncOp:
+		return true
+	case *setAttrOp:
+		return true
+	}
+	return false
 }
 
 type renameInfo struct {
@@ -115,6 +130,14 @@ type crChains struct {
 	// of the node (from the original location of the node to the
 	// final locations).
 	renamedOriginals map[BlockPointer]renameInfo
+
+	// Also keep a reference to the most recent MD that's part of this
+	// chain.
+	mostRecentMD *RootMetadata
+
+	// We need to be able to track ANY BlockPointer, at any point in
+	// the chain, back to its original.
+	originals map[BlockPointer]BlockPointer
 }
 
 func (ccs *crChains) addOp(ptr BlockPointer, op op) error {
@@ -143,6 +166,10 @@ func (ccs *crChains) makeChainForOp(op op) error {
 		}
 		chain.mostRecent = update.Ref
 		ccs.byMostRecent[update.Ref] = chain
+		if chain.original != update.Ref {
+			// Always be able to track this one back to its original.
+			ccs.originals[update.Ref] = chain.original
+		}
 	}
 
 	for _, ptr := range op.Refs() {
@@ -193,8 +220,7 @@ func (ccs *crChains) makeChainForOp(op op) error {
 			ndr = realOp.OldDir.Ref
 		}
 
-		co := newCreateOp(realOp.NewName, ndu,
-			File /*type is arbitrary and won't be used*/)
+		co := newCreateOp(realOp.NewName, ndu, realOp.RenamedType)
 		co.setWriterName(realOp.getWriterName())
 		co.renamed = true
 		co.Dir.Ref = ndr
@@ -233,6 +259,9 @@ func (ccs *crChains) makeChainForOp(op op) error {
 			ri.originalNewParent = newParentChain.original
 			ri.newName = realOp.NewName
 			ccs.renamedOriginals[renamedOriginal] = ri
+			// Remember what you create, in case we need to merge
+			// directories after a rename.
+			co.AddRefBlock(renamedOriginal)
 		}
 	case *syncOp:
 		err := ccs.addOp(realOp.File.Ref, op)
@@ -260,6 +289,65 @@ func (ccs *crChains) makeChainForOp(op op) error {
 	}
 
 	return nil
+}
+
+func (ccs *crChains) makeChainForNewOpWithUpdate(
+	targetPtr BlockPointer, newOp op, update *blockUpdate) error {
+	oldUnref := update.Unref
+	update.Unref = targetPtr
+	update.Ref = update.Unref // so that most recent == original
+	defer func() {
+		// reset the update to its original state before returning.
+		update.Unref = oldUnref
+		update.Ref = BlockPointer{}
+	}()
+	err := ccs.makeChainForOp(newOp)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// makeChainForNewOp makes a new chain for an op that does not yet
+// have its pointers initialized.  It does so by setting Unref and Ref
+// to be the same for the duration of this function, and calling the
+// usual makeChainForOp method.  This function is not goroutine-safe
+// with respect to newOp.  Also note that rename ops will not be split
+// into two ops; they will be placed only in the new directory chain.
+func (ccs *crChains) makeChainForNewOp(targetPtr BlockPointer, newOp op) error {
+	switch realOp := newOp.(type) {
+	case *createOp:
+		return ccs.makeChainForNewOpWithUpdate(targetPtr, newOp, &realOp.Dir)
+	case *rmOp:
+		return ccs.makeChainForNewOpWithUpdate(targetPtr, newOp, &realOp.Dir)
+	case *renameOp:
+		// In this case, we don't want to split the rename chain, so
+		// just make up a new operation and later overwrite it with
+		// the rename op.
+		co := newCreateOp(realOp.NewName, realOp.NewDir.Unref, File)
+		err := ccs.makeChainForNewOpWithUpdate(targetPtr, co, &co.Dir)
+		if err != nil {
+			return err
+		}
+		chain, ok := ccs.byMostRecent[targetPtr]
+		if !ok {
+			return fmt.Errorf("Couldn't find chain for %v after making it",
+				targetPtr)
+		}
+		if len(chain.ops) != 1 {
+			return fmt.Errorf("Chain of unexpected length for %v after "+
+				"making it", targetPtr)
+		}
+		chain.ops[0] = realOp
+		return nil
+	case *setAttrOp:
+		return ccs.makeChainForNewOpWithUpdate(targetPtr, newOp, &realOp.Dir)
+	case *syncOp:
+		return ccs.makeChainForNewOpWithUpdate(targetPtr, newOp, &realOp.File)
+	default:
+		return fmt.Errorf("Couldn't make chain with unknown operation %s",
+			newOp)
+	}
 }
 
 func (ccs *crChains) mostRecentFromOriginal(original BlockPointer) (
@@ -297,15 +385,20 @@ func (ccs *crChains) renamedParentAndName(original BlockPointer) (
 	return info.originalNewParent, info.newName, true
 }
 
-func newCRChains(ctx context.Context, kbpki KBPKI, rmds []*RootMetadata) (
-	ccs *crChains, err error) {
-	ccs = &crChains{
+func newCRChainsEmpty() *crChains {
+	return &crChains{
 		byOriginal:       make(map[BlockPointer]*crChain),
 		byMostRecent:     make(map[BlockPointer]*crChain),
 		deletedOriginals: make(map[BlockPointer]bool),
 		createdOriginals: make(map[BlockPointer]bool),
 		renamedOriginals: make(map[BlockPointer]renameInfo),
+		originals:        make(map[BlockPointer]BlockPointer),
 	}
+}
+
+func newCRChains(ctx context.Context, kbpki KBPKI, rmds []*RootMetadata) (
+	ccs *crChains, err error) {
+	ccs = newCRChainsEmpty()
 
 	// For each MD update, turn each update in each op into map
 	// entries and create chains for the BlockPointers that are
@@ -331,7 +424,6 @@ func newCRChains(ctx context.Context, kbpki KBPKI, rmds []*RootMetadata) (
 				ccs.originalRoot = rootChain.original
 			}
 		}
-
 	}
 
 	for _, chain := range ccs.byOriginal {
@@ -339,6 +431,10 @@ func newCRChains(ctx context.Context, kbpki KBPKI, rmds []*RootMetadata) (
 		// NOTE: even if we've removed all its ops, still keep the
 		// chain around so we can see the mapping between the original
 		// and most recent pointers.
+	}
+
+	if len(rmds) > 0 {
+		ccs.mostRecentMD = rmds[len(rmds)-1]
 	}
 
 	return ccs, nil
@@ -378,4 +474,36 @@ func (ccs *crChains) summary(identifyChains *crChains,
 func (ccs *crChains) removeChain(ptr BlockPointer) {
 	delete(ccs.byOriginal, ptr)
 	delete(ccs.byMostRecent, ptr)
+}
+
+// changeOriginal converts the original of a chain to a different original.
+func (ccs *crChains) changeOriginal(oldOriginal BlockPointer,
+	newOriginal BlockPointer) error {
+	chain, ok := ccs.byOriginal[oldOriginal]
+	if !ok {
+		return NoChainFoundError{oldOriginal}
+	}
+	if _, ok := ccs.byOriginal[newOriginal]; ok {
+		return fmt.Errorf("crChains.changeOriginal: New original %v "+
+			"already exists", newOriginal)
+	}
+
+	delete(ccs.byOriginal, oldOriginal)
+	chain.original = newOriginal
+	ccs.byOriginal[newOriginal] = chain
+	ccs.originals[oldOriginal] = newOriginal
+
+	if _, ok := ccs.deletedOriginals[oldOriginal]; ok {
+		delete(ccs.deletedOriginals, oldOriginal)
+		ccs.deletedOriginals[newOriginal] = true
+	}
+	if _, ok := ccs.createdOriginals[oldOriginal]; ok {
+		delete(ccs.createdOriginals, oldOriginal)
+		ccs.createdOriginals[newOriginal] = true
+	}
+	if ri, ok := ccs.renamedOriginals[oldOriginal]; ok {
+		delete(ccs.renamedOriginals, oldOriginal)
+		ccs.renamedOriginals[newOriginal] = ri
+	}
+	return nil
 }

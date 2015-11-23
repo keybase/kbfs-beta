@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package engine
 
 import (
@@ -103,6 +106,10 @@ func (e *DeviceKeygen) SigningKeyPublic() (libkb.NaclSigningKeyPublic, error) {
 
 func (e *DeviceKeygen) SigningKey() libkb.NaclKeyPair {
 	return e.naclSignGen.GetKeyPair()
+}
+
+func (e *DeviceKeygen) EncryptionKey() libkb.NaclKeyPair {
+	return e.naclEncGen.GetKeyPair()
 }
 
 // Push pushes the generated keys to the api server and stores the

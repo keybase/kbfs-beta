@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package client
 
 import (
@@ -6,7 +9,6 @@ import (
 	"golang.org/x/net/context"
 
 	"github.com/keybase/cli"
-	"github.com/keybase/client/go/engine"
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
@@ -14,8 +16,10 @@ import (
 )
 
 type CmdID struct {
+	libkb.Contextified
 	user           string
 	trackStatement bool
+	useDelegateUI  bool
 }
 
 func (v *CmdID) ParseArgv(ctx *cli.Context) error {
@@ -28,42 +32,49 @@ func (v *CmdID) ParseArgv(ctx *cli.Context) error {
 		v.user = ctx.Args()[0]
 	}
 	v.trackStatement = ctx.Bool("track-statement")
+	v.useDelegateUI = ctx.Bool("delegate-identify-ui")
 	return nil
 }
 
-func (v *CmdID) makeArg() *engine.IDEngineArg {
-	return &engine.IDEngineArg{
+func (v *CmdID) makeArg() keybase1.IdentifyArg {
+	return keybase1.IdentifyArg{
 		UserAssertion:  v.user,
 		TrackStatement: v.trackStatement,
+		UseDelegateUI:  v.useDelegateUI,
+		Reason:         keybase1.IdentifyReason{Reason: "CLI id command"},
 	}
 }
 
 func (v *CmdID) Run() error {
 	var cli keybase1.IdentifyClient
-	protocols := []rpc.Protocol{
-		NewIdentifyUIProtocol(),
+	protocols := []rpc.Protocol{}
+
+	if !v.useDelegateUI {
+		protocols = append(protocols, NewIdentifyUIProtocol(v.G()))
 	}
-	cli, err := GetIdentifyClient()
+	cli, err := GetIdentifyClient(v.G())
 	if err != nil {
 		return err
 	}
-	if err := RegisterProtocols(protocols); err != nil {
+	if err := RegisterProtocolsWithContext(protocols, v.G()); err != nil {
 		return err
 	}
 
 	arg := v.makeArg()
-	_, err = cli.Identify(context.TODO(), arg.Export())
+	_, err = cli.Identify(context.TODO(), arg)
 	if _, ok := err.(libkb.SelfNotFoundError); ok {
-		GlobUI.Println("Could not find UID or username for you on this device.")
-		GlobUI.Println("You can either specify a user to id:  keybase id <username>")
-		GlobUI.Println("Or log in once on this device and run `keybase id` again.")
+		msg := `Could not find UID or username for you on this device.
+You can either specify a user to id: keybase id <username>
+Or log in once on this device and run "keybase id" again.
+`
+		v.G().UI.GetDumbOutputUI().Printf(msg)
 		return nil
 	}
 	return err
 }
 
-func NewCmdID(cl *libcmdline.CommandLine) cli.Command {
-	return cli.Command{
+func NewCmdID(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.Command {
+	ret := cli.Command{
 		Name:         "id",
 		ArgumentHelp: "[username]",
 		Usage:        "Identify a user and check their signature chain",
@@ -75,9 +86,23 @@ func NewCmdID(cl *libcmdline.CommandLine) cli.Command {
 			},
 		},
 		Action: func(c *cli.Context) {
-			cl.ChooseCommand(&CmdID{}, "id", c)
+			cl.ChooseCommand(NewCmdIDRunner(g), "id", c)
 		},
 	}
+	cmdIDAddFlags(&ret)
+	return ret
+}
+
+func NewCmdIDRunner(g *libkb.GlobalContext) *CmdID {
+	return &CmdID{Contextified: libkb.NewContextified(g)}
+}
+
+func (v *CmdID) SetUser(s string) {
+	v.user = s
+}
+
+func (v *CmdID) UseDelegateUI() {
+	v.useDelegateUI = true
 }
 
 func (v *CmdID) GetUsage() libkb.Usage {

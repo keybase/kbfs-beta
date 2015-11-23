@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package client
 
 import (
@@ -49,15 +52,37 @@ func (p ProvisionUI) ChooseProvisioningMethod(ctx context.Context, arg keybase1.
 	case 3:
 		return keybase1.ProvisionMethod_PASSPHRASE, nil
 	case 4:
-		return keybase1.ProvisionMethod_GPG, nil
+		p.parent.Output(`In order to authorize this installation, keybase needs to sign this installation
+with your GPG secret key.
+
+You have two options.
+
+(1) Keybase can use GPG commands to sign the installation.
+
+(2) Keybase can export your secret key from GPG and save it to keybase's local encrypted
+    keyring. This way, it can be used in 'keybase pgp sign' and 'keybase pgp decrypt' 
+    going forward.
+`)
+		gret, err := PromptSelectionOrCancel(PromptDescriptorChooseGPGMethod, p.parent, "Which do you prefer?", 1, 2)
+		if err != nil {
+			if err == ErrInputCanceled {
+				return res, libkb.CanceledError{M: "user canceled input"}
+			}
+			return res, err
+		}
+		if gret == 1 {
+			return keybase1.ProvisionMethod_GPG_SIGN, nil
+		} else if gret == 2 {
+			return keybase1.ProvisionMethod_GPG_IMPORT, nil
+		}
 	}
 	return res, fmt.Errorf("invalid provision option: %d", ret)
 }
 
 func (p ProvisionUI) ChooseDeviceType(ctx context.Context, sessionID int) (keybase1.DeviceType, error) {
-	p.parent.Output("What type of device would you like to connect this device with?\n\n")
+	p.parent.Output("What type of device would you like to connect this computer with?\n\n")
 	p.parent.Output("(1) Desktop or laptop\n")
-	p.parent.Output("(2) Mobile phone\n")
+	p.parent.Output("(2) Mobile phone\n\n")
 
 	var res keybase1.DeviceType
 	ret, err := PromptSelectionOrCancel(PromptDescriptorChooseDeviceType, p.parent, "Choose a device type", 1, 2)
@@ -77,21 +102,20 @@ func (p ProvisionUI) ChooseDeviceType(ctx context.Context, sessionID int) (keyba
 
 }
 
-func (p ProvisionUI) DisplayAndPromptSecret(ctx context.Context, arg keybase1.DisplayAndPromptSecretArg) ([]byte, error) {
+func (p ProvisionUI) DisplayAndPromptSecret(ctx context.Context, arg keybase1.DisplayAndPromptSecretArg) (keybase1.SecretResponse, error) {
+	var resp keybase1.SecretResponse
 	if p.role == libkb.KexRoleProvisioner {
 		// This is the provisioner device (device X)
 		// For command line app, all secrets are entered on the provisioner only:
-		p.parent.Output("Enter the verification code from your other device here:\n\n")
+		p.parent.Output("\nEnter the verification code from your other device here.  To get\n")
+		p.parent.Output("a verification code, run 'keybase login' on your other device.\n\n")
+
 		ret, err := PromptWithChecker(PromptDescriptorProvisionPhrase, p.parent, "Verification code", false, libkb.CheckNotEmpty)
 		if err != nil {
-			return nil, err
+			return resp, err
 		}
-		secret, err := libkb.NewKex2SecretFromPhrase(ret)
-		if err != nil {
-			return nil, err
-		}
-		sbytes := secret.Secret()
-		return sbytes[:], nil
+		resp.Phrase = ret
+		return resp, nil
 
 	}
 
@@ -102,11 +126,11 @@ func (p ProvisionUI) DisplayAndPromptSecret(ctx context.Context, arg keybase1.Di
 		p.parent.Output("Type this verification code into your other device:\n\n")
 		p.parent.Output("\t" + arg.Phrase + "\n\n")
 		p.parent.Output("If you are using the command line client on your other device, run this command:\n\n")
-		p.parent.Output("\tkeybase device xadd\n\n")
+		p.parent.Output("\tkeybase device add\n\n")
 		p.parent.Output("It will then prompt you for the verification code above.\n\n")
 
 		if arg.OtherDeviceType == keybase1.DeviceType_MOBILE {
-			encodings, err := qrcode.Encode(arg.Secret)
+			encodings, err := qrcode.Encode([]byte(arg.Phrase))
 			// ignoring any of these errors...phrase above will suffice.
 			if err == nil {
 				p.parent.Output("Or, scan this QR Code with the keybase app on your mobile phone:\n\n")
@@ -120,10 +144,10 @@ func (p ProvisionUI) DisplayAndPromptSecret(ctx context.Context, arg keybase1.Di
 				}
 			}
 		}
-		return nil, nil
+		return resp, nil
 	}
 
-	return nil, libkb.InvalidArgumentError{Msg: fmt.Sprintf("invalid ProvisionUI role: %d", p.role)}
+	return resp, libkb.InvalidArgumentError{Msg: fmt.Sprintf("invalid ProvisionUI role: %d", p.role)}
 }
 
 func (p ProvisionUI) PromptNewDeviceName(ctx context.Context, arg keybase1.PromptNewDeviceNameArg) (string, error) {

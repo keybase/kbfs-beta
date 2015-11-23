@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 // +build android
 
 package libkb
@@ -37,6 +40,8 @@ type secretStoreAccountName struct {
 	accountName      string
 }
 
+var _ SecretStore = secretStoreAccountName{}
+
 func (s secretStoreAccountName) StoreSecret(secret []byte) (err error) {
 	return s.externalKeyStore.StoreSecret(s.accountName, secret)
 }
@@ -49,7 +54,7 @@ func (s secretStoreAccountName) ClearSecret() (err error) {
 	return s.externalKeyStore.ClearSecret(s.accountName)
 }
 
-func NewSecretStore(username NormalizedUsername) SecretStore {
+func NewSecretStore(g *GlobalContext, username NormalizedUsername) SecretStore {
 	externalKeyStore := getGlobalExternalKeyStore()
 	if externalKeyStore == nil {
 		return nil
@@ -62,7 +67,7 @@ func HasSecretStore() bool {
 	return getGlobalExternalKeyStore() != nil
 }
 
-func GetUsersWithStoredSecrets() ([]string, error) {
+func GetUsersWithStoredSecrets(g *GlobalContext) ([]string, error) {
 	externalKeyStore := getGlobalExternalKeyStore()
 	if externalKeyStore == nil {
 		return nil, nil

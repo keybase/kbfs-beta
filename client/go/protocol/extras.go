@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package keybase1
 
 import (
@@ -35,6 +38,12 @@ const (
 	DeviceIDSuffixHex = "18"
 )
 
+const (
+	KidLen     = 35   // bytes
+	KidSuffix  = 0x0a // a byte
+	KidVersion = 0x1
+)
+
 func Unquote(data []byte) string {
 	return strings.Trim(string(data), "\"")
 }
@@ -45,6 +54,34 @@ func Quote(s string) []byte {
 
 func KIDFromSlice(b []byte) KID {
 	return KID(hex.EncodeToString(b))
+}
+
+func KIDFromStringChecked(s string) (KID, error) {
+
+	// It's OK to have a 0-length KID. That means, no such key
+	// (or NULL kid).
+	if len(s) == 0 {
+		return KID(""), nil
+	}
+
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return KID(""), err
+	}
+
+	if len(b) != KidLen {
+		return KID(""), fmt.Errorf("KID wrong length; wanted %d but got %d bytes",
+			KidLen, len(b))
+	}
+	if b[len(b)-1] != KidSuffix {
+		return KID(""), fmt.Errorf("Bad KID suffix: got 0x%02x, wanted 0x%02x",
+			b[len(b)-1], KidSuffix)
+	}
+	if b[0] != KidVersion {
+		return KID(""), fmt.Errorf("Bad KID version; got 0x%02x but wanted 0x%02x",
+			b[0], KidVersion)
+	}
+	return KID(s), nil
 }
 
 func KIDFromString(s string) KID {
@@ -332,4 +369,62 @@ func TimeFromSeconds(seconds int64) Time {
 func FormatTime(t Time) string {
 	layout := "2006-01-02 15:04:05 MST"
 	return FromTime(t).Format(layout)
+}
+
+func (s Status) Error() string {
+	if s.Code == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s (%s/%d)", s.Desc, s.Name, s.Code)
+}
+
+func (s InstallStatus) String() string {
+	switch s {
+	case InstallStatus_UNKNOWN:
+		return "Unknown"
+	case InstallStatus_ERROR:
+		return "Error"
+	case InstallStatus_NOT_INSTALLED:
+		return "Not Installed"
+	case InstallStatus_NEEDS_UPGRADE:
+		return "Needs upgrade"
+	case InstallStatus_INSTALLED:
+		return "Installed"
+	}
+	return ""
+}
+
+func (s InstallAction) String() string {
+	switch s {
+	case InstallAction_UNKNOWN:
+		return "Unknown"
+	case InstallAction_NONE:
+		return "None"
+	case InstallAction_UPGRADE:
+		return "Upgrade"
+	case InstallAction_REINSTALL:
+		return "Re-Install"
+	case InstallAction_INSTALL:
+		return "Install"
+	}
+	return ""
+}
+
+func (s ServiceStatus) NeedsInstall() bool {
+	return s.InstallAction == InstallAction_INSTALL ||
+		s.InstallAction == InstallAction_REINSTALL ||
+		s.InstallAction == InstallAction_UPGRADE
+}
+
+func (k *KID) UnmarshalJSON(b []byte) error {
+	kid, err := KIDFromStringChecked(Unquote(b))
+	if err != nil {
+		return err
+	}
+	*k = KID(kid)
+	return nil
+}
+
+func (k *KID) MarshalJSON() ([]byte, error) {
+	return Quote(k.String()), nil
 }

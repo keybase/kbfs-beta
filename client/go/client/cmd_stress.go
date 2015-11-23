@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 // +build !production
 
 // this command is only for testing purposes
@@ -9,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"golang.org/x/net/context"
 
@@ -51,10 +53,8 @@ func (c *CmdStress) rpcClient() (*rpc.Client, error) {
 	protocols := []rpc.Protocol{
 		NewStreamUIProtocol(),
 		c.secretUIProtocol(),
-		NewIdentifyUIProtocol(),
+		NewIdentifyUIProtocol(G),
 		c.gpgUIProtocol(),
-		NewDoctorUIProtocol(),
-		NewLocksmithUIProtocol(),
 		NewLoginUIProtocol(G),
 	}
 	if err := RegisterProtocols(protocols); err != nil {
@@ -135,9 +135,7 @@ func (c *CmdStress) signup(cli *rpc.Client) (username, passphrase string, err er
 
 func (c *CmdStress) simulate(username, passphrase string) {
 	funcs := []func(){
-		// c.deviceAdd,
 		c.deviceList,
-		c.doctor,
 		c.idAlice,
 		c.idSelf,
 		c.listTrackers,
@@ -249,49 +247,6 @@ func (c *CmdStress) deviceList() {
 	}
 }
 
-func (c *CmdStress) deviceAdd() {
-	cli, err := c.rpcClient()
-	if err != nil {
-		G.Log.Warning("rpcClient error: %s", err)
-		return
-	}
-	dcli := keybase1.DeviceClient{Cli: cli}
-	sessionID, err := libkb.RandInt()
-	if err != nil {
-		G.Log.Warning("RandInt error: %s", err)
-		return
-	}
-	phrase, err := libkb.RandBytes(50)
-	if err != nil {
-		G.Log.Warning("RandBytes error: %s", err)
-		return
-	}
-	err = dcli.DeviceAdd(context.TODO(), keybase1.DeviceAddArg{SecretPhrase: string(phrase), SessionID: sessionID})
-	if err != nil {
-		G.Log.Warning("device add error: %s", err)
-	}
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		err := dcli.DeviceAddCancel(context.TODO(), sessionID)
-		if err != nil {
-			G.Log.Warning("device add cancel error: %s", err)
-		}
-	}()
-}
-
-func (c *CmdStress) doctor() {
-	cli, err := c.rpcClient()
-	if err != nil {
-		G.Log.Warning("rpcClient error: %s", err)
-		return
-	}
-	dcli := keybase1.DoctorClient{Cli: cli}
-	err = dcli.Doctor(context.TODO(), 0)
-	if err != nil {
-		G.Log.Warning("doctor error: %s", err)
-	}
-}
-
 func (c *CmdStress) status() {
 	cli, err := c.rpcClient()
 	if err != nil {
@@ -351,18 +306,22 @@ func (c *CmdStress) secretUIProtocol() rpc.Protocol {
 	return keybase1.SecretUiProtocol(c)
 }
 
-func (c *CmdStress) GetKeybasePassphrase(_ context.Context, arg keybase1.GetKeybasePassphraseArg) (string, error) {
-	return c.passphrase, nil
+func (c *CmdStress) GetKeybasePassphrase(_ context.Context, arg keybase1.GetKeybasePassphraseArg) (keybase1.GetPassphraseRes, error) {
+	return keybase1.GetPassphraseRes{Passphrase: c.passphrase}, nil
 }
 
 func (c *CmdStress) GetPaperKeyPassphrase(_ context.Context, arg keybase1.GetPaperKeyPassphraseArg) (string, error) {
 	return "", nil
 }
 
-func (c *CmdStress) GetNewPassphrase(_ context.Context, arg keybase1.GetNewPassphraseArg) (keybase1.GetNewPassphraseRes, error) {
-	return keybase1.GetNewPassphraseRes{Passphrase: c.passphrase}, nil
+func (c *CmdStress) GetNewPassphrase(_ context.Context, arg keybase1.GetNewPassphraseArg) (keybase1.GetPassphraseRes, error) {
+	return keybase1.GetPassphraseRes{Passphrase: c.passphrase}, nil
 }
 
 func (c *CmdStress) GetSecret(_ context.Context, arg keybase1.GetSecretArg) (res keybase1.SecretEntryRes, err error) {
+	return
+}
+
+func (c *CmdStress) GetPassphrase(_ context.Context, arg keybase1.GetPassphraseArg) (res keybase1.GetPassphraseRes, err error) {
 	return
 }

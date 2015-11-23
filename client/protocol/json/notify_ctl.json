@@ -167,10 +167,13 @@
     }, {
       "name" : "users",
       "type" : "boolean"
+    }, {
+      "name" : "kbfs",
+      "type" : "boolean"
     } ]
   } ],
   "messages" : {
-    "toggleNotifications" : {
+    "setNotifications" : {
       "request" : [ {
         "name" : "channels",
         "type" : "NotificationChannels"

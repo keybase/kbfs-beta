@@ -85,6 +85,9 @@ func kbfsOpsInit(t *testing.T, changeMd bool) (mockCtrl *gomock.Controller,
 	// None of these tests depend on time
 	config.mockClock.EXPECT().Now().AnyTimes().Return(time.Now())
 
+	// Ignore Notify calls for now
+	config.mockRep.EXPECT().Notify(gomock.Any(), gomock.Any()).AnyTimes()
+
 	// make the context identifiable, to verify that it is passed
 	// correctly to the observer
 	ctx = context.WithValue(context.Background(), tCtxID, rand.Int())
@@ -295,7 +298,7 @@ func testKBFSOpsGetRootNodeCreateNewSuccess(t *testing.T, public bool) {
 
 	// create a new MD
 	config.mockMdops.EXPECT().
-		GetUnmergedForTLF(gomock.Any(), id).Return(nil, nil)
+		GetUnmergedForTLF(gomock.Any(), id, gomock.Any()).Return(nil, nil)
 	config.mockMdops.EXPECT().GetForTLF(gomock.Any(), id).Return(rmd, nil)
 	// now KBFS will fill it in:
 	rootPtr, plainSize, readyBlockData := fillInNewMD(t, config, rmd)
@@ -361,7 +364,7 @@ func TestKBFSOpsGetRootMDCreateNewFailNonWriter(t *testing.T) {
 	// will refuse to create the new MD for this user.  But for this test,
 	// we won't bother
 	config.mockMdops.EXPECT().
-		GetUnmergedForTLF(gomock.Any(), id).Return(nil, nil)
+		GetUnmergedForTLF(gomock.Any(), id, gomock.Any()).Return(nil, nil)
 	config.mockMdops.EXPECT().GetForTLF(gomock.Any(), id).Return(rmd, nil)
 	// try to get the MD for writing, but fail (no puts should happen)
 	config.mockKbpki.EXPECT().GetCurrentUID(ctx).AnyTimes().
@@ -862,9 +865,12 @@ func expectSyncBlockHelper(
 		// sign the MD and put it
 		if isUnmerged {
 			config.mockMdops.EXPECT().Put(gomock.Any(), gomock.Any()).Return(MDServerErrorConflictRevision{})
+			if rmd.BID == NullBranchID {
+				config.mockCrypto.EXPECT().MakeRandomBranchID().Return(BranchID{}, nil)
+			}
 			config.mockMdops.EXPECT().PutUnmerged(
-				gomock.Any(), gomock.Any()).
-				Do(func(ctx context.Context, rmd *RootMetadata) {
+				gomock.Any(), gomock.Any(), gomock.Any()).
+				Do(func(ctx context.Context, rmd *RootMetadata, bid BranchID) {
 				// add some serialized metadata to satisfy the check
 				rmd.SerializedPrivateMetadata = make([]byte, 1)
 			}).Return(nil)
@@ -3463,8 +3469,7 @@ func testSyncDirtySuccess(t *testing.T, isUnmerged bool) {
 		// Turn off the conflict resolver to avoid unexpected mock
 		// calls.  Recreate the input channel to make sure the later
 		// Shutdown() call works.
-		ops.cr.Shutdown()
-		ops.cr.inputChan = make(chan conflictInput)
+		ops.cr.Pause()
 		expectedPath, _ = expectSyncBlockUnmerged(t, config, nil, uid, id,
 			"", p, rmd, false, 0, 0, 0, &newRmd, blocks)
 	} else {

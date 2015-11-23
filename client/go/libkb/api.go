@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -41,12 +44,12 @@ type Requester interface {
 	isExternal() bool
 }
 
-// Make a new InternalApiEngine and a new ExternalApiEngine, which share the
-// same network config (i.e., TOR and Proxy parameters)
-func NewAPIEngines(e *Env, g *GlobalContext) (*InternalAPIEngine, *ExternalAPIEngine, error) {
-	cliConfig, err := e.GenClientConfigForInternalAPI()
+// NewInternalAPIEngine makes an API engine for internally querying the keybase
+// API server
+func NewInternalAPIEngine(g *GlobalContext) (*InternalAPIEngine, error) {
+	cliConfig, err := g.Env.GenClientConfigForInternalAPI()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	i := &InternalAPIEngine{
@@ -56,11 +59,17 @@ func NewAPIEngines(e *Env, g *GlobalContext) (*InternalAPIEngine, *ExternalAPIEn
 			Contextified: NewContextified(g),
 		},
 	}
-	scraperConfig, err := e.GenClientConfigForScrapers()
+	return i, nil
+}
+
+// Make a new InternalApiEngine and a new ExternalApiEngine, which share the
+// same network config (i.e., TOR and Proxy parameters)
+func NewAPIEngines(g *GlobalContext) (*InternalAPIEngine, *ExternalAPIEngine, error) {
+	i, err := NewInternalAPIEngine(g)
 	if err != nil {
 		return nil, nil, err
 	}
-
+	scraperConfig, err := g.Env.GenClientConfigForScrapers()
 	x := &ExternalAPIEngine{
 		BaseAPIEngine{
 			config:       scraperConfig,
@@ -113,7 +122,7 @@ func (api *BaseAPIEngine) getCli(cookied bool) (ret *Client) {
 	client, found := api.clients[key]
 	if !found {
 		G.Log.Debug("| Cli wasn't found; remaking for cookied=%v", cookied)
-		client = NewClient(api.config, cookied)
+		client = NewClient(api.G().Env, api.config, cookied)
 		api.clients[key] = client
 	}
 	api.clientsMu.Unlock()
@@ -170,6 +179,11 @@ func (api *BaseAPIEngine) PreparePost(url url.URL, arg APIArg, sendJSON bool) (*
 //
 func doRequestShared(api Requester, arg APIArg, req *http.Request, wantJSONRes bool) (
 	resp *http.Response, jw *jsonw.Wrapper, err error) {
+
+	if !arg.G().Env.GetTorMode().UseSession() && arg.NeedSession {
+		err = TorSessionRequiredError{}
+		return
+	}
 
 	api.fixHeaders(arg, req)
 	cli := api.getCli(arg.NeedSession)
@@ -313,22 +327,24 @@ func (a *InternalAPIEngine) consumeHeaders(resp *http.Response) error {
 func (a *InternalAPIEngine) fixHeaders(arg APIArg, req *http.Request) {
 	if arg.NeedSession {
 		tok, csrf := a.sessionArgs(arg)
-		if len(tok) > 0 {
+		if len(tok) > 0 && a.G().Env.GetTorMode().UseSession() {
 			req.Header.Add("X-Keybase-Session", tok)
 		} else {
-			G.Log.Warning("fixHeaders:  need session, but session token empty")
+			G.Log.Warning("fixHeaders: need session, but session token empty")
 		}
-		if len(csrf) > 0 {
+		if len(csrf) > 0 && a.G().Env.GetTorMode().UseCSRF() {
 			req.Header.Add("X-CSRF-Token", csrf)
 		} else {
-			G.Log.Warning("fixHeaders:  need session, but session csrf empty")
+			G.Log.Warning("fixHeaders: need session, but session csrf empty")
 		}
 	}
-	req.Header.Set("User-Agent", UserAgent)
-	req.Header.Set("X-Keybase-Client", IdentifyAs)
+	if a.G().Env.GetTorMode().UseHeaders() {
+		req.Header.Set("User-Agent", UserAgent)
+		req.Header.Set("X-Keybase-Client", IdentifyAs)
+	}
 }
 
-func checkAppStatus(arg APIArg, jw *jsonw.Wrapper) (string, error) {
+func (a *InternalAPIEngine) checkAppStatus(arg APIArg, jw *jsonw.Wrapper) (string, error) {
 	var set []string
 
 	resName, err := jw.AtKey("name").GetString()
@@ -347,7 +363,39 @@ func checkAppStatus(arg APIArg, jw *jsonw.Wrapper) (string, error) {
 			return resName, nil
 		}
 	}
+
+	// check if there was a bad session error:
+	if err := a.checkSessionExpired(arg, jw); err != nil {
+		return "", err
+	}
+
 	return "", NewAppStatusError(jw)
+}
+
+func (a *InternalAPIEngine) checkSessionExpired(arg APIArg, status *jsonw.Wrapper) error {
+	code, err := status.AtKey("code").GetInt()
+	if err != nil {
+		return fmt.Errorf("Cannot find status 'code' in reply")
+	}
+	if code != SCBadSession {
+		return nil
+	}
+	var loggedIn bool
+	if arg.SessionR != nil {
+		loggedIn = arg.SessionR.IsLoggedIn()
+	} else {
+		loggedIn = a.G().LoginState().LoggedIn()
+	}
+	if !loggedIn {
+		return nil
+	}
+	a.G().Log.Debug("local session -> is logged in, remote -> not logged in.  invalidating local session:")
+	if arg.SessionR != nil {
+		arg.SessionR.Invalidate()
+	} else {
+		a.G().LoginState().LocalSession(func(s *Session) { s.Invalidate() }, "api - checkSessionExpired")
+	}
+	return LoginRequiredError{Context: "your session has expired."}
 }
 
 func (a *InternalAPIEngine) Get(arg APIArg) (*APIRes, error) {
@@ -445,13 +493,13 @@ func (a *InternalAPIEngine) DoRequest(arg APIArg, req *http.Request) (*APIRes, e
 
 	// Check for an "OK" or whichever app-level replies were allowed by
 	// http.AppStatus
-	appStatus, err := checkAppStatus(arg, status)
+	appStatus, err := a.checkAppStatus(arg, status)
 	if err != nil {
 		return nil, err
 	}
 
 	body := jw
-	G.Log.Debug(fmt.Sprintf("- successful API call"))
+	a.G().Log.Debug("- successful API call")
 	return &APIRes{status, body, resp.StatusCode, appStatus}, err
 }
 

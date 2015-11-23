@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -407,7 +410,7 @@ func (u *User) MakeIDTable() error {
 	if kid.IsNil() {
 		return NoKeyError{"Expected a key but didn't find one"}
 	}
-	idt, err := NewIdentityTable(kid, u.sigChain(), u.sigHints)
+	idt, err := NewIdentityTable(u.G(), kid, u.sigChain(), u.sigHints)
 	if err != nil {
 		return err
 	}

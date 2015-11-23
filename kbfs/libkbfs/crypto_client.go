@@ -67,6 +67,12 @@ func (c *CryptoClient) OnConnectError(err error, wait time.Duration) {
 		err, wait)
 }
 
+// OnDoCommandError implements the ConnectionHandler interface.
+func (c *CryptoClient) OnDoCommandError(err error, wait time.Duration) {
+	c.log.Warning("CryptoClient: docommand error: %q; retrying in %s",
+		err, wait)
+}
+
 // OnDisconnected implements the ConnectionHandler interface.
 func (c *CryptoClient) OnDisconnected() {
 	c.log.Warning("CryptoClient is disconnected")
@@ -99,6 +105,20 @@ func (c *CryptoClient) Sign(ctx context.Context, msg []byte) (
 		Signature:    ed25519SigInfo.Sig[:],
 		VerifyingKey: VerifyingKey{libkb.NaclSigningKeyPublic(ed25519SigInfo.PublicKey).GetKID()},
 	}
+	return
+}
+
+// SignToString implements the Crypto interface for CryptoClient.
+func (c *CryptoClient) SignToString(ctx context.Context, msg []byte) (
+	signature string, err error) {
+	defer func() {
+		c.log.CDebugf(ctx, "Signed %d-byte message: err=%v", len(msg), err)
+	}()
+	signature, err = c.client.SignToString(ctx, keybase1.SignToStringArg{
+		SessionID: 0,
+		Msg:       msg,
+		Reason:    "KBFS Authentication",
+	})
 	return
 }
 

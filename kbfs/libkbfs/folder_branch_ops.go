@@ -3,7 +3,6 @@ package libkbfs
 import (
 	"errors"
 	"fmt"
-	"math/rand"
 	"sync"
 	"time"
 
@@ -112,6 +111,7 @@ const (
 type FolderBranchOps struct {
 	config           Config
 	folderBranch     FolderBranch
+	bid              BranchID // protected by writerLock
 	bType            branchType
 	head             *RootMetadata
 	observers        []Observer
@@ -200,6 +200,7 @@ func NewFolderBranchOps(config Config, fb FolderBranch,
 	fbo := &FolderBranchOps{
 		config:         config,
 		folderBranch:   fb,
+		bid:            BranchID{},
 		bType:          bType,
 		observers:      make([]Observer, 0),
 		copyFileBlocks: make(map[BlockPointer]bool),
@@ -248,6 +249,13 @@ func (fbo *FolderBranchOps) getState() state {
 	return fbo.state
 }
 
+// getStaged should not be called if writerLock is already taken.
+func (fbo *FolderBranchOps) getStaged() bool {
+	fbo.writerLock.Lock()
+	defer fbo.writerLock.Unlock()
+	return fbo.staged
+}
+
 func (fbo *FolderBranchOps) transitionState(newState state) {
 	fbo.stateLock.Lock()
 	defer fbo.stateLock.Unlock()
@@ -265,8 +273,9 @@ func (fbo *FolderBranchOps) transitionState(newState state) {
 }
 
 // The caller must hold writerLock.
-func (fbo *FolderBranchOps) setStagedLocked(staged bool) {
+func (fbo *FolderBranchOps) setStagedLocked(staged bool, bid BranchID) {
 	fbo.staged = staged
+	fbo.bid = bid
 	if !staged {
 		fbo.status.setCRChains(nil, nil)
 	}
@@ -315,7 +324,7 @@ func (fbo *FolderBranchOps) setHeadLocked(ctx context.Context,
 	if isFirstHead && md.MergedStatus() == Unmerged {
 		// no need to take the writer lock here since is the first
 		// time the folder is being used
-		fbo.setStagedLocked(true)
+		fbo.setStagedLocked(true, md.BID)
 		// Use uninitialized for the merged branch; the unmerged
 		// revision is enough to trigger conflict resolution.
 		fbo.cr.Resolve(md.Revision, MetadataRevisionUninitialized)
@@ -355,7 +364,7 @@ func (fbo *FolderBranchOps) getMDLocked(ctx context.Context, rtype reqType) (
 	mdops := fbo.config.MDOps()
 
 	// get the head of the unmerged branch for this device (if any)
-	md, err := mdops.GetUnmergedForTLF(ctx, fbo.id())
+	md, err := mdops.GetUnmergedForTLF(ctx, fbo.id(), NullBranchID)
 	if err != nil {
 		return nil, err
 	}
@@ -419,9 +428,13 @@ func (fbo *FolderBranchOps) getMDForWriteLocked(ctx context.Context) (
 			NewWriteAccessError(ctx, fbo.config, md.GetTlfHandle(), uid)
 	}
 
-	// Make a copy of the MD for changing.  The caller must pass this
-	// into syncBlockLocked or the changes will be lost.
-	newMd := md.DeepCopy()
+	// Make a new successor of the current MD to hold the coming
+	// writes.  The caller must pass this into syncBlockAndCheckEmbed
+	// or the changes will be lost.
+	newMd, err := md.MakeSuccessor(fbo.config)
+	if err != nil {
+		return nil, err
+	}
 	return &newMd, nil
 }
 
@@ -445,9 +458,6 @@ func (fbo *FolderBranchOps) initMDLocked(
 	}
 
 	newDblock := &DirBlock{
-		CommonBlock: CommonBlock{
-			Seed: rand.Int63(),
-		},
 		Children: make(map[string]DirEntry),
 	}
 
@@ -663,6 +673,13 @@ func (fbo *FolderBranchOps) getBlockLocked(ctx context.Context,
 
 	// fetch the block, and add to cache
 	block := newBlock()
+
+	// if this is a file block, then send a read notification
+	if _, ok := block.(*FileBlock); ok {
+		fbo.config.Reporter().Notify(ctx, readNotification(dir, false))
+		defer fbo.config.Reporter().Notify(ctx, readNotification(dir, true))
+	}
+
 	bops := fbo.config.BlockOps()
 	if err := bops.Get(ctx, md, dir.tailPointer(), block); err != nil {
 		return nil, err
@@ -677,6 +694,14 @@ func (fbo *FolderBranchOps) getBlockLocked(ctx context.Context,
 		return nil, err
 	}
 	return block, nil
+}
+
+func (fbo *FolderBranchOps) getBlockForReading(ctx context.Context,
+	md *RootMetadata, dir path, newBlock makeNewBlock) (
+	Block, error) {
+	fbo.blockLock.RLock()
+	defer fbo.blockLock.RUnlock()
+	return fbo.getBlockLocked(ctx, md, dir, newBlock, read)
 }
 
 // getDirLocked returns the directory block at the given path.
@@ -849,6 +874,13 @@ func (fbo *FolderBranchOps) getEntryLocked(ctx context.Context,
 	}
 
 	return dblock, de, err
+}
+
+func (fbo *FolderBranchOps) getEntry(ctx context.Context, md *RootMetadata,
+	file path) (*DirBlock, DirEntry, error) {
+	fbo.blockLock.RLock()
+	defer fbo.blockLock.RUnlock()
+	return fbo.getEntryLocked(ctx, md, file)
 }
 
 // Lookup implements the KBFSOps interface for FolderBranchOps
@@ -1053,35 +1085,24 @@ func (fbo *FolderBranchOps) cacheBlockIfNotYetDirtyLocked(
 
 type localBcache map[BlockPointer]*DirBlock
 
-// writerLock must be taken by caller.
-func (fbo *FolderBranchOps) incrementMDLocked(md *RootMetadata) (err error) {
-	// no need to take headLock here, since we already have
-	// writerLock; no one else will be modifying the MD.
-	md.PrevRoot, err = fbo.head.MetadataID(fbo.config)
-	if err != nil {
-		return err
-	}
-	// bump revision
-	if md.Revision < MetadataRevisionInitial {
-		md.Revision = MetadataRevisionInitial
-	} else {
-		md.Revision++
-	}
-	return nil
-}
-
-// TODO: deal with multiple nodes for indirect blocks
+// syncBlock updates, and readies, the blocks along the path for the
+// given write, up to the root of the tree or stopAt (if specified).
+// When it updates the root of the tree, it also modifies the given
+// head object with a new revision number and root block ID.  It first
+// checks the provided lbc for blocks that may have been modified by
+// previous syncBlock calls or the FS calls themselves.  It returns
+// the updated path to the changed directory, the new or updated
+// directory entry created as part of the call, and a summary of all
+// the blocks that now must be put to the block server.
 //
-// entryType must not be Sym.  writerLock must be taken by caller.
-func (fbo *FolderBranchOps) syncBlockLocked(ctx context.Context,
+// entryType must not be Sym.
+//
+// TODO: deal with multiple nodes for indirect blocks
+func (fbo *FolderBranchOps) syncBlock(ctx context.Context, uid keybase1.UID,
 	md *RootMetadata, newBlock Block, dir path, name string,
 	entryType EntryType, mtime bool, ctime bool, stopAt BlockPointer,
-	lbc localBcache) (path, DirEntry, *blockPutState, error) {
-	uid, err := fbo.config.KBPKI().GetCurrentUID(ctx)
-	if err != nil {
-		return path{}, DirEntry{}, nil, err
-	}
-
+	lbc localBcache) (
+	path, DirEntry, *blockPutState, error) {
 	// now ready each dblock and write the DirEntry for the next one
 	// in the path
 	currBlock := newBlock
@@ -1115,37 +1136,34 @@ func (fbo *FolderBranchOps) syncBlockLocked(ctx context.Context,
 		if prevIdx < 0 {
 			// root dir, update the MD instead
 			de = md.data.Dir
-			err := fbo.incrementMDLocked(md)
-			if err != nil {
-				return path{}, DirEntry{}, nil, err
-			}
 		} else {
 			prevDir := path{
 				FolderBranch: dir.FolderBranch,
 				path:         dir.path[:prevIdx+1],
 			}
 
-			// first, check the localBcache, which could contain
+			// First, check the localBcache, which could contain
 			// blocks that were modified across multiple calls to
-			// syncBlockLocked.
+			// syncBlock.
 			var ok bool
 			prevDblock, ok = lbc[prevDir.tailPointer()]
 			if !ok {
-				// If the block isn't in the local bcache, we have to
-				// fetch it, possibly from the network.  Take
-				// blockLock to make this safe, but we don't need to
-				// hold it throughout the entire syncBlock execution
-				// because we are only fetching directory blocks.
-				// Directory blocks are only ever modified while
-				// holding writerLock, so it's safe to release the
-				// blockLock in between fetches.
-				fbo.blockLock.RLock()
-				prevDblock, err = fbo.getDirLocked(ctx, md, prevDir, write)
+				prevDblock, err = func() (*DirBlock, error) {
+					// If the block isn't in the local bcache, we have to
+					// fetch it, possibly from the network.  Take
+					// blockLock to make this safe, but we don't need to
+					// hold it throughout the entire syncBlock execution
+					// because we are only fetching directory blocks.
+					// Directory blocks are only ever modified while
+					// holding writerLock, so it's safe to release the
+					// blockLock in between fetches.
+					fbo.blockLock.RLock()
+					defer fbo.blockLock.RUnlock()
+					return fbo.getDirLocked(ctx, md, prevDir, write)
+				}()
 				if err != nil {
-					fbo.blockLock.RUnlock()
 					return path{}, DirEntry{}, nil, err
 				}
-				fbo.blockLock.RUnlock()
 			}
 
 			// modify the direntry for currName; make one
@@ -1234,6 +1252,25 @@ func (fbo *FolderBranchOps) syncBlockLocked(ctx context.Context,
 		doSetTime = nextDoSetTime
 	}
 
+	return newPath, newDe, bps, nil
+}
+
+// entryType must not be Sym.
+func (fbo *FolderBranchOps) syncBlockAndCheckEmbed(ctx context.Context,
+	md *RootMetadata, newBlock Block, dir path, name string,
+	entryType EntryType, mtime bool, ctime bool, stopAt BlockPointer,
+	lbc localBcache) (path, DirEntry, *blockPutState, error) {
+	uid, err := fbo.config.KBPKI().GetCurrentUID(ctx)
+	if err != nil {
+		return path{}, DirEntry{}, nil, err
+	}
+
+	newPath, newDe, bps, err := fbo.syncBlock(ctx, uid, md, newBlock,
+		dir, name, entryType, mtime, ctime, stopAt, lbc)
+	if err != nil {
+		return path{}, DirEntry{}, nil, err
+	}
+
 	// do the block changes need their own blocks?
 	bsplit := fbo.config.BlockSplitter()
 	if !bsplit.ShouldEmbedBlockChanges(&md.data.Changes) {
@@ -1309,8 +1346,6 @@ func (fbo *FolderBranchOps) doBlockPuts(ctx context.Context,
 // both writerLock and blockLocked should be taken by the caller
 func (fbo *FolderBranchOps) finalizeBlocksLocked(bps *blockPutState) error {
 	bcache := fbo.config.BlockCache()
-	fbo.cacheLock.Lock()
-	defer fbo.cacheLock.Unlock()
 	for _, blockState := range bps.blockStates {
 		newPtr := blockState.blockPtr
 		// only cache this block if we made a brand new block, not if
@@ -1350,7 +1385,7 @@ func (fbo *FolderBranchOps) finalizeWriteLocked(ctx context.Context,
 	md.data.LastWriter = uid
 	mdops := fbo.config.MDOps()
 
-	doUnmergedPut := true
+	doUnmergedPut, wasStaged := true, fbo.staged
 	mergedRev := MetadataRevisionUninitialized
 	if !fbo.staged {
 		// only do a normal Put if we're not already staged.
@@ -1370,22 +1405,32 @@ func (fbo *FolderBranchOps) finalizeWriteLocked(ctx context.Context,
 
 	if doUnmergedPut {
 		// We're out of date, so put it as an unmerged MD.
-		err = mdops.PutUnmerged(ctx, md)
+		var bid BranchID
+		if !wasStaged {
+			// new branch ID
+			crypto := fbo.config.Crypto()
+			if bid, err = crypto.MakeRandomBranchID(); err != nil {
+				return err
+			}
+		} else {
+			bid = fbo.bid
+		}
+		err := mdops.PutUnmerged(ctx, md, bid)
 		if err != nil {
 			return nil
 		}
-		fbo.setStagedLocked(true)
+		fbo.setStagedLocked(true, bid)
 		fbo.cr.Resolve(md.Revision, mergedRev)
 	} else {
 		if fbo.staged {
 			// If we were staged, prune all unmerged history now
-			err = fbo.config.MDServer().PruneUnmerged(ctx, fbo.id())
+			err = fbo.config.MDServer().PruneBranch(ctx, fbo.id(), fbo.bid)
 			if err != nil {
 				return err
 			}
 		}
 
-		fbo.setStagedLocked(false)
+		fbo.setStagedLocked(false, NullBranchID)
 	}
 	fbo.transitionState(cleanState)
 
@@ -1418,8 +1463,8 @@ func (fbo *FolderBranchOps) syncBlockAndFinalizeLocked(ctx context.Context,
 	md *RootMetadata, newBlock Block, dir path, name string,
 	entryType EntryType, mtime bool, ctime bool, stopAt BlockPointer) (
 	DirEntry, error) {
-	_, de, bps, err := fbo.syncBlockLocked(ctx, md, newBlock, dir, name,
-		entryType, mtime, ctime, zeroPtr, nil)
+	_, de, bps, err := fbo.syncBlockAndCheckEmbed(ctx, md, newBlock, dir,
+		name, entryType, mtime, ctime, zeroPtr, nil)
 	if err != nil {
 		return DirEntry{}, err
 	}
@@ -1469,17 +1514,10 @@ func (fbo *FolderBranchOps) createEntryLocked(
 	// has a unique block ID. This may not be needed once we have encryption.
 	if entryType == Dir {
 		newBlock = &DirBlock{
-			CommonBlock: CommonBlock{
-				Seed: rand.Int63(),
-			},
 			Children: make(map[string]DirEntry),
 		}
 	} else {
-		newBlock = &FileBlock{
-			CommonBlock: CommonBlock{
-				Seed: rand.Int63(),
-			},
-		}
+		newBlock = &FileBlock{}
 	}
 
 	de, err := fbo.syncBlockAndFinalizeLocked(ctx, md, newBlock, dirPath, name,
@@ -1789,7 +1827,7 @@ func (fbo *FolderBranchOps) renameLocked(
 	}
 
 	md.AddOp(newRenameOp(oldName, oldParent.tailPointer(), newName,
-		newParent.tailPointer(), newDe.BlockPointer))
+		newParent.tailPointer(), newDe.BlockPointer, newDe.Type))
 
 	lbc := make(localBcache)
 	// look up in the old path
@@ -1809,7 +1847,7 @@ func (fbo *FolderBranchOps) renameLocked(
 		if len(oldGrandparent.path) > 0 {
 			// Update the old parent's mtime/ctime, unless the
 			// oldGrandparent is the same as newParent (in which case, the
-			// syncBlockLocked call will take care of it).
+			// syncBlockAndCheckEmbed call will take care of it).
 			if oldGrandparent.tailPointer().ID != newParent.tailPointer().ID {
 				b, err := fbo.getDirLocked(ctx, md, oldGrandparent, write)
 				if err != nil {
@@ -1883,20 +1921,20 @@ func (fbo *FolderBranchOps) renameLocked(
 			// nothing to do (syncBlock will take care of everything)
 		} else {
 			// If the old one is common and the new one is not, then
-			// the last syncBlockLocked call will need to access
+			// the last syncBlockAndCheckEmbed call will need to access
 			// the old one.
 			lbc[oldParent.tailPointer()] = oldPBlock
 		}
 	} else {
 		if newIsCommon {
 			// If the new one is common, then the first
-			// syncBlockLocked call will need to access it.
+			// syncBlockAndCheckEmbed call will need to access it.
 			lbc[newParent.tailPointer()] = newPBlock
 		}
 
 		// The old one is not the common ancestor, so we need to sync it.
 		// TODO: optimize by pushing blocks from both paths in parallel
-		newOldPath, _, oldBps, err = fbo.syncBlockLocked(
+		newOldPath, _, oldBps, err = fbo.syncBlockAndCheckEmbed(
 			ctx, md, oldPBlock, *oldParent.parentPath(), oldParent.tailName(),
 			Dir, true, true, commonAncestor, lbc)
 		if err != nil {
@@ -1904,7 +1942,7 @@ func (fbo *FolderBranchOps) renameLocked(
 		}
 	}
 
-	newNewPath, _, newBps, err := fbo.syncBlockLocked(
+	newNewPath, _, newBps, err := fbo.syncBlockAndCheckEmbed(
 		ctx, md, newPBlock, *newParent.parentPath(), newParent.tailName(),
 		Dir, true, true, zeroPtr, lbc)
 	if err != nil {
@@ -2076,11 +2114,7 @@ func (fbo *FolderBranchOps) newRightBlockLocked(
 	if err != nil {
 		return err
 	}
-	rblock := &FileBlock{
-		CommonBlock: CommonBlock{
-			Seed: rand.Int63(),
-		},
-	}
+	rblock := &FileBlock{}
 
 	pblock.IPtrs = append(pblock.IPtrs, IndirectFilePtr{
 		BlockInfo: BlockInfo{
@@ -2190,7 +2224,6 @@ func (fbo *FolderBranchOps) writeDataLocked(
 				fblock = &FileBlock{
 					CommonBlock: CommonBlock{
 						IsInd: true,
-						Seed:  rand.Int63(),
 					},
 					IPtrs: []IndirectFilePtr{
 						{
@@ -2639,6 +2672,10 @@ func (fbo *FolderBranchOps) syncLocked(ctx context.Context, file path) (
 		}
 	}()
 
+	// notify the daemon that a write is being performed
+	fbo.config.Reporter().Notify(ctx, writeNotification(file, false))
+	defer fbo.config.Reporter().Notify(ctx, writeNotification(file, true))
+
 	// update the parent directories, and write all the new blocks out
 	// to disk
 	fblock, err := fbo.getFileLocked(ctx, md, file, write)
@@ -2840,8 +2877,8 @@ func (fbo *FolderBranchOps) syncLocked(ctx context.Context, file path) (
 	fbo.blockLock.RUnlock()
 
 	newPath, _, newBps, err :=
-		fbo.syncBlockLocked(ctx, md, fblock, *parentPath, file.tailName(),
-			File, true, true, zeroPtr, lbc)
+		fbo.syncBlockAndCheckEmbed(ctx, md, fblock, *parentPath,
+			file.tailName(), File, true, true, zeroPtr, lbc)
 	if err != nil {
 		return true, err
 	}
@@ -3061,7 +3098,7 @@ func (fbo *FolderBranchOps) searchForNodesInDirLocked(ctx context.Context,
 		}
 
 		// otherwise, recurse if this represents an updated block
-		if _, ok := newPtrs[de.BlockPointer]; ok {
+		if _, ok := newPtrs[de.BlockPointer]; de.Type == Dir && ok {
 			childPath := *currDir.ChildPathNoPtr(name)
 			childPath.path[len(childPath.path)-1].BlockPointer = de.BlockPointer
 			n, err := fbo.searchForNodesInDirLocked(ctx, cache, newPtrs, md,
@@ -3348,13 +3385,7 @@ func (fbo *FolderBranchOps) notifyOneOp(ctx context.Context, op op,
 
 		// find the node for the actual change; requires looking up
 		// the child entry to get the BlockPointer, unfortunately.
-		var de DirEntry
-		var err error
-		func() {
-			fbo.blockLock.RLock()
-			defer fbo.blockLock.RUnlock()
-			_, de, err = fbo.getEntryLocked(ctx, md, childPath)
-		}()
+		_, de, err := fbo.getEntry(ctx, md, childPath)
 		if err != nil {
 			return
 		}
@@ -3454,6 +3485,10 @@ func (fbo *FolderBranchOps) applyMDUpdatesLocked(ctx context.Context,
 
 	for _, rmd := range rmds {
 		// check that we're applying the expected MD revision
+		if rmd.Revision <= fbo.getCurrMDRevisionLocked() {
+			// Already caught up!
+			continue
+		}
 		if rmd.Revision != fbo.getCurrMDRevisionLocked()+1 {
 			return MDUpdateApplyError{rmd.Revision,
 				fbo.getCurrMDRevisionLocked()}
@@ -3538,14 +3573,27 @@ func (fbo *FolderBranchOps) getAndApplyMDUpdates(ctx context.Context,
 
 func (fbo *FolderBranchOps) getUnmergedMDUpdates(ctx context.Context) (
 	MetadataRevision, []*RootMetadata, error) {
+	// acquire writerLock to read the current branch ID.
+	bid := func() BranchID {
+		fbo.writerLock.Lock()
+		defer fbo.writerLock.Unlock()
+		return fbo.bid
+	}()
 	return getUnmergedMDUpdates(ctx, fbo.config, fbo.id(),
-		fbo.getCurrMDRevision())
+		bid, fbo.getCurrMDRevision())
+}
+
+// writerLock should be held by caller.
+func (fbo *FolderBranchOps) getUnmergedMDUpdatesLocked(ctx context.Context) (
+	MetadataRevision, []*RootMetadata, error) {
+	return getUnmergedMDUpdates(ctx, fbo.config, fbo.id(),
+		fbo.bid, fbo.getCurrMDRevision())
 }
 
 // writerLock should be held by caller.
 func (fbo *FolderBranchOps) undoUnmergedMDUpdatesLocked(
 	ctx context.Context) error {
-	currHead, unmergedRmds, err := fbo.getUnmergedMDUpdates(ctx)
+	currHead, unmergedRmds, err := fbo.getUnmergedMDUpdatesLocked(ctx)
 	if err != nil {
 		return err
 	}
@@ -3561,10 +3609,10 @@ func (fbo *FolderBranchOps) undoUnmergedMDUpdatesLocked(
 	// being currHead-1, so that future calls to
 	// applyMDUpdates will fetch this along with the rest of
 	// the updates.
-	fbo.setStagedLocked(false)
+	fbo.setStagedLocked(false, NullBranchID)
 
 	rmds, err :=
-		getMDRange(ctx, fbo.config, fbo.id(), currHead, currHead, Merged)
+		getMDRange(ctx, fbo.config, fbo.id(), NullBranchID, currHead, currHead, Merged)
 	if err != nil {
 		return err
 	}
@@ -3596,7 +3644,7 @@ func (fbo *FolderBranchOps) UnstageForTesting(
 		return WrongOpsError{fbo.folderBranch, folderBranch}
 	}
 
-	if !fbo.staged {
+	if !fbo.getStaged() {
 		// no-op
 		return nil
 	}
@@ -3627,6 +3675,7 @@ func (fbo *FolderBranchOps) UnstageForTesting(
 		defer fbo.writerLock.Unlock()
 
 		// fetch all of my unstaged updates, and undo them one at a time
+		bid, wasStaged := fbo.bid, fbo.staged
 		err := fbo.undoUnmergedMDUpdatesLocked(freshCtx)
 		if err != nil {
 			c <- err
@@ -3634,10 +3683,12 @@ func (fbo *FolderBranchOps) UnstageForTesting(
 		}
 
 		// let the server know we no longer have need
-		err = fbo.config.MDServer().PruneUnmerged(freshCtx, fbo.id())
-		if err != nil {
-			c <- err
-			return
+		if wasStaged {
+			err = fbo.config.MDServer().PruneBranch(freshCtx, fbo.id(), bid)
+			if err != nil {
+				c <- err
+				return
+			}
 		}
 
 		// now go forward in time, if possible
@@ -3683,11 +3734,6 @@ func (fbo *FolderBranchOps) RekeyForTesting(
 		return nil
 	}
 
-	err = fbo.incrementMDLocked(md)
-	if err != nil {
-		return err
-	}
-
 	// add an empty operation to satisfy assumptions elsewhere
 	md.AddOp(newGCOp())
 
@@ -3695,6 +3741,10 @@ func (fbo *FolderBranchOps) RekeyForTesting(
 	if err != nil {
 		return err
 	}
+
+	// send rekey finish notification
+	handle := md.GetTlfHandle()
+	fbo.config.Reporter().Notify(ctx, rekeyNotification(ctx, fbo.config, handle, true))
 
 	return nil
 }
@@ -3709,8 +3759,15 @@ func (fbo *FolderBranchOps) SyncFromServer(
 		return WrongOpsError{fbo.folderBranch, folderBranch}
 	}
 
-	if fbo.staged {
-		return errors.New("Can't sync from server while unmerged.")
+	if fbo.getStaged() {
+		if err := fbo.cr.Wait(ctx); err != nil {
+			return err
+		}
+		// If we are still staged after the wait, then we have a problem.
+		if fbo.getStaged() {
+			return fmt.Errorf("Conflict resolution didn't take us out of " +
+				"staging.")
+		}
 	}
 
 	if fbo.getState() != cleanState {

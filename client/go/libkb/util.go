@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -7,6 +10,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/keybase/client/go/logger"
+	keybase1 "github.com/keybase/client/go/protocol"
 	"io"
 	"math"
 	"math/big"
@@ -16,9 +21,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-
-	"github.com/keybase/client/go/logger"
-	keybase1 "github.com/keybase/client/go/protocol"
 )
 
 func ErrToOk(err error) string {
@@ -194,6 +196,7 @@ func Pluralize(n int, singular string, plural string, nshow bool) string {
 	return plural
 }
 
+// IsIn checks for needle in haystack, ci means case-insensitive.
 func IsIn(needle string, haystack []string, ci bool) bool {
 	for _, h := range haystack {
 		if (ci && Cicmp(h, needle)) || (!ci && h == needle) {

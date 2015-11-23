@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package service
 
 import (
@@ -61,13 +64,13 @@ func (l *SecretUI) GetSecret(pinentry keybase1.SecretEntryArg, terminal *keybase
 }
 
 // GetNewPassphrase gets a new passphrase from pinentry
-func (l *SecretUI) GetNewPassphrase(arg keybase1.GetNewPassphraseArg) (keybase1.GetNewPassphraseRes, error) {
+func (l *SecretUI) GetNewPassphrase(arg keybase1.GetNewPassphraseArg) (keybase1.GetPassphraseRes, error) {
 	arg.SessionID = l.sessionID
 	return l.cli.GetNewPassphrase(context.TODO(), arg)
 }
 
 // GetKeybasePassphrase gets the current keybase passphrase from pinentry.
-func (l *SecretUI) GetKeybasePassphrase(arg keybase1.GetKeybasePassphraseArg) (string, error) {
+func (l *SecretUI) GetKeybasePassphrase(arg keybase1.GetKeybasePassphraseArg) (keybase1.GetPassphraseRes, error) {
 	arg.SessionID = l.sessionID
 	return l.cli.GetKeybasePassphrase(context.TODO(), arg)
 }
@@ -77,6 +80,11 @@ func (l *SecretUI) GetKeybasePassphrase(arg keybase1.GetKeybasePassphraseArg) (s
 func (l *SecretUI) GetPaperKeyPassphrase(arg keybase1.GetPaperKeyPassphraseArg) (string, error) {
 	arg.SessionID = l.sessionID
 	return l.cli.GetPaperKeyPassphrase(context.TODO(), arg)
+}
+
+// GetPinSecret gets the current keybase passphrase from delegated pinentry.
+func (l *SecretUI) GetPassphrase(pinentry keybase1.GUIEntryArg, terminal *keybase1.SecretEntryArg) (keybase1.GetPassphraseRes, error) {
+	return l.cli.GetPassphrase(context.TODO(), keybase1.GetPassphraseArg{SessionID: l.sessionID, Pinentry: pinentry, Terminal: terminal})
 }
 
 func (h *BaseHandler) rpcClient() *rpc.Client {
@@ -89,10 +97,6 @@ func (h *BaseHandler) getLoginUICli() *keybase1.LoginUiClient {
 
 func (h *BaseHandler) getLoginUI(sessionID int) libkb.LoginUI {
 	return &LoginUI{sessionID, h.getLoginUICli()}
-}
-
-func (h *BaseHandler) getLocksmithUI(sessionID int) libkb.LocksmithUI {
-	return NewRemoteLocksmithUI(sessionID, h.rpcClient())
 }
 
 func (h *BaseHandler) getGPGUI(sessionID int) libkb.GPGUI {
@@ -123,23 +127,14 @@ func (h *BaseHandler) getStreamUICli() *keybase1.StreamUiClient {
 	return &keybase1.StreamUiClient{Cli: h.rpcClient()}
 }
 
-func (h *BaseHandler) NewRemoteSelfIdentifyUI(sessionID int) *RemoteSelfIdentifyUI {
-	c := h.rpcClient()
-	return &RemoteSelfIdentifyUI{RemoteBaseIdentifyUI{
-		sessionID: sessionID,
-		uicli:     keybase1.IdentifyUiClient{Cli: c},
-		logUI:     h.getLogUI(sessionID),
-	}}
-}
-
 func (h *BaseHandler) NewRemoteIdentifyUI(sessionID int, g *libkb.GlobalContext) *RemoteIdentifyUI {
 	c := h.rpcClient()
-	return &RemoteIdentifyUI{RemoteBaseIdentifyUI{
+	return &RemoteIdentifyUI{
 		sessionID:    sessionID,
 		uicli:        keybase1.IdentifyUiClient{Cli: c},
 		logUI:        h.getLogUI(sessionID),
 		Contextified: libkb.NewContextified(g),
-	}}
+	}
 }
 
 func (h *BaseHandler) NewRemoteSkipPromptIdentifyUI(sessionID int, g *libkb.GlobalContext) *RemoteIdentifyUI {

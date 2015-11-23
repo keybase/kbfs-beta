@@ -146,6 +146,7 @@ func (k KeybaseDaemonLocal) CurrentSession(ctx context.Context, sessionID int) (
 		UID:            u.UID,
 		Token:          "keybase_daemon_local_token",
 		CryptPublicKey: u.GetCurrentCryptPublicKey(),
+		VerifyingKey:   u.GetCurrentVerifyingKey(),
 	}, nil
 }
 
@@ -165,6 +166,11 @@ func (k KeybaseDaemonLocal) FavoriteDelete(
 func (k KeybaseDaemonLocal) FavoriteList(
 	ctx context.Context, sessionID int) ([]keybase1.Folder, error) {
 	return k.favoriteStore.FavoriteList(sessionID)
+}
+
+// Notify implements KeybaseDaemon for KeybaseDeamonLocal.
+func (k KeybaseDaemonLocal) Notify(ctx context.Context, notification *keybase1.FSNotification) error {
+	return nil
 }
 
 // Shutdown implements KeybaseDaemon for KeybaseDaemonLocal.

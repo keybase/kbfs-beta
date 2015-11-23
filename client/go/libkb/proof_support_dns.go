@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -19,6 +22,8 @@ type DNSChecker struct {
 func NewDNSChecker(p RemoteProofChainLink) (*DNSChecker, ProofError) {
 	return &DNSChecker{p}, nil
 }
+
+func (rc *DNSChecker) GetTorError() ProofError { return ProofErrorDNSOverTor }
 
 func (rc *DNSChecker) CheckHint(h SigHint) ProofError {
 	_, sigID, err := OpenSig(rc.proof.GetArmoredSig())

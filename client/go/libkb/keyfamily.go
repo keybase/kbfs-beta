@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 // A KeyFamily is a group of sibling keys that have equal power for a user.
 // A family can consist of 1 PGP keys, and arbitrarily many NaCl Sibkeys.
 // There also can be some subkeys dangling off for ECDH.
@@ -398,7 +401,7 @@ func (ckf ComputedKeyFamily) getCkiIfActiveAtTime(kid keybase1.KID, t time.Time)
 		err = NoKeyError{fmt.Sprintf("The key '%s' wasn't found", kid)}
 	} else if ki.Status != KeyUncancelled {
 		err = KeyRevokedError{fmt.Sprintf("The key '%s' is no longer active", kid)}
-	} else if unixTime < ki.CTime || (ki.ETime > 0 && unixTime > ki.ETime) {
+	} else if ki.ETime > 0 && unixTime > ki.ETime {
 		err = KeyExpiredError{fmt.Sprintf("The key '%s' expired at %s", kid, time.Unix(ki.ETime, 0))}
 	} else {
 		ret = ki
@@ -456,6 +459,14 @@ func (ckf ComputedKeyFamily) FindActiveEncryptionSubkey(kid keybase1.KID) (Gener
 		return nil, BadKeyError{fmt.Sprintf("The key '%s' cannot encrypt", kid.String())}
 	}
 	return key, nil
+}
+
+func (ckf ComputedKeyFamily) FindKIDFromFingerprint(fp PGPFingerprint) (kid keybase1.KID, err error) {
+	kid, ok := ckf.kf.pgp2kid[fp]
+	if !ok {
+		return kid, NoKeyError{fmt.Sprintf("No key found in key family for %q", fp)}
+	}
+	return kid, nil
 }
 
 // TclToKeybaseTime turns a TypedChainLink into a KeybaseTime tuple, looking

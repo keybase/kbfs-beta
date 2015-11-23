@@ -1,8 +1,12 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 // +build !production
 
 package libkb
 
 import (
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path"
@@ -159,13 +163,13 @@ func (tc *TestContext) ResetLoginState() {
 }
 
 func (tc TestContext) ClearAllStoredSecrets() error {
-	usernames, err := GetUsersWithStoredSecrets()
+	usernames, err := GetUsersWithStoredSecrets(tc.G)
 	if err != nil {
 		return err
 	}
 	for _, username := range usernames {
 		nu := NewNormalizedUsername(username)
-		err = ClearStoredSecret(nu)
+		err = ClearStoredSecret(tc.G, nu)
 		if err != nil {
 			return err
 		}
@@ -252,9 +256,9 @@ func SetupTest(tb testing.TB, nm string) (tc TestContext) {
 	return tc
 }
 
-func (tc *TestContext) SetSocketFile(s string) {
-	tc.Tp.SocketFile = s
-	tc.G.Env.Test.SocketFile = s
+func (tc *TestContext) SetRuntimeDir(s string) {
+	tc.Tp.RuntimeDir = s
+	tc.G.Env.Test.RuntimeDir = s
 }
 
 func (tc TestContext) Clone() (ret TestContext) {
@@ -270,9 +274,18 @@ type nullui struct {
 	gctx *GlobalContext
 }
 
-func (n *nullui) GetDoctorUI() DoctorUI {
-	return nil
+func (n *nullui) Printf(f string, args ...interface{}) (int, error) {
+	return fmt.Printf(f, args...)
 }
+
+func (n *nullui) PrintfStderr(f string, args ...interface{}) (int, error) {
+	return fmt.Fprintf(os.Stderr, f, args...)
+}
+
+func (n *nullui) GetDumbOutputUI() DumbOutputUI {
+	return n
+}
+
 func (n *nullui) GetIdentifyUI() IdentifyUI {
 	return nil
 }
@@ -300,14 +313,14 @@ func (n *nullui) GetGPGUI() GPGUI {
 func (n *nullui) GetLogUI() LogUI {
 	return n.gctx.Log
 }
-func (n *nullui) GetLocksmithUI() LocksmithUI {
-	return nil
-}
 func (n *nullui) GetProvisionUI(KexRole) ProvisionUI {
 	return nil
 }
 func (n *nullui) Prompt(string, bool, Checker) (string, error) {
 	return "", nil
+}
+func (n *nullui) PromptForConfirmation(prompt string) error {
+	return nil
 }
 func (n *nullui) GetIdentifyLubaUI() IdentifyUI {
 	return nil
@@ -327,6 +340,7 @@ type TestSecretUI struct {
 	CalledGetKBPassphrase  bool
 	CalledGetBUPassphrase  bool
 	CalledGetNewPassphrase bool
+	CalledGetPassphrase    bool
 }
 
 func (t *TestSecretUI) GetSecret(p keybase1.SecretEntryArg, terminal *keybase1.SecretEntryArg) (*keybase1.SecretEntryRes, error) {
@@ -338,14 +352,14 @@ func (t *TestSecretUI) GetSecret(p keybase1.SecretEntryArg, terminal *keybase1.S
 	}, nil
 }
 
-func (t *TestSecretUI) GetNewPassphrase(keybase1.GetNewPassphraseArg) (keybase1.GetNewPassphraseRes, error) {
+func (t *TestSecretUI) GetNewPassphrase(keybase1.GetNewPassphraseArg) (keybase1.GetPassphraseRes, error) {
 	t.CalledGetNewPassphrase = true
-	return keybase1.GetNewPassphraseRes{Passphrase: t.Passphrase}, nil
+	return keybase1.GetPassphraseRes{Passphrase: t.Passphrase}, nil
 }
 
-func (t *TestSecretUI) GetKeybasePassphrase(keybase1.GetKeybasePassphraseArg) (string, error) {
+func (t *TestSecretUI) GetKeybasePassphrase(keybase1.GetKeybasePassphraseArg) (keybase1.GetPassphraseRes, error) {
 	t.CalledGetKBPassphrase = true
-	return t.Passphrase, nil
+	return keybase1.GetPassphraseRes{Passphrase: t.Passphrase}, nil
 }
 
 func (t *TestSecretUI) GetPaperKeyPassphrase(keybase1.GetPaperKeyPassphraseArg) (string, error) {
@@ -353,23 +367,33 @@ func (t *TestSecretUI) GetPaperKeyPassphrase(keybase1.GetPaperKeyPassphraseArg) 
 	return t.BackupPassphrase, nil
 }
 
-type TestLoginUI struct {
-	Username     string
-	RevokeBackup bool
+func (t *TestSecretUI) GetPassphrase(p keybase1.GUIEntryArg, terminal *keybase1.SecretEntryArg) (keybase1.GetPassphraseRes, error) {
+	t.CalledGetPassphrase = true
+	return keybase1.GetPassphraseRes{
+		Passphrase:  t.Passphrase,
+		StoreSecret: p.Features.SecretStorage.Allow && t.StoreSecret,
+	}, nil
 }
 
-func (t TestLoginUI) GetEmailOrUsername(_ context.Context, _ int) (string, error) {
+type TestLoginUI struct {
+	Username                 string
+	RevokeBackup             bool
+	CalledGetEmailOrUsername int
+}
+
+func (t *TestLoginUI) GetEmailOrUsername(_ context.Context, _ int) (string, error) {
+	t.CalledGetEmailOrUsername++
 	return t.Username, nil
 }
 
-func (t TestLoginUI) PromptRevokePaperKeys(_ context.Context, arg keybase1.PromptRevokePaperKeysArg) (bool, error) {
+func (t *TestLoginUI) PromptRevokePaperKeys(_ context.Context, arg keybase1.PromptRevokePaperKeysArg) (bool, error) {
 	return t.RevokeBackup, nil
 }
 
-func (t TestLoginUI) DisplayPaperKeyPhrase(_ context.Context, arg keybase1.DisplayPaperKeyPhraseArg) error {
+func (t *TestLoginUI) DisplayPaperKeyPhrase(_ context.Context, arg keybase1.DisplayPaperKeyPhraseArg) error {
 	return nil
 }
 
-func (t TestLoginUI) DisplayPrimaryPaperKey(_ context.Context, arg keybase1.DisplayPrimaryPaperKeyArg) error {
+func (t *TestLoginUI) DisplayPrimaryPaperKey(_ context.Context, arg keybase1.DisplayPrimaryPaperKeyArg) error {
 	return nil
 }

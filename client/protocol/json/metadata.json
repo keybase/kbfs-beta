@@ -194,17 +194,27 @@
         "items" : "bytes"
       }
     } ]
+  }, {
+    "type" : "record",
+    "name" : "FolderUsersResponse",
+    "fields" : [ {
+      "name" : "readers",
+      "type" : {
+        "type" : "array",
+        "items" : "UID"
+      }
+    }, {
+      "name" : "writers",
+      "type" : {
+        "type" : "array",
+        "items" : "UID"
+      }
+    } ]
   } ],
   "messages" : {
     "authenticate" : {
       "request" : [ {
-        "name" : "user",
-        "type" : "UID"
-      }, {
-        "name" : "deviceKID",
-        "type" : "KID"
-      }, {
-        "name" : "sid",
+        "name" : "signature",
         "type" : "string"
       } ],
       "response" : "int"
@@ -229,6 +239,9 @@
       }, {
         "name" : "folderHandle",
         "type" : "bytes"
+      }, {
+        "name" : "branchID",
+        "type" : "string"
       }, {
         "name" : "unmerged",
         "type" : "boolean"
@@ -263,9 +276,12 @@
       } ],
       "response" : "null"
     },
-    "pruneUnmerged" : {
+    "pruneBranch" : {
       "request" : [ {
         "name" : "folderID",
+        "type" : "string"
+      }, {
+        "name" : "branchID",
         "type" : "string"
       }, {
         "name" : "logTags",
@@ -297,6 +313,9 @@
         "name" : "keyHalfID",
         "type" : "bytes"
       }, {
+        "name" : "deviceKID",
+        "type" : "string"
+      }, {
         "name" : "logTags",
         "type" : {
           "type" : "map",
@@ -318,6 +337,13 @@
         "type" : "string"
       } ],
       "response" : "boolean"
+    },
+    "getFolderUsers" : {
+      "request" : [ {
+        "name" : "folderID",
+        "type" : "string"
+      } ],
+      "response" : "FolderUsersResponse"
     },
     "ping" : {
       "request" : [ ],

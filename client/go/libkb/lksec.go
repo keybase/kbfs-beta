@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 import (
@@ -133,13 +136,13 @@ func (s *LKSec) Load(lctx LoginContext) (err error) {
 	return nil
 }
 
-func (s *LKSec) GetSecret() (secret []byte, err error) {
+func (s *LKSec) GetSecret(lctx LoginContext) (secret []byte, err error) {
 	s.G().Log.Debug("+ LKsec:GetSecret()")
 	defer func() {
 		s.G().Log.Debug("- LKSec::GetSecret() -> %s", ErrToOk(err))
 	}()
 
-	if err = s.Load(nil); err != nil {
+	if err = s.Load(lctx); err != nil {
 		return
 	}
 
@@ -176,7 +179,7 @@ func (s *LKSec) Decrypt(lctx LoginContext, src []byte) (res []byte, gen Passphra
 	}()
 
 	if err = s.Load(lctx); err != nil {
-		return nil, 0, fmt.Errorf("lksec decrypt Load err: %s", err)
+		return nil, 0, err
 	}
 	var nonce [24]byte
 	copy(nonce[:], src[0:24])

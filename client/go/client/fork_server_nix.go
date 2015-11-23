@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 // +build darwin dragonfly freebsd linux netbsd openbsd solaris
 
 package client
@@ -8,15 +11,15 @@ import (
 	"syscall"
 
 	"github.com/keybase/client/go/libkb"
+	keybase1 "github.com/keybase/client/go/protocol"
 )
 
-func spawnServer(cl libkb.CommandLine) (err error) {
+func spawnServer(cl libkb.CommandLine, forkType keybase1.ForkType) (pid int, err error) {
 
 	var files []uintptr
 	var cmd string
 	var args []string
 	var devnull, log *os.File
-	var pid int
 
 	defer func() {
 		if err != nil {
@@ -49,9 +52,9 @@ func spawnServer(cl libkb.CommandLine) (err error) {
 		Files: files,
 	}
 
-	cmd, args, err = makeServerCommandLine(cl)
+	cmd, args, err = makeServerCommandLine(cl, forkType)
 	if err != nil {
-		return err
+		return
 	}
 
 	pid, err = syscall.ForkExec(cmd, args, &attr)
@@ -60,5 +63,5 @@ func spawnServer(cl libkb.CommandLine) (err error) {
 	} else {
 		G.Log.Info("Forking background server with pid=%d", pid)
 	}
-	return err
+	return
 }

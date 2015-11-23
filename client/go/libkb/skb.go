@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 //
@@ -375,7 +378,7 @@ func (s *SKB) lksUnlock(lctx LoginContext, pps *PassphraseStream, secretStorer S
 
 	if secretStorer != nil {
 		var secret []byte
-		secret, err = lks.GetSecret()
+		secret, err = lks.GetSecret(lctx)
 		if err != nil {
 			unlocked = nil
 			return
@@ -732,4 +735,8 @@ func (k *SKBKeyringFile) PushAndSave(skb *SKB) error {
 		return err
 	}
 	return k.Save()
+}
+
+func (k *SKBKeyringFile) HasPGPKeys() bool {
+	return len(k.fpIndex) > 0
 }

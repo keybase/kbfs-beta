@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package client
 
 import (
@@ -9,6 +12,7 @@ func GetHelpTopics() []cli.HelpTopic {
 		advancedHT,
 		gpgHT,
 		keyringHT,
+		torHT,
 	}
 }
 
@@ -79,6 +83,9 @@ On signup - When you signup, you can also "select" a PGP key for use with keybas
 
 'keybase pgp export' - Doesn't access the GPG keyring at all, just outputs
   your currently provisioned PGP keys to standard output (or a file).
+
+'keybase pgp drop' - Disassociates this PGP key from your account, but doesn't
+  access the GPG keyring, and doesn't perform a traditional PGP revocation.
 `,
 }
 
@@ -126,6 +133,34 @@ are available on keybase.io in the docs section.
 `,
 }
 
+var torHT = cli.HelpTopic{
+	Name:  "tor",
+	Usage: "Description of how keybase works with Tor",
+	Body: `Keybase + Tor
+
+Using the --tor-mode flag, you can enable either "strict" mode or "leaky" mode.
+
+In either mode, we print warnings any time you identify another user with HTTP
+or DNS proofs, because your Tor exit node will be able to spoof these.
+
+In leaky mode, all server requests are made over Tor to the Keybase onion URL
+(http://fncuwbiisyh6ak3i.onion), but the client still sends your session ID and
+other authentication info as part of its requests. Features that require you to
+be logged in, like "keybase prove", still work as usual.
+
+In strict mode, the client tries to avoid identifying you even to the Keybase
+server. We strip all headers from API requests. Any commands that require
+authentication will fail.
+
+As usual with anonymity tools, there is a big list of caveats and warnings that
+apply. Our strict mode isn't audited, so it's possible that identifying
+information will creep in. A better guarantee would be to run the client inside
+of a Tails VM (https://tails.boum.org), with no identifying information
+available to the client at all. Even still, it's possible for your own behavior
+to identify you, like if you fetch the PGP keys of all of your friends.
+`,
+}
+
 // Custom help templates for cli package
 
 func init() {
@@ -166,7 +201,7 @@ DESCRIPTION:
    {{.Description}}{{end}}{{ if .Subcommands }}
 
 COMMANDS:
-   {{range .Subcommands}}{{join .Names ", "}}{{ "\t" }}{{.Usage}}
+   {{range .Subcommands}}{{if .Usage }}{{join .Names ", "}}{{ "\t" }}{{.Usage}}{{ end }}
    {{end}}{{end}}{{if .Flags}}
 
 OPTIONS:

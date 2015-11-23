@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package engine
 
 import (
@@ -11,7 +14,7 @@ import (
 
 func runIdentify(tc *libkb.TestContext, username string) (idUI *FakeIdentifyUI, res *IDRes, err error) {
 	idUI = &FakeIdentifyUI{}
-	arg := IDEngineArg{
+	arg := keybase1.IdentifyArg{
 		UserAssertion: username,
 	}
 	ctx := Context{
@@ -224,6 +227,9 @@ func (ui *FakeIdentifyUI) LaunchNetworkChecks(id *keybase1.Identity, user *keyba
 }
 func (ui *FakeIdentifyUI) DisplayTrackStatement(string) (err error) {
 	return
+}
+func (ui *FakeIdentifyUI) ReportTrackToken(libkb.IdentifyCacheToken) error {
+	return nil
 }
 func (ui *FakeIdentifyUI) SetStrict(b bool) {
 }

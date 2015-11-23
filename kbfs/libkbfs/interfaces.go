@@ -258,6 +258,9 @@ type KeybaseDaemon interface {
 	// FavoriteList returns the current list of favorites.
 	FavoriteList(ctx context.Context, sessionID int) ([]keybase1.Folder, error)
 
+	// Notify sends a filesystem notification.
+	Notify(ctx context.Context, notification *keybase1.FSNotification) error
+
 	// TODO: Add CryptoClient methods, too.
 
 	// Shutdown frees any resources associated with this
@@ -275,6 +278,9 @@ type KBPKI interface {
 	// GetCurrentCryptPublicKey gets the crypt public key for the
 	// currently-active device.
 	GetCurrentCryptPublicKey(ctx context.Context) (CryptPublicKey, error)
+	// GetCurrentVerifyingKey gets the public key used for signing for the
+	// currently-active device.
+	GetCurrentVerifyingKey(ctx context.Context) (VerifyingKey, error)
 
 	// ResolveAssertion loads a user by assertion (could also be a
 	// username).
@@ -309,6 +315,9 @@ type KBPKI interface {
 	// FavoriteList returns the list of all favorite folders for
 	// the logged in user.
 	FavoriteList(ctx context.Context) ([]keybase1.Folder, error)
+
+	// Notify sends a filesystem notification.
+	Notify(ctx context.Context, notification *keybase1.FSNotification) error
 }
 
 // KeyManager fetches and constructs the keys needed for KBFS file
@@ -371,6 +380,10 @@ type Reporter interface {
 	Report(level ReportingLevel, message fmt.Stringer)
 	// AllKnownErrors returns all errors known to this Reporter.
 	AllKnownErrors() []ReportedError
+	// Notify sends the given notification to any sink.
+	Notify(ctx context.Context, notification *keybase1.FSNotification)
+	// Shutdown frees any resources allocated by a Reporter.
+	Shutdown()
 }
 
 // MDCache gets and puts plaintext top-level metadata into the cache.
@@ -430,6 +443,9 @@ type Crypto interface {
 	// MakeRandomTlfID generates a dir ID using a CSPRNG.
 	MakeRandomTlfID(isPublic bool) (TlfID, error)
 
+	// MakeRandomBranchID generates a per-device branch ID using a CSPRNG.
+	MakeRandomBranchID() (BranchID, error)
+
 	// MakeMdID computes the MD ID of a RootMetadata object.
 	MakeMdID(md *RootMetadata) (MdID, error)
 
@@ -474,6 +490,9 @@ type Crypto interface {
 
 	// Sign signs the msg with the current device's private key.
 	Sign(ctx context.Context, msg []byte) (sigInfo SignatureInfo, err error)
+	// Sign signs the msg with the current device's private key and output
+	// the full serialized NaclSigInfo.
+	SignToString(ctx context.Context, msg []byte) (signature string, err error)
 	// Verify verifies that sig matches msg being signed with the
 	// private key that corresponds to verifyingKey.
 	Verify(msg []byte, sigInfo SignatureInfo) error
@@ -571,7 +590,7 @@ type MDOps interface {
 
 	// GetUnmergedForTLF is the same as the above but for unmerged
 	// metadata.
-	GetUnmergedForTLF(ctx context.Context, id TlfID) (
+	GetUnmergedForTLF(ctx context.Context, id TlfID, bid BranchID) (
 		*RootMetadata, error)
 
 	// GetRange returns a range of metadata objects corresponding to
@@ -581,8 +600,8 @@ type MDOps interface {
 
 	// GetUnmergedRange is the same as the above but for unmerged
 	// metadata history (inclusive).
-	GetUnmergedRange(ctx context.Context, id TlfID, start, stop MetadataRevision) (
-		[]*RootMetadata, error)
+	GetUnmergedRange(ctx context.Context, id TlfID, bid BranchID,
+		start, stop MetadataRevision) ([]*RootMetadata, error)
 
 	// Put stores the metadata object for the given
 	// top-level folder.
@@ -590,7 +609,7 @@ type MDOps interface {
 
 	// PutUnmerged is the same as the above but for unmerged
 	// metadata history.
-	PutUnmerged(ctx context.Context, rmd *RootMetadata) error
+	PutUnmerged(ctx context.Context, rmd *RootMetadata, bid BranchID) error
 }
 
 // KeyOps fetches server-side key halves from the key server.
@@ -659,14 +678,13 @@ type MDServer interface {
 	// GetForTLF returns the current (signed/encrypted) metadata object
 	// corresponding to the given top-level folder, if the logged-in
 	// user has read permission on the folder.
-	GetForTLF(ctx context.Context, id TlfID, mStatus MergeStatus) (
+	GetForTLF(ctx context.Context, id TlfID, bid BranchID, mStatus MergeStatus) (
 		*RootMetadataSigned, error)
 
 	// GetRange returns a range of (signed/encrypted) metadata objects
 	// corresponding to the passed revision numbers (inclusive).
-	GetRange(ctx context.Context, id TlfID, mStatus MergeStatus,
-		start, stop MetadataRevision) (
-		[]*RootMetadataSigned, error)
+	GetRange(ctx context.Context, id TlfID, bid BranchID, mStatus MergeStatus,
+		start, stop MetadataRevision) ([]*RootMetadataSigned, error)
 
 	// Put stores the (signed/encrypted) metadata object for the given
 	// top-level folder. Note: If the unmerged bit is set in the metadata
@@ -674,9 +692,8 @@ type MDServer interface {
 	// history.
 	Put(ctx context.Context, rmds *RootMetadataSigned) error
 
-	// PruneUnmerged prunes all unmerged history for the given user
-	// and device for the given top-level folder..
-	PruneUnmerged(ctx context.Context, id TlfID) error
+	// PruneBranch prunes all unmerged history for the given TLF branch.
+	PruneBranch(ctx context.Context, id TlfID, bid BranchID) error
 
 	// RegisterForUpdate tells the MD server to inform the caller when
 	// there is a merged update with a revision number greater than
@@ -819,7 +836,7 @@ type Clock interface {
 
 // ConflictRenamer deals with names for conflicting directory entries.
 type ConflictRenamer interface {
-	// GetConflictResolver returns the appropriate suffix for the
+	// GetConflictSuffix returns the appropriate suffix for the
 	// given op causing a conflict.
 	GetConflictSuffix(op op) string
 }
@@ -940,22 +957,50 @@ type ConnectionTransport interface {
 	Close()
 }
 
+// fileBlockDeepCopier fetches a file block, makes a deep copy of it
+// (duplicating pointer for any indirect blocks) and generates a new
+// random temporary block ID for it.  It returns the new BlockPointer,
+// and internally saves the block for future uses.
+type fileBlockDeepCopier func(context.Context, string, BlockPointer) (
+	BlockPointer, error)
+
 // crAction represents a specific action to take as part of the
 // conflict resolution process.
 type crAction interface {
+	// swapUnmergedBlock should be called before do(), and if it
+	// returns true, the caller must use the merged block
+	// corresponding to the returned BlockPointer instead of
+	// unmergedBlock when calling do().  If BlockPointer{} is zeroPtr
+	// (and true is returned), just swap in the regular mergedBlock.
+	swapUnmergedBlock(unmergedChains *crChains, mergedChains *crChains,
+		unmergedBlock *DirBlock) (bool, BlockPointer, error)
 	// do modifies the given merged block in place to resolve the
-	// conflict, and returns potentially modified sets of unmerged and
-	// merged operations.  Eventually, the "unmerged" ops will be
-	// pushed as part of a MD update, and so should contain any
-	// necessarily operations to fully merge the unmerged data,
-	// including any conflict resolution.  The "merged" ops will be
-	// played through locally, to notify any caches about the
-	// newly-obtained merged data (and any changes to local data that
-	// were required as part of conflict resolution, such as renames).
-	do(config Config, unmergedMostRecent BlockPointer,
-		mergedMostRecent BlockPointer, unmergedOps []op, mergedOps []op,
-		unmergedBlock *DirBlock, mergedBlock *DirBlock) (
-		retUnmergedOps []op, retMergedOps []op, err error)
+	// conflict, and potential uses the provided blockCopyFetchers to
+	// obtain copies of other blocks (along with new BlockPointers)
+	// when requiring a block copy.
+	do(ctx context.Context, unmergedCopier fileBlockDeepCopier,
+		mergedCopier fileBlockDeepCopier, unmergedBlock *DirBlock,
+		mergedBlock *DirBlock) error
+	// updateOps potentially modifies, in place, the slices of
+	// unmerged and merged operations stored in the corresponding
+	// crChains for the given unmerged and merged most recent
+	// pointers.  Eventually, the "unmerged" ops will be pushed as
+	// part of a MD update, and so should contain any necessarily
+	// operations to fully merge the unmerged data, including any
+	// conflict resolution.  The "merged" ops will be played through
+	// locally, to notify any caches about the newly-obtained merged
+	// data (and any changes to local data that were required as part
+	// of conflict resolution, such as renames).  A few things to note:
+	// * A particular action's updateOps method may be called more than
+	//   once for different sets of chains, however it should only add
+	//   new directory operations (like create/rm/rename) into directory
+	//   chains.
+	// * updateOps doesn't necessarily result in correct BlockPointers within
+	//   each of those ops; that must happen in a later phase.
+	// * mergedBlock can be nil if the chain is for a file.
+	updateOps(unmergedMostRecent BlockPointer, mergedMostRecent BlockPointer,
+		unmergedBlock *DirBlock, mergedBlock *DirBlock,
+		unmergedChains *crChains, mergedChains *crChains) error
 	// String returns a string representation for this crAction, used
 	// for debugging.
 	String() string

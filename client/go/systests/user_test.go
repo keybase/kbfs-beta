@@ -1,17 +1,21 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package systests
 
 import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"testing"
+
 	"github.com/keybase/client/go/client"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
 	"github.com/keybase/client/go/service"
 	rpc "github.com/keybase/go-framed-msgpack-rpc"
 	context "golang.org/x/net/context"
-	"io"
-	"testing"
 )
 
 type signupInfo struct {
@@ -66,13 +70,13 @@ func (n *signupUI) GetGPGUI() libkb.GPGUI {
 	return client.NewGPGUI(n.GetTerminalUI(), false)
 }
 
-func (n *signupSecretUI) GetNewPassphrase(arg keybase1.GetNewPassphraseArg) (res keybase1.GetNewPassphraseRes, err error) {
+func (n *signupSecretUI) GetNewPassphrase(arg keybase1.GetNewPassphraseArg) (res keybase1.GetPassphraseRes, err error) {
 	res.Passphrase = n.info.passphrase
 	n.G().Log.Debug("| GetNewPassphrase: %v -> %v", arg, res)
 	return res, err
 }
 
-func (n *signupSecretUI) GetKeybasePassphrase(arg keybase1.GetKeybasePassphraseArg) (res string, err error) {
+func (n *signupSecretUI) GetKeybasePassphrase(arg keybase1.GetKeybasePassphraseArg) (res keybase1.GetPassphraseRes, err error) {
 	err = fmt.Errorf("GetKeybasePassphrase unimplemented")
 	return res, err
 }
@@ -84,6 +88,11 @@ func (n *signupSecretUI) GetPaperKeyPassphrase(arg keybase1.GetPaperKeyPassphras
 
 func (n *signupSecretUI) GetSecret(pinentry keybase1.SecretEntryArg, terminal *keybase1.SecretEntryArg) (res *keybase1.SecretEntryRes, err error) {
 	err = fmt.Errorf("GetSecret unimplemented")
+	return res, err
+}
+
+func (n *signupSecretUI) GetPassphrase(p keybase1.GUIEntryArg, terminal *keybase1.SecretEntryArg) (res keybase1.GetPassphraseRes, err error) {
+	err = fmt.Errorf("GetPassphrase unimplemented")
 	return res, err
 }
 
@@ -141,6 +150,10 @@ func (n *signupTerminalUI) PromptYesNo(pd libkb.PromptDescriptor, s string, def 
 	return ret, err
 }
 
+func (n *signupTerminalUI) PromptForConfirmation(prompt string) error {
+	return nil
+}
+
 func randomUser(prefix string) *signupInfo {
 	b := make([]byte, 5)
 	rand.Read(b)
@@ -190,10 +203,14 @@ func TestSignupLogout(t *testing.T) {
 	defer tc.Cleanup()
 
 	stopCh := make(chan error)
-	svc := service.NewService(false, tc.G)
+	svc := service.NewService(tc.G, false)
 	startCh := svc.GetStartChannel()
 	go func() {
-		stopCh <- svc.Run()
+		err := svc.Run()
+		if err != nil {
+			t.Logf("Running the service produced an error: %v", err)
+		}
+		stopCh <- err
 	}()
 
 	userInfo := randomUser("sgnup")
@@ -233,7 +250,7 @@ func TestSignupLogout(t *testing.T) {
 			return err
 		}
 		ncli := keybase1.NotifyCtlClient{Cli: cli}
-		if err = ncli.ToggleNotifications(context.TODO(), keybase1.NotificationChannels{
+		if err = ncli.SetNotifications(context.TODO(), keybase1.NotificationChannels{
 			Session: true,
 			Users:   true,
 		}); err != nil {
@@ -288,4 +305,14 @@ func TestSignupLogout(t *testing.T) {
 	if err := <-stopCh; err != nil {
 		t.Fatal(err)
 	}
+
+	// Check that we only get one notification, not two
+	select {
+	case _, ok := <-nh.logoutCh:
+		if ok {
+			t.Fatal("Received an extra logout notification!")
+		}
+	default:
+	}
+
 }

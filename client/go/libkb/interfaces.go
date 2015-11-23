@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package libkb
 
 /*
@@ -54,6 +57,10 @@ type CommandLine interface {
 
 	GetScraperTimeout() (time.Duration, bool)
 	GetAPITimeout() (time.Duration, bool)
+
+	GetTorMode() (TorMode, error)
+	GetTorHiddenAddress() string
+	GetTorProxy() string
 
 	// Lower-level functions
 	GetGString(string) string
@@ -128,11 +135,16 @@ type ConfigReader interface {
 	GetScraperTimeout() (time.Duration, bool)
 	GetAPITimeout() (time.Duration, bool)
 	GetSecurityAccessGroupOverride() (bool, bool)
+
+	GetTorMode() (TorMode, error)
+	GetTorHiddenAddress() string
+	GetTorProxy() string
 }
 
 type ConfigWriter interface {
 	SetUserConfig(cfg *UserConfig, overwrite bool) error
 	SwitchUser(un NormalizedUsername) error
+	NukeUser(un NormalizedUsername) error
 	SetDeviceID(keybase1.DeviceID) error
 	SetStringAtPath(string, string) error
 	SetBoolAtPath(string, bool) error
@@ -141,13 +153,12 @@ type ConfigWriter interface {
 	DeleteAtPath(string)
 	Reset()
 	Write() error
+	SaveTmp(suffix string) (string, error)
+	SwapTmp(filename string) error
 }
 
 type HTTPRequest interface {
 	SetEnvironment(env Env)
-}
-
-type ProofCheckers interface {
 }
 
 type Usage struct {
@@ -227,6 +238,7 @@ type IdentifyUI interface {
 	ReportLastTrack(*keybase1.TrackSummary)
 	LaunchNetworkChecks(*keybase1.Identity, *keybase1.User)
 	DisplayTrackStatement(string) error
+	ReportTrackToken(IdentifyCacheToken) error
 	SetStrict(b bool)
 	Finish()
 }
@@ -262,9 +274,10 @@ type ProveUI interface {
 
 type SecretUI interface {
 	GetSecret(pinentry keybase1.SecretEntryArg, terminal *keybase1.SecretEntryArg) (*keybase1.SecretEntryRes, error)
-	GetNewPassphrase(keybase1.GetNewPassphraseArg) (keybase1.GetNewPassphraseRes, error)
-	GetKeybasePassphrase(keybase1.GetKeybasePassphraseArg) (string, error)
+	GetNewPassphrase(keybase1.GetNewPassphraseArg) (keybase1.GetPassphraseRes, error)
+	GetKeybasePassphrase(keybase1.GetKeybasePassphraseArg) (keybase1.GetPassphraseRes, error)
 	GetPaperKeyPassphrase(keybase1.GetPaperKeyPassphraseArg) (string, error)
+	GetPassphrase(pinentry keybase1.GUIEntryArg, terminal *keybase1.SecretEntryArg) (keybase1.GetPassphraseRes, error)
 }
 
 type LogUI interface {
@@ -276,18 +289,8 @@ type LogUI interface {
 	Critical(format string, args ...interface{})
 }
 
-type LocksmithUI interface {
-	keybase1.LocksmithUiInterface
-}
-
 type GPGUI interface {
 	keybase1.GpgUiInterface
-}
-
-type DoctorUI interface {
-	LoginSelect(ctx context.Context, currentUser string, otherUsers []string) (string, error)
-	DisplayStatus(ctx context.Context, status keybase1.DoctorStatus) (bool, error)
-	DisplayResult(ctx context.Context, msg string) error
 }
 
 type ProvisionUI interface {
@@ -311,22 +314,34 @@ type TerminalUI interface {
 	PromptYesNo(PromptDescriptor, string, PromptDefault) (bool, error)
 	Prompt(PromptDescriptor, string) (string, error)
 	PromptPassword(PromptDescriptor, string) (string, error)
+	PromptForConfirmation(prompt string) error
+}
+
+type DumbOutputUI interface {
+	Printf(fmt string, args ...interface{}) (int, error)
+	PrintfStderr(fmt string, args ...interface{}) (int, error)
 }
 
 type UI interface {
-	GetDoctorUI() DoctorUI
 	GetIdentifyUI() IdentifyUI
 	GetIdentifyTrackUI(strict bool) IdentifyUI
 	GetLoginUI() LoginUI
 	GetSecretUI() SecretUI
 	GetTerminalUI() TerminalUI
+	GetDumbOutputUI() DumbOutputUI
 	GetProveUI() ProveUI
 	GetLogUI() LogUI
 	GetGPGUI() GPGUI
-	GetLocksmithUI() LocksmithUI
 	GetProvisionUI(role KexRole) ProvisionUI
 	Configure() error
 	Shutdown() error
+}
+
+type UIRouter interface {
+	SetUI(ConnectionID, UIKind)
+	GetIdentifyUI() (IdentifyUI, error)
+	GetSecretUI() (SecretUI, error)
+	Shutdown()
 }
 
 type UIConsumer interface {

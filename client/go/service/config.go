@@ -1,8 +1,12 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package service
 
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/net/context"
 
@@ -14,13 +18,15 @@ import (
 
 type ConfigHandler struct {
 	libkb.Contextified
-	xp rpc.Transporter
+	xp  rpc.Transporter
+	svc *Service
 }
 
-func NewConfigHandler(xp rpc.Transporter, g *libkb.GlobalContext) *ConfigHandler {
+func NewConfigHandler(xp rpc.Transporter, g *libkb.GlobalContext, svc *Service) *ConfigHandler {
 	return &ConfigHandler{
 		Contextified: libkb.NewContextified(g),
 		xp:           xp,
+		svc:          svc,
 	}
 }
 
@@ -51,6 +57,13 @@ func (h ConfigHandler) GetConfig(_ context.Context, sessionID int) (keybase1.Con
 	}
 
 	c.Version = libkb.VersionString()
+	c.VersionShort = libkb.Version
+
+	var v []string
+	libkb.VersionMessage(func(s string) {
+		v = append(v, s)
+	})
+	c.VersionFull = strings.Join(v, "\n")
 
 	dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
 	if err == nil {
@@ -59,6 +72,12 @@ func (h ConfigHandler) GetConfig(_ context.Context, sessionID int) (keybase1.Con
 
 	c.ConfigPath = h.G().Env.GetConfigFilename()
 	c.Label = h.G().Env.GetLabel()
+	if h.svc != nil {
+		if h.svc.ForkType == keybase1.ForkType_AUTO {
+			c.IsAutoForked = true
+		}
+		c.ForkType = h.svc.ForkType
+	}
 
 	return c, nil
 }

@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package client
 
 import (
@@ -32,7 +35,7 @@ func (c *CmdPassphraseRecover) Run() error {
 	if err != nil {
 		return err
 	}
-	return passphraseChange(newChangeArg(pp, true))
+	return passphraseChange(G, newChangeArg(pp, true))
 }
 
 func (c *CmdPassphraseRecover) ParseArgv(ctx *cli.Context) error {

@@ -1,3 +1,6 @@
+// Copyright 2015 Keybase, Inc. All rights reserved. Use of
+// this source code is governed by the included BSD license.
+
 package logger
 
 import (
@@ -319,7 +322,7 @@ func (log *Standard) logToExternalLoggers(level keybase1.LogLevel, format string
 	}
 
 	for _, externalLogger := range log.externalLoggers {
-		go externalLogger.Log(level, format, args)
+		externalLogger.Log(level, format, args)
 	}
 }
 

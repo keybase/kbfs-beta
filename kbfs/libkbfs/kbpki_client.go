@@ -53,6 +53,16 @@ func (k *KBPKIClient) GetCurrentCryptPublicKey(ctx context.Context) (
 	return s.CryptPublicKey, nil
 }
 
+// GetCurrentVerifyingKey implements the KBPKI interface for KBPKIClient.
+func (k *KBPKIClient) GetCurrentVerifyingKey(ctx context.Context) (
+	VerifyingKey, error) {
+	s, err := k.session(ctx)
+	if err != nil {
+		return VerifyingKey{}, err
+	}
+	return s.VerifyingKey, nil
+}
+
 // ResolveAssertion implements the KBPKI interface for KBPKIClient.
 func (k *KBPKIClient) ResolveAssertion(ctx context.Context, username string) (
 	keybase1.UID, error) {
@@ -134,4 +144,9 @@ func (k *KBPKIClient) FavoriteDelete(ctx context.Context, folder keybase1.Folder
 func (k *KBPKIClient) FavoriteList(ctx context.Context) ([]keybase1.Folder, error) {
 	const sessionID = 0
 	return k.config.KeybaseDaemon().FavoriteList(ctx, sessionID)
+}
+
+// Notify implements the KBPKI interface for KBPKIClient.
+func (k *KBPKIClient) Notify(ctx context.Context, notification *keybase1.FSNotification) error {
+	return k.config.KeybaseDaemon().Notify(ctx, notification)
 }

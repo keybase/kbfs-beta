@@ -339,6 +339,9 @@ func RevokeDeviceForLocalUserOrBust(t *testing.T, config Config,
 	if kbd.currentUID == uid && index < user.CurrentCryptPublicKeyIndex {
 		user.CurrentCryptPublicKeyIndex--
 	}
+	if kbd.currentUID == uid && index < user.CurrentVerifyingKeyIndex {
+		user.CurrentVerifyingKeyIndex--
+	}
 
 	// kbd is just a copy, but kbd.localUsers is the same map
 	kbd.localUsers[uid] = user
@@ -365,6 +368,11 @@ func SwitchDeviceForLocalUserOrBust(t *testing.T, config Config, index int) {
 		t.Fatalf("Wrong crypt public key index: %d", index)
 	}
 	user.CurrentCryptPublicKeyIndex = index
+
+	if index >= len(user.VerifyingKeys) {
+		t.Fatalf("Wrong verifying key index: %d", index)
+	}
+	user.CurrentVerifyingKeyIndex = index
 
 	// kbd is just a copy, but kbd.localUsers is the same map
 	kbd.localUsers[uid] = user
@@ -441,6 +449,36 @@ func DisableUpdatesForTesting(config Config, folderBranch FolderBranch) (
 	return c, nil
 }
 
+// DisableCRForTesting stops conflict resolution for the given folder.
+// RestartCRForTesting should be called to restart it.
+func DisableCRForTesting(config Config, folderBranch FolderBranch) error {
+	kbfsOps, ok := config.KBFSOps().(*KBFSOpsStandard)
+	if !ok {
+		return errors.New("Unexpected KBFSOps type")
+	}
+
+	ops := kbfsOps.getOps(folderBranch)
+	ops.cr.Pause()
+	return nil
+}
+
+// RestartCRForTesting re-enables conflict resolution for the given
+// folder.
+func RestartCRForTesting(config Config, folderBranch FolderBranch) error {
+	kbfsOps, ok := config.KBFSOps().(*KBFSOpsStandard)
+	if !ok {
+		return errors.New("Unexpected KBFSOps type")
+	}
+
+	ops := kbfsOps.getOps(folderBranch)
+	ops.cr.Restart()
+	// Start a resolution for anything we've missed.
+	if ops.staged {
+		ops.cr.Resolve(ops.getCurrMDRevision(), MetadataRevisionUninitialized)
+	}
+	return nil
+}
+
 // TestClock returns a set time as the current time.
 type TestClock struct {
 	T time.Time
@@ -449,4 +487,13 @@ type TestClock struct {
 // Now implements the Clock interface for TestClock.
 func (tc TestClock) Now() time.Time {
 	return tc.T
+}
+
+// TestStateForTlf runs the state checker for the given TLF.
+func TestStateForTlf(t *testing.T, ctx context.Context,
+	config Config, tlf TlfID) {
+	sc := NewStateChecker(config)
+	if err := sc.CheckMergedState(ctx, tlf); err != nil {
+		t.Errorf("State check failed: %v", err)
+	}
 }

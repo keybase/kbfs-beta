@@ -215,6 +215,13 @@
     } ]
   }, {
     "type" : "record",
+    "name" : "IdentifyReason",
+    "fields" : [ {
+      "name" : "reason",
+      "type" : "string"
+    } ]
+  }, {
+    "type" : "record",
     "name" : "IdentifyOutcome",
     "fields" : [ {
       "name" : "username",
@@ -258,6 +265,12 @@
     }, {
       "name" : "trackOptions",
       "type" : "TrackOptions"
+    }, {
+      "name" : "forPGPPull",
+      "type" : "boolean"
+    }, {
+      "name" : "reason",
+      "type" : "IdentifyReason"
     } ]
   }, {
     "type" : "record",
@@ -419,6 +432,9 @@
       "name" : "proofResult",
       "type" : "ProofResult"
     }, {
+      "name" : "torWarning",
+      "type" : "boolean"
+    }, {
       "name" : "cached",
       "type" : [ "null", "CheckResult" ]
     }, {
@@ -433,6 +449,10 @@
     } ]
   } ],
   "messages" : {
+    "delegateIdentifyUI" : {
+      "request" : [ ],
+      "response" : "int"
+    },
     "start" : {
       "request" : [ {
         "name" : "sessionID",
@@ -519,6 +539,16 @@
       }, {
         "name" : "c",
         "type" : "Cryptocurrency"
+      } ],
+      "response" : "null"
+    },
+    "reportTrackToken" : {
+      "request" : [ {
+        "name" : "sessionID",
+        "type" : "int"
+      }, {
+        "name" : "trackToken",
+        "type" : "string"
       } ],
       "response" : "null"
     },
