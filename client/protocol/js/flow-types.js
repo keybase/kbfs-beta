@@ -3,12 +3,12 @@
 export type int = number
 export type double = number
 export type bytes = any
+export type BlockRefNonce = any
 export type ED25519PublicKey = any
 export type ED25519Signature = any
+export type Time = number
+export type SigID = string
 export type block_Time = {
-}
-
-export type Time = {
 }
 
 export type block_StringKVPair = {
@@ -48,9 +48,6 @@ export type DeviceID = {
 }
 
 export type block_SigID = {
-}
-
-export type SigID = {
 }
 
 export type block_KID = {
@@ -143,9 +140,9 @@ export type Stream = {
   fd: int;
 }
 
-export type block_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type block_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
-export type LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type block_BlockIdCombo = {
   blockHash: string;
@@ -165,6 +162,18 @@ export type block_GetBlockRes = {
 export type GetBlockRes = {
   blockKey: string;
   buf: bytes;
+}
+
+export type block_BlockReference = {
+  bid: BlockIdCombo;
+  nonce: BlockRefNonce;
+  chargedTo: UID;
+}
+
+export type BlockReference = {
+  bid: BlockIdCombo;
+  nonce: BlockRefNonce;
+  chargedTo: UID;
 }
 
 export type BTC_Time = {
@@ -236,7 +245,7 @@ export type BTC_Stream = {
   fd: int;
 }
 
-export type BTC_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type BTC_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type config_Time = {
 }
@@ -307,21 +316,25 @@ export type config_Stream = {
   fd: int;
 }
 
-export type config_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type config_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type config_GetCurrentStatusRes = {
   configured: boolean;
   registered: boolean;
   loggedIn: boolean;
-  user: ?User;
+  user?: ?User;
 }
 
 export type GetCurrentStatusRes = {
   configured: boolean;
   registered: boolean;
   loggedIn: boolean;
-  user: ?User;
+  user?: ?User;
 }
+
+export type config_ForkType = 0 /* 'NONE_0' */ | 1 /* 'AUTO_1' */ | 2 /* 'WATCHDOG_2' */
+
+export type ForkType = 0 /* 'NONE_0' */ | 1 /* 'AUTO_1' */ | 2 /* 'WATCHDOG_2' */
 
 export type config_Config = {
   serverURI: string;
@@ -335,6 +348,8 @@ export type config_Config = {
   configPath: string;
   versionShort: string;
   versionFull: string;
+  isAutoForked: boolean;
+  forkType: ForkType;
 }
 
 export type Config = {
@@ -349,15 +364,17 @@ export type Config = {
   configPath: string;
   versionShort: string;
   versionFull: string;
+  isAutoForked: boolean;
+  forkType: ForkType;
 }
 
-export type config_InstallStatus = 'UNKNOWN_0' | 'ERROR_1' | 'NOT_INSTALLED_2' | 'NEEDS_UPGRADE_3' | 'INSTALLED_4'
+export type config_InstallStatus = 0 /* 'UNKNOWN_0' */ | 1 /* 'ERROR_1' */ | 2 /* 'NOT_INSTALLED_2' */ | 3 /* 'INSTALLED_4' */
 
-export type InstallStatus = 'UNKNOWN_0' | 'ERROR_1' | 'NOT_INSTALLED_2' | 'NEEDS_UPGRADE_3' | 'INSTALLED_4'
+export type InstallStatus = 0 /* 'UNKNOWN_0' */ | 1 /* 'ERROR_1' */ | 2 /* 'NOT_INSTALLED_2' */ | 3 /* 'INSTALLED_4' */
 
-export type config_InstallAction = 'UNKNOWN_0' | 'NONE_1' | 'UPGRADE_2' | 'REINSTALL_3' | 'INSTALL_4'
+export type config_InstallAction = 0 /* 'UNKNOWN_0' */ | 1 /* 'NONE_1' */ | 2 /* 'UPGRADE_2' */ | 3 /* 'REINSTALL_3' */ | 4 /* 'INSTALL_4' */
 
-export type InstallAction = 'UNKNOWN_0' | 'NONE_1' | 'UPGRADE_2' | 'REINSTALL_3' | 'INSTALL_4'
+export type InstallAction = 0 /* 'UNKNOWN_0' */ | 1 /* 'NONE_1' */ | 2 /* 'UPGRADE_2' */ | 3 /* 'REINSTALL_3' */ | 4 /* 'INSTALL_4' */
 
 export type config_ServiceStatus = {
   version: string;
@@ -381,6 +398,28 @@ export type ServiceStatus = {
   status: Status;
 }
 
+export type config_ServicesStatus = {
+  service: Array<ServiceStatus>;
+  kbfs: Array<ServiceStatus>;
+}
+
+export type ServicesStatus = {
+  service: Array<ServiceStatus>;
+  kbfs: Array<ServiceStatus>;
+}
+
+export type config_FuseMountInfo = {
+  path: string;
+  fstype: string;
+  output: string;
+}
+
+export type FuseMountInfo = {
+  path: string;
+  fstype: string;
+  output: string;
+}
+
 export type config_FuseStatus = {
   version: string;
   bundleVersion: string;
@@ -389,6 +428,7 @@ export type config_FuseStatus = {
   kextStarted: boolean;
   installStatus: InstallStatus;
   installAction: InstallAction;
+  mountInfos: Array<FuseMountInfo>;
   status: Status;
 }
 
@@ -400,6 +440,17 @@ export type FuseStatus = {
   kextStarted: boolean;
   installStatus: InstallStatus;
   installAction: InstallAction;
+  mountInfos: Array<FuseMountInfo>;
+  status: Status;
+}
+
+export type config_ComponentStatus = {
+  name: string;
+  status: Status;
+}
+
+export type ComponentStatus = {
+  name: string;
   status: Status;
 }
 
@@ -482,7 +533,11 @@ export type ctl_Stream = {
   fd: int;
 }
 
-export type ctl_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type ctl_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
+
+export type ctl_ExitCode = 0 /* 'OK_0' */ | 1 /* 'NOTOK_2' */ | 2 /* 'RESTART_4' */
+
+export type ExitCode = 0 /* 'OK_0' */ | 1 /* 'NOTOK_2' */ | 2 /* 'RESTART_4' */
 
 export type debugging_FirstStepResult = {
   valPlusTwo: int;
@@ -561,7 +616,7 @@ export type delegateUiCtl_Stream = {
   fd: int;
 }
 
-export type delegateUiCtl_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type delegateUiCtl_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type device_Time = {
 }
@@ -632,7 +687,7 @@ export type device_Stream = {
   fd: int;
 }
 
-export type device_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type device_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type favorite_Time = {
 }
@@ -703,7 +758,7 @@ export type favorite_Stream = {
   fd: int;
 }
 
-export type favorite_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type favorite_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type favorite_Folder = {
   name: string;
@@ -786,7 +841,11 @@ export type gpgUi_Stream = {
   fd: int;
 }
 
-export type gpgUi_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type gpgUi_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
+
+export type gpgUi_ClientType = 0 /* 'CLI_0' */ | 1 /* 'GUI_1' */
+
+export type ClientType = 0 /* 'CLI_0' */ | 1 /* 'GUI_1' */
 
 export type gpgUi_GPGKey = {
   algorithm: string;
@@ -883,23 +942,23 @@ export type identify_Stream = {
   fd: int;
 }
 
-export type identify_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type identify_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
-export type identify_ProofState = 'NONE_0' | 'OK_1' | 'TEMP_FAILURE_2' | 'PERM_FAILURE_3' | 'LOOKING_4' | 'SUPERSEDED_5' | 'POSTED_6' | 'REVOKED_7'
+export type identify_ProofState = 0 /* 'NONE_0' */ | 1 /* 'OK_1' */ | 2 /* 'TEMP_FAILURE_2' */ | 3 /* 'PERM_FAILURE_3' */ | 4 /* 'LOOKING_4' */ | 5 /* 'SUPERSEDED_5' */ | 6 /* 'POSTED_6' */ | 7 /* 'REVOKED_7' */
 
-export type ProofState = 'NONE_0' | 'OK_1' | 'TEMP_FAILURE_2' | 'PERM_FAILURE_3' | 'LOOKING_4' | 'SUPERSEDED_5' | 'POSTED_6' | 'REVOKED_7'
+export type ProofState = 0 /* 'NONE_0' */ | 1 /* 'OK_1' */ | 2 /* 'TEMP_FAILURE_2' */ | 3 /* 'PERM_FAILURE_3' */ | 4 /* 'LOOKING_4' */ | 5 /* 'SUPERSEDED_5' */ | 6 /* 'POSTED_6' */ | 7 /* 'REVOKED_7' */
 
-export type identify_ProofStatus = 'NONE_0' | 'OK_1' | 'LOCAL_2' | 'FOUND_3' | 'BASE_ERROR_100' | 'HOST_UNREACHABLE_101' | 'PERMISSION_DENIED_103' | 'FAILED_PARSE_106' | 'DNS_ERROR_107' | 'AUTH_FAILED_108' | 'HTTP_500_150' | 'TIMEOUT_160' | 'INTERNAL_ERROR_170' | 'BASE_HARD_ERROR_200' | 'NOT_FOUND_201' | 'CONTENT_FAILURE_202' | 'BAD_USERNAME_203' | 'BAD_REMOTE_ID_204' | 'TEXT_NOT_FOUND_205' | 'BAD_ARGS_206' | 'CONTENT_MISSING_207' | 'TITLE_NOT_FOUND_208' | 'SERVICE_ERROR_209' | 'TOR_SKIPPED_210' | 'TOR_INCOMPATIBLE_211' | 'HTTP_300_230' | 'HTTP_400_240' | 'HTTP_OTHER_260' | 'EMPTY_JSON_270' | 'DELETED_301' | 'SERVICE_DEAD_302' | 'BAD_SIGNATURE_303' | 'BAD_API_URL_304' | 'UNKNOWN_TYPE_305' | 'NO_HINT_306' | 'BAD_HINT_TEXT_307'
+export type identify_ProofStatus = 0 /* 'NONE_0' */ | 1 /* 'OK_1' */ | 2 /* 'LOCAL_2' */ | 3 /* 'FOUND_3' */ | 4 /* 'BASE_ERROR_100' */ | 5 /* 'HOST_UNREACHABLE_101' */ | 6 /* 'PERMISSION_DENIED_103' */ | 7 /* 'FAILED_PARSE_106' */ | 8 /* 'DNS_ERROR_107' */ | 9 /* 'AUTH_FAILED_108' */ | 10 /* 'HTTP_500_150' */ | 11 /* 'TIMEOUT_160' */ | 12 /* 'INTERNAL_ERROR_170' */ | 13 /* 'BASE_HARD_ERROR_200' */ | 14 /* 'NOT_FOUND_201' */ | 15 /* 'CONTENT_FAILURE_202' */ | 16 /* 'BAD_USERNAME_203' */ | 17 /* 'BAD_REMOTE_ID_204' */ | 18 /* 'TEXT_NOT_FOUND_205' */ | 19 /* 'BAD_ARGS_206' */ | 20 /* 'CONTENT_MISSING_207' */ | 21 /* 'TITLE_NOT_FOUND_208' */ | 22 /* 'SERVICE_ERROR_209' */ | 23 /* 'TOR_SKIPPED_210' */ | 24 /* 'TOR_INCOMPATIBLE_211' */ | 25 /* 'HTTP_300_230' */ | 26 /* 'HTTP_400_240' */ | 27 /* 'HTTP_OTHER_260' */ | 28 /* 'EMPTY_JSON_270' */ | 29 /* 'DELETED_301' */ | 30 /* 'SERVICE_DEAD_302' */ | 31 /* 'BAD_SIGNATURE_303' */ | 32 /* 'BAD_API_URL_304' */ | 33 /* 'UNKNOWN_TYPE_305' */ | 34 /* 'NO_HINT_306' */ | 35 /* 'BAD_HINT_TEXT_307' */
 
-export type ProofStatus = 'NONE_0' | 'OK_1' | 'LOCAL_2' | 'FOUND_3' | 'BASE_ERROR_100' | 'HOST_UNREACHABLE_101' | 'PERMISSION_DENIED_103' | 'FAILED_PARSE_106' | 'DNS_ERROR_107' | 'AUTH_FAILED_108' | 'HTTP_500_150' | 'TIMEOUT_160' | 'INTERNAL_ERROR_170' | 'BASE_HARD_ERROR_200' | 'NOT_FOUND_201' | 'CONTENT_FAILURE_202' | 'BAD_USERNAME_203' | 'BAD_REMOTE_ID_204' | 'TEXT_NOT_FOUND_205' | 'BAD_ARGS_206' | 'CONTENT_MISSING_207' | 'TITLE_NOT_FOUND_208' | 'SERVICE_ERROR_209' | 'TOR_SKIPPED_210' | 'TOR_INCOMPATIBLE_211' | 'HTTP_300_230' | 'HTTP_400_240' | 'HTTP_OTHER_260' | 'EMPTY_JSON_270' | 'DELETED_301' | 'SERVICE_DEAD_302' | 'BAD_SIGNATURE_303' | 'BAD_API_URL_304' | 'UNKNOWN_TYPE_305' | 'NO_HINT_306' | 'BAD_HINT_TEXT_307'
+export type ProofStatus = 0 /* 'NONE_0' */ | 1 /* 'OK_1' */ | 2 /* 'LOCAL_2' */ | 3 /* 'FOUND_3' */ | 4 /* 'BASE_ERROR_100' */ | 5 /* 'HOST_UNREACHABLE_101' */ | 6 /* 'PERMISSION_DENIED_103' */ | 7 /* 'FAILED_PARSE_106' */ | 8 /* 'DNS_ERROR_107' */ | 9 /* 'AUTH_FAILED_108' */ | 10 /* 'HTTP_500_150' */ | 11 /* 'TIMEOUT_160' */ | 12 /* 'INTERNAL_ERROR_170' */ | 13 /* 'BASE_HARD_ERROR_200' */ | 14 /* 'NOT_FOUND_201' */ | 15 /* 'CONTENT_FAILURE_202' */ | 16 /* 'BAD_USERNAME_203' */ | 17 /* 'BAD_REMOTE_ID_204' */ | 18 /* 'TEXT_NOT_FOUND_205' */ | 19 /* 'BAD_ARGS_206' */ | 20 /* 'CONTENT_MISSING_207' */ | 21 /* 'TITLE_NOT_FOUND_208' */ | 22 /* 'SERVICE_ERROR_209' */ | 23 /* 'TOR_SKIPPED_210' */ | 24 /* 'TOR_INCOMPATIBLE_211' */ | 25 /* 'HTTP_300_230' */ | 26 /* 'HTTP_400_240' */ | 27 /* 'HTTP_OTHER_260' */ | 28 /* 'EMPTY_JSON_270' */ | 29 /* 'DELETED_301' */ | 30 /* 'SERVICE_DEAD_302' */ | 31 /* 'BAD_SIGNATURE_303' */ | 32 /* 'BAD_API_URL_304' */ | 33 /* 'UNKNOWN_TYPE_305' */ | 34 /* 'NO_HINT_306' */ | 35 /* 'BAD_HINT_TEXT_307' */
 
-export type identify_ProofType = 'NONE_0' | 'KEYBASE_1' | 'TWITTER_2' | 'GITHUB_3' | 'REDDIT_4' | 'COINBASE_5' | 'HACKERNEWS_6' | 'GENERIC_WEB_SITE_1000' | 'DNS_1001' | 'ROOTER_100001'
+export type identify_ProofType = 0 /* 'NONE_0' */ | 1 /* 'KEYBASE_1' */ | 2 /* 'TWITTER_2' */ | 3 /* 'GITHUB_3' */ | 4 /* 'REDDIT_4' */ | 5 /* 'COINBASE_5' */ | 6 /* 'HACKERNEWS_6' */ | 7 /* 'GENERIC_WEB_SITE_1000' */ | 8 /* 'DNS_1001' */ | 9 /* 'ROOTER_100001' */
 
-export type ProofType = 'NONE_0' | 'KEYBASE_1' | 'TWITTER_2' | 'GITHUB_3' | 'REDDIT_4' | 'COINBASE_5' | 'HACKERNEWS_6' | 'GENERIC_WEB_SITE_1000' | 'DNS_1001' | 'ROOTER_100001'
+export type ProofType = 0 /* 'NONE_0' */ | 1 /* 'KEYBASE_1' */ | 2 /* 'TWITTER_2' */ | 3 /* 'GITHUB_3' */ | 4 /* 'REDDIT_4' */ | 5 /* 'COINBASE_5' */ | 6 /* 'HACKERNEWS_6' */ | 7 /* 'GENERIC_WEB_SITE_1000' */ | 8 /* 'DNS_1001' */ | 9 /* 'ROOTER_100001' */
 
-export type identify_TrackDiffType = 'NONE_0' | 'ERROR_1' | 'CLASH_2' | 'REVOKED_3' | 'UPGRADED_4' | 'NEW_5' | 'REMOTE_FAIL_6' | 'REMOTE_WORKING_7' | 'REMOTE_CHANGED_8'
+export type identify_TrackDiffType = 0 /* 'NONE_0' */ | 1 /* 'ERROR_1' */ | 2 /* 'CLASH_2' */ | 3 /* 'REVOKED_3' */ | 4 /* 'UPGRADED_4' */ | 5 /* 'NEW_5' */ | 6 /* 'REMOTE_FAIL_6' */ | 7 /* 'REMOTE_WORKING_7' */ | 8 /* 'REMOTE_CHANGED_8' */
 
-export type TrackDiffType = 'NONE_0' | 'ERROR_1' | 'CLASH_2' | 'REVOKED_3' | 'UPGRADED_4' | 'NEW_5' | 'REMOTE_FAIL_6' | 'REMOTE_WORKING_7' | 'REMOTE_CHANGED_8'
+export type TrackDiffType = 0 /* 'NONE_0' */ | 1 /* 'ERROR_1' */ | 2 /* 'CLASH_2' */ | 3 /* 'REVOKED_3' */ | 4 /* 'UPGRADED_4' */ | 5 /* 'NEW_5' */ | 6 /* 'REMOTE_FAIL_6' */ | 7 /* 'REMOTE_WORKING_7' */ | 8 /* 'REMOTE_CHANGED_8' */
 
 export type identify_TrackDiff = {
   type: TrackDiffType;
@@ -923,9 +982,9 @@ export type TrackSummary = {
   isRemote: boolean;
 }
 
-export type identify_TrackStatus = 'NEW_OK_1' | 'NEW_ZERO_PROOFS_2' | 'NEW_FAIL_PROOFS_3' | 'UPDATE_BROKEN_4' | 'UPDATE_NEW_PROOFS_5' | 'UPDATE_OK_6'
+export type identify_TrackStatus = 0 /* 'NEW_OK_1' */ | 1 /* 'NEW_ZERO_PROOFS_2' */ | 2 /* 'NEW_FAIL_PROOFS_3' */ | 3 /* 'UPDATE_BROKEN_4' */ | 4 /* 'UPDATE_NEW_PROOFS_5' */ | 5 /* 'UPDATE_OK_6' */
 
-export type TrackStatus = 'NEW_OK_1' | 'NEW_ZERO_PROOFS_2' | 'NEW_FAIL_PROOFS_3' | 'UPDATE_BROKEN_4' | 'UPDATE_NEW_PROOFS_5' | 'UPDATE_OK_6'
+export type TrackStatus = 0 /* 'NEW_OK_1' */ | 1 /* 'NEW_ZERO_PROOFS_2' */ | 2 /* 'NEW_FAIL_PROOFS_3' */ | 3 /* 'UPDATE_BROKEN_4' */ | 4 /* 'UPDATE_NEW_PROOFS_5' */ | 5 /* 'UPDATE_OK_6' */
 
 export type identify_TrackOptions = {
   localOnly: boolean;
@@ -947,9 +1006,9 @@ export type IdentifyReason = {
 
 export type identify_IdentifyOutcome = {
   username: string;
-  status: ?Status;
+  status?: ?Status;
   warnings: Array<string>;
-  trackUsed: ?TrackSummary;
+  trackUsed?: ?TrackSummary;
   trackStatus: TrackStatus;
   numTrackFailures: int;
   numTrackChanges: int;
@@ -964,9 +1023,9 @@ export type identify_IdentifyOutcome = {
 
 export type IdentifyOutcome = {
   username: string;
-  status: ?Status;
+  status?: ?Status;
   warnings: Array<string>;
-  trackUsed: ?TrackSummary;
+  trackUsed?: ?TrackSummary;
   trackStatus: TrackStatus;
   numTrackFailures: int;
   numTrackChanges: int;
@@ -980,14 +1039,14 @@ export type IdentifyOutcome = {
 }
 
 export type identify_IdentifyRes = {
-  user: ?User;
+  user?: ?User;
   publicKeys: Array<PublicKey>;
   outcome: IdentifyOutcome;
   trackToken: string;
 }
 
 export type IdentifyRes = {
-  user: ?User;
+  user?: ?User;
   publicKeys: Array<PublicKey>;
   outcome: IdentifyOutcome;
   trackToken: string;
@@ -1080,15 +1139,15 @@ export type identifyUi_Stream = {
   fd: int;
 }
 
-export type identifyUi_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type identifyUi_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
-export type identifyUi_ProofState = 'NONE_0' | 'OK_1' | 'TEMP_FAILURE_2' | 'PERM_FAILURE_3' | 'LOOKING_4' | 'SUPERSEDED_5' | 'POSTED_6' | 'REVOKED_7'
+export type identifyUi_ProofState = 0 /* 'NONE_0' */ | 1 /* 'OK_1' */ | 2 /* 'TEMP_FAILURE_2' */ | 3 /* 'PERM_FAILURE_3' */ | 4 /* 'LOOKING_4' */ | 5 /* 'SUPERSEDED_5' */ | 6 /* 'POSTED_6' */ | 7 /* 'REVOKED_7' */
 
-export type identifyUi_ProofStatus = 'NONE_0' | 'OK_1' | 'LOCAL_2' | 'FOUND_3' | 'BASE_ERROR_100' | 'HOST_UNREACHABLE_101' | 'PERMISSION_DENIED_103' | 'FAILED_PARSE_106' | 'DNS_ERROR_107' | 'AUTH_FAILED_108' | 'HTTP_500_150' | 'TIMEOUT_160' | 'INTERNAL_ERROR_170' | 'BASE_HARD_ERROR_200' | 'NOT_FOUND_201' | 'CONTENT_FAILURE_202' | 'BAD_USERNAME_203' | 'BAD_REMOTE_ID_204' | 'TEXT_NOT_FOUND_205' | 'BAD_ARGS_206' | 'CONTENT_MISSING_207' | 'TITLE_NOT_FOUND_208' | 'SERVICE_ERROR_209' | 'TOR_SKIPPED_210' | 'TOR_INCOMPATIBLE_211' | 'HTTP_300_230' | 'HTTP_400_240' | 'HTTP_OTHER_260' | 'EMPTY_JSON_270' | 'DELETED_301' | 'SERVICE_DEAD_302' | 'BAD_SIGNATURE_303' | 'BAD_API_URL_304' | 'UNKNOWN_TYPE_305' | 'NO_HINT_306' | 'BAD_HINT_TEXT_307'
+export type identifyUi_ProofStatus = 0 /* 'NONE_0' */ | 1 /* 'OK_1' */ | 2 /* 'LOCAL_2' */ | 3 /* 'FOUND_3' */ | 4 /* 'BASE_ERROR_100' */ | 5 /* 'HOST_UNREACHABLE_101' */ | 6 /* 'PERMISSION_DENIED_103' */ | 7 /* 'FAILED_PARSE_106' */ | 8 /* 'DNS_ERROR_107' */ | 9 /* 'AUTH_FAILED_108' */ | 10 /* 'HTTP_500_150' */ | 11 /* 'TIMEOUT_160' */ | 12 /* 'INTERNAL_ERROR_170' */ | 13 /* 'BASE_HARD_ERROR_200' */ | 14 /* 'NOT_FOUND_201' */ | 15 /* 'CONTENT_FAILURE_202' */ | 16 /* 'BAD_USERNAME_203' */ | 17 /* 'BAD_REMOTE_ID_204' */ | 18 /* 'TEXT_NOT_FOUND_205' */ | 19 /* 'BAD_ARGS_206' */ | 20 /* 'CONTENT_MISSING_207' */ | 21 /* 'TITLE_NOT_FOUND_208' */ | 22 /* 'SERVICE_ERROR_209' */ | 23 /* 'TOR_SKIPPED_210' */ | 24 /* 'TOR_INCOMPATIBLE_211' */ | 25 /* 'HTTP_300_230' */ | 26 /* 'HTTP_400_240' */ | 27 /* 'HTTP_OTHER_260' */ | 28 /* 'EMPTY_JSON_270' */ | 29 /* 'DELETED_301' */ | 30 /* 'SERVICE_DEAD_302' */ | 31 /* 'BAD_SIGNATURE_303' */ | 32 /* 'BAD_API_URL_304' */ | 33 /* 'UNKNOWN_TYPE_305' */ | 34 /* 'NO_HINT_306' */ | 35 /* 'BAD_HINT_TEXT_307' */
 
-export type identifyUi_ProofType = 'NONE_0' | 'KEYBASE_1' | 'TWITTER_2' | 'GITHUB_3' | 'REDDIT_4' | 'COINBASE_5' | 'HACKERNEWS_6' | 'GENERIC_WEB_SITE_1000' | 'DNS_1001' | 'ROOTER_100001'
+export type identifyUi_ProofType = 0 /* 'NONE_0' */ | 1 /* 'KEYBASE_1' */ | 2 /* 'TWITTER_2' */ | 3 /* 'GITHUB_3' */ | 4 /* 'REDDIT_4' */ | 5 /* 'COINBASE_5' */ | 6 /* 'HACKERNEWS_6' */ | 7 /* 'GENERIC_WEB_SITE_1000' */ | 8 /* 'DNS_1001' */ | 9 /* 'ROOTER_100001' */
 
-export type identifyUi_TrackDiffType = 'NONE_0' | 'ERROR_1' | 'CLASH_2' | 'REVOKED_3' | 'UPGRADED_4' | 'NEW_5' | 'REMOTE_FAIL_6' | 'REMOTE_WORKING_7' | 'REMOTE_CHANGED_8'
+export type identifyUi_TrackDiffType = 0 /* 'NONE_0' */ | 1 /* 'ERROR_1' */ | 2 /* 'CLASH_2' */ | 3 /* 'REVOKED_3' */ | 4 /* 'UPGRADED_4' */ | 5 /* 'NEW_5' */ | 6 /* 'REMOTE_FAIL_6' */ | 7 /* 'REMOTE_WORKING_7' */ | 8 /* 'REMOTE_CHANGED_8' */
 
 export type identifyUi_TrackDiff = {
   type: TrackDiffType;
@@ -1101,18 +1160,22 @@ export type identifyUi_TrackSummary = {
   isRemote: boolean;
 }
 
-export type identifyUi_TrackStatus = 'NEW_OK_1' | 'NEW_ZERO_PROOFS_2' | 'NEW_FAIL_PROOFS_3' | 'UPDATE_BROKEN_4' | 'UPDATE_NEW_PROOFS_5' | 'UPDATE_OK_6'
+export type identifyUi_TrackStatus = 0 /* 'NEW_OK_1' */ | 1 /* 'NEW_ZERO_PROOFS_2' */ | 2 /* 'NEW_FAIL_PROOFS_3' */ | 3 /* 'UPDATE_BROKEN_4' */ | 4 /* 'UPDATE_NEW_PROOFS_5' */ | 5 /* 'UPDATE_OK_6' */
 
 export type identifyUi_TrackOptions = {
   localOnly: boolean;
   bypassConfirm: boolean;
 }
 
+export type identifyUi_IdentifyReason = {
+  reason: string;
+}
+
 export type identifyUi_IdentifyOutcome = {
   username: string;
-  status: ?Status;
+  status?: ?Status;
   warnings: Array<string>;
-  trackUsed: ?TrackSummary;
+  trackUsed?: ?TrackSummary;
   trackStatus: TrackStatus;
   numTrackFailures: int;
   numTrackChanges: int;
@@ -1122,10 +1185,11 @@ export type identifyUi_IdentifyOutcome = {
   revoked: Array<TrackDiff>;
   trackOptions: TrackOptions;
   forPGPPull: boolean;
+  reason: IdentifyReason;
 }
 
 export type identifyUi_IdentifyRes = {
-  user: ?User;
+  user?: ?User;
   publicKeys: Array<PublicKey>;
   outcome: IdentifyOutcome;
   trackToken: string;
@@ -1155,25 +1219,25 @@ export type ProofResult = {
 export type identifyUi_IdentifyRow = {
   rowId: int;
   proof: RemoteProof;
-  trackDiff: ?TrackDiff;
+  trackDiff?: ?TrackDiff;
 }
 
 export type IdentifyRow = {
   rowId: int;
   proof: RemoteProof;
-  trackDiff: ?TrackDiff;
+  trackDiff?: ?TrackDiff;
 }
 
 export type identifyUi_IdentifyKey = {
   pgpFingerprint: bytes;
   KID: KID;
-  trackDiff: ?TrackDiff;
+  trackDiff?: ?TrackDiff;
 }
 
 export type IdentifyKey = {
   pgpFingerprint: bytes;
   KID: KID;
-  trackDiff: ?TrackDiff;
+  trackDiff?: ?TrackDiff;
 }
 
 export type identifyUi_Cryptocurrency = {
@@ -1189,7 +1253,7 @@ export type Cryptocurrency = {
 }
 
 export type identifyUi_Identity = {
-  status: ?Status;
+  status?: ?Status;
   whenLastTracked: int;
   proofs: Array<IdentifyRow>;
   cryptocurrency: Array<Cryptocurrency>;
@@ -1197,7 +1261,7 @@ export type identifyUi_Identity = {
 }
 
 export type Identity = {
-  status: ?Status;
+  status?: ?Status;
   whenLastTracked: int;
   proofs: Array<IdentifyRow>;
   cryptocurrency: Array<Cryptocurrency>;
@@ -1234,20 +1298,198 @@ export type identifyUi_LinkCheckResult = {
   proofId: int;
   proofResult: ProofResult;
   torWarning: boolean;
-  cached: ?CheckResult;
-  diff: ?TrackDiff;
-  remoteDiff: ?TrackDiff;
-  hint: ?SigHint;
+  cached?: ?CheckResult;
+  diff?: ?TrackDiff;
+  remoteDiff?: ?TrackDiff;
+  hint?: ?SigHint;
 }
 
 export type LinkCheckResult = {
   proofId: int;
   proofResult: ProofResult;
   torWarning: boolean;
-  cached: ?CheckResult;
-  diff: ?TrackDiff;
-  remoteDiff: ?TrackDiff;
-  hint: ?SigHint;
+  cached?: ?CheckResult;
+  diff?: ?TrackDiff;
+  remoteDiff?: ?TrackDiff;
+  hint?: ?SigHint;
+}
+
+export type identifyUi_ConfirmResult = {
+  identityConfirmed: boolean;
+  remoteConfirmed: boolean;
+}
+
+export type ConfirmResult = {
+  identityConfirmed: boolean;
+  remoteConfirmed: boolean;
+}
+
+export type kbcmf_Time = {
+}
+
+export type kbcmf_StringKVPair = {
+  key: string;
+  value: string;
+}
+
+export type kbcmf_Status = {
+  code: int;
+  name: string;
+  desc: string;
+  fields: Array<StringKVPair>;
+}
+
+export type kbcmf_UID = {
+}
+
+export type kbcmf_DeviceID = {
+}
+
+export type kbcmf_SigID = {
+}
+
+export type kbcmf_KID = {
+}
+
+export type kbcmf_Text = {
+  data: string;
+  markup: boolean;
+}
+
+export type kbcmf_PGPIdentity = {
+  username: string;
+  comment: string;
+  email: string;
+}
+
+export type kbcmf_PublicKey = {
+  KID: KID;
+  PGPFingerprint: string;
+  PGPIdentities: Array<PGPIdentity>;
+  isSibkey: boolean;
+  isEldest: boolean;
+  parentID: string;
+  deviceID: DeviceID;
+  deviceDescription: string;
+  deviceType: string;
+  cTime: Time;
+  eTime: Time;
+}
+
+export type kbcmf_User = {
+  uid: UID;
+  username: string;
+}
+
+export type kbcmf_Device = {
+  type: string;
+  name: string;
+  deviceID: DeviceID;
+  cTime: Time;
+  mTime: Time;
+}
+
+export type kbcmf_Stream = {
+  fd: int;
+}
+
+export type kbcmf_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
+
+export type kbcmf_ProofState = 0 /* 'NONE_0' */ | 1 /* 'OK_1' */ | 2 /* 'TEMP_FAILURE_2' */ | 3 /* 'PERM_FAILURE_3' */ | 4 /* 'LOOKING_4' */ | 5 /* 'SUPERSEDED_5' */ | 6 /* 'POSTED_6' */ | 7 /* 'REVOKED_7' */
+
+export type kbcmf_ProofStatus = 0 /* 'NONE_0' */ | 1 /* 'OK_1' */ | 2 /* 'LOCAL_2' */ | 3 /* 'FOUND_3' */ | 4 /* 'BASE_ERROR_100' */ | 5 /* 'HOST_UNREACHABLE_101' */ | 6 /* 'PERMISSION_DENIED_103' */ | 7 /* 'FAILED_PARSE_106' */ | 8 /* 'DNS_ERROR_107' */ | 9 /* 'AUTH_FAILED_108' */ | 10 /* 'HTTP_500_150' */ | 11 /* 'TIMEOUT_160' */ | 12 /* 'INTERNAL_ERROR_170' */ | 13 /* 'BASE_HARD_ERROR_200' */ | 14 /* 'NOT_FOUND_201' */ | 15 /* 'CONTENT_FAILURE_202' */ | 16 /* 'BAD_USERNAME_203' */ | 17 /* 'BAD_REMOTE_ID_204' */ | 18 /* 'TEXT_NOT_FOUND_205' */ | 19 /* 'BAD_ARGS_206' */ | 20 /* 'CONTENT_MISSING_207' */ | 21 /* 'TITLE_NOT_FOUND_208' */ | 22 /* 'SERVICE_ERROR_209' */ | 23 /* 'TOR_SKIPPED_210' */ | 24 /* 'TOR_INCOMPATIBLE_211' */ | 25 /* 'HTTP_300_230' */ | 26 /* 'HTTP_400_240' */ | 27 /* 'HTTP_OTHER_260' */ | 28 /* 'EMPTY_JSON_270' */ | 29 /* 'DELETED_301' */ | 30 /* 'SERVICE_DEAD_302' */ | 31 /* 'BAD_SIGNATURE_303' */ | 32 /* 'BAD_API_URL_304' */ | 33 /* 'UNKNOWN_TYPE_305' */ | 34 /* 'NO_HINT_306' */ | 35 /* 'BAD_HINT_TEXT_307' */
+
+export type kbcmf_ProofType = 0 /* 'NONE_0' */ | 1 /* 'KEYBASE_1' */ | 2 /* 'TWITTER_2' */ | 3 /* 'GITHUB_3' */ | 4 /* 'REDDIT_4' */ | 5 /* 'COINBASE_5' */ | 6 /* 'HACKERNEWS_6' */ | 7 /* 'GENERIC_WEB_SITE_1000' */ | 8 /* 'DNS_1001' */ | 9 /* 'ROOTER_100001' */
+
+export type kbcmf_TrackDiffType = 0 /* 'NONE_0' */ | 1 /* 'ERROR_1' */ | 2 /* 'CLASH_2' */ | 3 /* 'REVOKED_3' */ | 4 /* 'UPGRADED_4' */ | 5 /* 'NEW_5' */ | 6 /* 'REMOTE_FAIL_6' */ | 7 /* 'REMOTE_WORKING_7' */ | 8 /* 'REMOTE_CHANGED_8' */
+
+export type kbcmf_TrackDiff = {
+  type: TrackDiffType;
+  displayMarkup: string;
+}
+
+export type kbcmf_TrackSummary = {
+  username: string;
+  time: Time;
+  isRemote: boolean;
+}
+
+export type kbcmf_TrackStatus = 0 /* 'NEW_OK_1' */ | 1 /* 'NEW_ZERO_PROOFS_2' */ | 2 /* 'NEW_FAIL_PROOFS_3' */ | 3 /* 'UPDATE_BROKEN_4' */ | 4 /* 'UPDATE_NEW_PROOFS_5' */ | 5 /* 'UPDATE_OK_6' */
+
+export type kbcmf_TrackOptions = {
+  localOnly: boolean;
+  bypassConfirm: boolean;
+}
+
+export type kbcmf_IdentifyReason = {
+  reason: string;
+}
+
+export type kbcmf_IdentifyOutcome = {
+  username: string;
+  status?: ?Status;
+  warnings: Array<string>;
+  trackUsed?: ?TrackSummary;
+  trackStatus: TrackStatus;
+  numTrackFailures: int;
+  numTrackChanges: int;
+  numProofFailures: int;
+  numRevoked: int;
+  numProofSuccesses: int;
+  revoked: Array<TrackDiff>;
+  trackOptions: TrackOptions;
+  forPGPPull: boolean;
+  reason: IdentifyReason;
+}
+
+export type kbcmf_IdentifyRes = {
+  user?: ?User;
+  publicKeys: Array<PublicKey>;
+  outcome: IdentifyOutcome;
+  trackToken: string;
+}
+
+export type kbcmf_RemoteProof = {
+  proofType: ProofType;
+  key: string;
+  value: string;
+  displayMarkup: string;
+  sigID: SigID;
+  mTime: Time;
+}
+
+export type kbcmf_KBCMFEncryptOptions = {
+  recipients: Array<string>;
+  trackOptions: TrackOptions;
+}
+
+export type KBCMFEncryptOptions = {
+  recipients: Array<string>;
+  trackOptions: TrackOptions;
+}
+
+export type kbfs_FSStatusCode = 0 /* 'START_0' */ | 1 /* 'FINISH_1' */ | 2 /* 'ERROR_2' */
+
+export type FSStatusCode = 0 /* 'START_0' */ | 1 /* 'FINISH_1' */ | 2 /* 'ERROR_2' */
+
+export type kbfs_FSNotificationType = 0 /* 'ENCRYPTING_0' */ | 1 /* 'DECRYPTING_1' */ | 2 /* 'SIGNING_2' */ | 3 /* 'VERIFYING_3' */ | 4 /* 'REKEYING_4' */
+
+export type FSNotificationType = 0 /* 'ENCRYPTING_0' */ | 1 /* 'DECRYPTING_1' */ | 2 /* 'SIGNING_2' */ | 3 /* 'VERIFYING_3' */ | 4 /* 'REKEYING_4' */
+
+export type kbfs_FSNotification = {
+  publicTopLevelFolder: boolean;
+  filename: string;
+  status: string;
+  statusCode: FSStatusCode;
+  notificationType: FSNotificationType;
+}
+
+export type FSNotification = {
+  publicTopLevelFolder: boolean;
+  filename: string;
+  status: string;
+  statusCode: FSStatusCode;
+  notificationType: FSNotificationType;
 }
 
 export type Kex2Provisionee_Time = {
@@ -1319,7 +1561,7 @@ export type Kex2Provisionee_Stream = {
   fd: int;
 }
 
-export type Kex2Provisionee_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type Kex2Provisionee_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type Kex2Provisionee_PassphraseStream = {
   passphraseStream: bytes;
@@ -1418,7 +1660,7 @@ export type logUi_Stream = {
   fd: int;
 }
 
-export type logUi_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type logUi_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type login_Time = {
 }
@@ -1489,7 +1731,9 @@ export type login_Stream = {
   fd: int;
 }
 
-export type login_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type login_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
+
+export type login_ClientType = 0 /* 'CLI_0' */ | 1 /* 'GUI_1' */
 
 export type login_ConfiguredAccount = {
   username: string;
@@ -1570,7 +1814,7 @@ export type loginUi_Stream = {
   fd: int;
 }
 
-export type loginUi_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type loginUi_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type metadata_Time = {
 }
@@ -1641,7 +1885,9 @@ export type metadata_Stream = {
   fd: int;
 }
 
-export type metadata_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type metadata_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
+
+export type metadata_ClientType = 0 /* 'CLI_0' */ | 1 /* 'GUI_1' */
 
 export type metadata_BlockIdCombo = {
   blockHash: string;
@@ -1668,16 +1914,6 @@ export type metadata_MetadataResponse = {
 export type MetadataResponse = {
   folderID: string;
   mdBlocks: Array<bytes>;
-}
-
-export type metadata_FolderUsersResponse = {
-  readers: Array<UID>;
-  writers: Array<UID>;
-}
-
-export type FolderUsersResponse = {
-  readers: Array<UID>;
-  writers: Array<UID>;
 }
 
 export type metadataUpdate_Time = {
@@ -1749,7 +1985,7 @@ export type metadataUpdate_Stream = {
   fd: int;
 }
 
-export type metadataUpdate_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type metadataUpdate_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type metadataUpdate_BlockIdCombo = {
   blockHash: string;
@@ -1825,16 +2061,30 @@ export type notifyCtl_Stream = {
   fd: int;
 }
 
-export type notifyCtl_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type notifyCtl_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type notifyCtl_NotificationChannels = {
   session: boolean;
   users: boolean;
+  kbfs: boolean;
 }
 
 export type NotificationChannels = {
   session: boolean;
   users: boolean;
+  kbfs: boolean;
+}
+
+export type NotifyFS_FSStatusCode = 0 /* 'START_0' */ | 1 /* 'FINISH_1' */ | 2 /* 'ERROR_2' */
+
+export type NotifyFS_FSNotificationType = 0 /* 'ENCRYPTING_0' */ | 1 /* 'DECRYPTING_1' */ | 2 /* 'SIGNING_2' */ | 3 /* 'VERIFYING_3' */ | 4 /* 'REKEYING_4' */
+
+export type NotifyFS_FSNotification = {
+  publicTopLevelFolder: boolean;
+  filename: string;
+  status: string;
+  statusCode: FSStatusCode;
+  notificationType: FSNotificationType;
 }
 
 export type NotifyUsers_Time = {
@@ -1906,7 +2156,7 @@ export type NotifyUsers_Stream = {
   fd: int;
 }
 
-export type NotifyUsers_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type NotifyUsers_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type pgp_Time = {
 }
@@ -1977,15 +2227,15 @@ export type pgp_Stream = {
   fd: int;
 }
 
-export type pgp_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type pgp_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
-export type pgp_ProofState = 'NONE_0' | 'OK_1' | 'TEMP_FAILURE_2' | 'PERM_FAILURE_3' | 'LOOKING_4' | 'SUPERSEDED_5' | 'POSTED_6' | 'REVOKED_7'
+export type pgp_ProofState = 0 /* 'NONE_0' */ | 1 /* 'OK_1' */ | 2 /* 'TEMP_FAILURE_2' */ | 3 /* 'PERM_FAILURE_3' */ | 4 /* 'LOOKING_4' */ | 5 /* 'SUPERSEDED_5' */ | 6 /* 'POSTED_6' */ | 7 /* 'REVOKED_7' */
 
-export type pgp_ProofStatus = 'NONE_0' | 'OK_1' | 'LOCAL_2' | 'FOUND_3' | 'BASE_ERROR_100' | 'HOST_UNREACHABLE_101' | 'PERMISSION_DENIED_103' | 'FAILED_PARSE_106' | 'DNS_ERROR_107' | 'AUTH_FAILED_108' | 'HTTP_500_150' | 'TIMEOUT_160' | 'INTERNAL_ERROR_170' | 'BASE_HARD_ERROR_200' | 'NOT_FOUND_201' | 'CONTENT_FAILURE_202' | 'BAD_USERNAME_203' | 'BAD_REMOTE_ID_204' | 'TEXT_NOT_FOUND_205' | 'BAD_ARGS_206' | 'CONTENT_MISSING_207' | 'TITLE_NOT_FOUND_208' | 'SERVICE_ERROR_209' | 'TOR_SKIPPED_210' | 'TOR_INCOMPATIBLE_211' | 'HTTP_300_230' | 'HTTP_400_240' | 'HTTP_OTHER_260' | 'EMPTY_JSON_270' | 'DELETED_301' | 'SERVICE_DEAD_302' | 'BAD_SIGNATURE_303' | 'BAD_API_URL_304' | 'UNKNOWN_TYPE_305' | 'NO_HINT_306' | 'BAD_HINT_TEXT_307'
+export type pgp_ProofStatus = 0 /* 'NONE_0' */ | 1 /* 'OK_1' */ | 2 /* 'LOCAL_2' */ | 3 /* 'FOUND_3' */ | 4 /* 'BASE_ERROR_100' */ | 5 /* 'HOST_UNREACHABLE_101' */ | 6 /* 'PERMISSION_DENIED_103' */ | 7 /* 'FAILED_PARSE_106' */ | 8 /* 'DNS_ERROR_107' */ | 9 /* 'AUTH_FAILED_108' */ | 10 /* 'HTTP_500_150' */ | 11 /* 'TIMEOUT_160' */ | 12 /* 'INTERNAL_ERROR_170' */ | 13 /* 'BASE_HARD_ERROR_200' */ | 14 /* 'NOT_FOUND_201' */ | 15 /* 'CONTENT_FAILURE_202' */ | 16 /* 'BAD_USERNAME_203' */ | 17 /* 'BAD_REMOTE_ID_204' */ | 18 /* 'TEXT_NOT_FOUND_205' */ | 19 /* 'BAD_ARGS_206' */ | 20 /* 'CONTENT_MISSING_207' */ | 21 /* 'TITLE_NOT_FOUND_208' */ | 22 /* 'SERVICE_ERROR_209' */ | 23 /* 'TOR_SKIPPED_210' */ | 24 /* 'TOR_INCOMPATIBLE_211' */ | 25 /* 'HTTP_300_230' */ | 26 /* 'HTTP_400_240' */ | 27 /* 'HTTP_OTHER_260' */ | 28 /* 'EMPTY_JSON_270' */ | 29 /* 'DELETED_301' */ | 30 /* 'SERVICE_DEAD_302' */ | 31 /* 'BAD_SIGNATURE_303' */ | 32 /* 'BAD_API_URL_304' */ | 33 /* 'UNKNOWN_TYPE_305' */ | 34 /* 'NO_HINT_306' */ | 35 /* 'BAD_HINT_TEXT_307' */
 
-export type pgp_ProofType = 'NONE_0' | 'KEYBASE_1' | 'TWITTER_2' | 'GITHUB_3' | 'REDDIT_4' | 'COINBASE_5' | 'HACKERNEWS_6' | 'GENERIC_WEB_SITE_1000' | 'DNS_1001' | 'ROOTER_100001'
+export type pgp_ProofType = 0 /* 'NONE_0' */ | 1 /* 'KEYBASE_1' */ | 2 /* 'TWITTER_2' */ | 3 /* 'GITHUB_3' */ | 4 /* 'REDDIT_4' */ | 5 /* 'COINBASE_5' */ | 6 /* 'HACKERNEWS_6' */ | 7 /* 'GENERIC_WEB_SITE_1000' */ | 8 /* 'DNS_1001' */ | 9 /* 'ROOTER_100001' */
 
-export type pgp_TrackDiffType = 'NONE_0' | 'ERROR_1' | 'CLASH_2' | 'REVOKED_3' | 'UPGRADED_4' | 'NEW_5' | 'REMOTE_FAIL_6' | 'REMOTE_WORKING_7' | 'REMOTE_CHANGED_8'
+export type pgp_TrackDiffType = 0 /* 'NONE_0' */ | 1 /* 'ERROR_1' */ | 2 /* 'CLASH_2' */ | 3 /* 'REVOKED_3' */ | 4 /* 'UPGRADED_4' */ | 5 /* 'NEW_5' */ | 6 /* 'REMOTE_FAIL_6' */ | 7 /* 'REMOTE_WORKING_7' */ | 8 /* 'REMOTE_CHANGED_8' */
 
 export type pgp_TrackDiff = {
   type: TrackDiffType;
@@ -1998,18 +2248,22 @@ export type pgp_TrackSummary = {
   isRemote: boolean;
 }
 
-export type pgp_TrackStatus = 'NEW_OK_1' | 'NEW_ZERO_PROOFS_2' | 'NEW_FAIL_PROOFS_3' | 'UPDATE_BROKEN_4' | 'UPDATE_NEW_PROOFS_5' | 'UPDATE_OK_6'
+export type pgp_TrackStatus = 0 /* 'NEW_OK_1' */ | 1 /* 'NEW_ZERO_PROOFS_2' */ | 2 /* 'NEW_FAIL_PROOFS_3' */ | 3 /* 'UPDATE_BROKEN_4' */ | 4 /* 'UPDATE_NEW_PROOFS_5' */ | 5 /* 'UPDATE_OK_6' */
 
 export type pgp_TrackOptions = {
   localOnly: boolean;
   bypassConfirm: boolean;
 }
 
+export type pgp_IdentifyReason = {
+  reason: string;
+}
+
 export type pgp_IdentifyOutcome = {
   username: string;
-  status: ?Status;
+  status?: ?Status;
   warnings: Array<string>;
-  trackUsed: ?TrackSummary;
+  trackUsed?: ?TrackSummary;
   trackStatus: TrackStatus;
   numTrackFailures: int;
   numTrackChanges: int;
@@ -2019,10 +2273,11 @@ export type pgp_IdentifyOutcome = {
   revoked: Array<TrackDiff>;
   trackOptions: TrackOptions;
   forPGPPull: boolean;
+  reason: IdentifyReason;
 }
 
 export type pgp_IdentifyRes = {
-  user: ?User;
+  user?: ?User;
   publicKeys: Array<PublicKey>;
   outcome: IdentifyOutcome;
   trackToken: string;
@@ -2037,9 +2292,9 @@ export type pgp_RemoteProof = {
   mTime: Time;
 }
 
-export type pgp_SignMode = 'ATTACHED_0' | 'DETACHED_1' | 'CLEAR_2'
+export type pgp_SignMode = 0 /* 'ATTACHED_0' */ | 1 /* 'DETACHED_1' */ | 2 /* 'CLEAR_2' */
 
-export type SignMode = 'ATTACHED_0' | 'DETACHED_1' | 'CLEAR_2'
+export type SignMode = 0 /* 'ATTACHED_0' */ | 1 /* 'DETACHED_1' */ | 2 /* 'CLEAR_2' */
 
 export type pgp_PGPSignOptions = {
   keyQuery: string;
@@ -2214,15 +2469,15 @@ export type prove_Stream = {
   fd: int;
 }
 
-export type prove_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type prove_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
-export type prove_ProofState = 'NONE_0' | 'OK_1' | 'TEMP_FAILURE_2' | 'PERM_FAILURE_3' | 'LOOKING_4' | 'SUPERSEDED_5' | 'POSTED_6' | 'REVOKED_7'
+export type prove_ProofState = 0 /* 'NONE_0' */ | 1 /* 'OK_1' */ | 2 /* 'TEMP_FAILURE_2' */ | 3 /* 'PERM_FAILURE_3' */ | 4 /* 'LOOKING_4' */ | 5 /* 'SUPERSEDED_5' */ | 6 /* 'POSTED_6' */ | 7 /* 'REVOKED_7' */
 
-export type prove_ProofStatus = 'NONE_0' | 'OK_1' | 'LOCAL_2' | 'FOUND_3' | 'BASE_ERROR_100' | 'HOST_UNREACHABLE_101' | 'PERMISSION_DENIED_103' | 'FAILED_PARSE_106' | 'DNS_ERROR_107' | 'AUTH_FAILED_108' | 'HTTP_500_150' | 'TIMEOUT_160' | 'INTERNAL_ERROR_170' | 'BASE_HARD_ERROR_200' | 'NOT_FOUND_201' | 'CONTENT_FAILURE_202' | 'BAD_USERNAME_203' | 'BAD_REMOTE_ID_204' | 'TEXT_NOT_FOUND_205' | 'BAD_ARGS_206' | 'CONTENT_MISSING_207' | 'TITLE_NOT_FOUND_208' | 'SERVICE_ERROR_209' | 'TOR_SKIPPED_210' | 'TOR_INCOMPATIBLE_211' | 'HTTP_300_230' | 'HTTP_400_240' | 'HTTP_OTHER_260' | 'EMPTY_JSON_270' | 'DELETED_301' | 'SERVICE_DEAD_302' | 'BAD_SIGNATURE_303' | 'BAD_API_URL_304' | 'UNKNOWN_TYPE_305' | 'NO_HINT_306' | 'BAD_HINT_TEXT_307'
+export type prove_ProofStatus = 0 /* 'NONE_0' */ | 1 /* 'OK_1' */ | 2 /* 'LOCAL_2' */ | 3 /* 'FOUND_3' */ | 4 /* 'BASE_ERROR_100' */ | 5 /* 'HOST_UNREACHABLE_101' */ | 6 /* 'PERMISSION_DENIED_103' */ | 7 /* 'FAILED_PARSE_106' */ | 8 /* 'DNS_ERROR_107' */ | 9 /* 'AUTH_FAILED_108' */ | 10 /* 'HTTP_500_150' */ | 11 /* 'TIMEOUT_160' */ | 12 /* 'INTERNAL_ERROR_170' */ | 13 /* 'BASE_HARD_ERROR_200' */ | 14 /* 'NOT_FOUND_201' */ | 15 /* 'CONTENT_FAILURE_202' */ | 16 /* 'BAD_USERNAME_203' */ | 17 /* 'BAD_REMOTE_ID_204' */ | 18 /* 'TEXT_NOT_FOUND_205' */ | 19 /* 'BAD_ARGS_206' */ | 20 /* 'CONTENT_MISSING_207' */ | 21 /* 'TITLE_NOT_FOUND_208' */ | 22 /* 'SERVICE_ERROR_209' */ | 23 /* 'TOR_SKIPPED_210' */ | 24 /* 'TOR_INCOMPATIBLE_211' */ | 25 /* 'HTTP_300_230' */ | 26 /* 'HTTP_400_240' */ | 27 /* 'HTTP_OTHER_260' */ | 28 /* 'EMPTY_JSON_270' */ | 29 /* 'DELETED_301' */ | 30 /* 'SERVICE_DEAD_302' */ | 31 /* 'BAD_SIGNATURE_303' */ | 32 /* 'BAD_API_URL_304' */ | 33 /* 'UNKNOWN_TYPE_305' */ | 34 /* 'NO_HINT_306' */ | 35 /* 'BAD_HINT_TEXT_307' */
 
-export type prove_ProofType = 'NONE_0' | 'KEYBASE_1' | 'TWITTER_2' | 'GITHUB_3' | 'REDDIT_4' | 'COINBASE_5' | 'HACKERNEWS_6' | 'GENERIC_WEB_SITE_1000' | 'DNS_1001' | 'ROOTER_100001'
+export type prove_ProofType = 0 /* 'NONE_0' */ | 1 /* 'KEYBASE_1' */ | 2 /* 'TWITTER_2' */ | 3 /* 'GITHUB_3' */ | 4 /* 'REDDIT_4' */ | 5 /* 'COINBASE_5' */ | 6 /* 'HACKERNEWS_6' */ | 7 /* 'GENERIC_WEB_SITE_1000' */ | 8 /* 'DNS_1001' */ | 9 /* 'ROOTER_100001' */
 
-export type prove_TrackDiffType = 'NONE_0' | 'ERROR_1' | 'CLASH_2' | 'REVOKED_3' | 'UPGRADED_4' | 'NEW_5' | 'REMOTE_FAIL_6' | 'REMOTE_WORKING_7' | 'REMOTE_CHANGED_8'
+export type prove_TrackDiffType = 0 /* 'NONE_0' */ | 1 /* 'ERROR_1' */ | 2 /* 'CLASH_2' */ | 3 /* 'REVOKED_3' */ | 4 /* 'UPGRADED_4' */ | 5 /* 'NEW_5' */ | 6 /* 'REMOTE_FAIL_6' */ | 7 /* 'REMOTE_WORKING_7' */ | 8 /* 'REMOTE_CHANGED_8' */
 
 export type prove_TrackDiff = {
   type: TrackDiffType;
@@ -2235,18 +2490,22 @@ export type prove_TrackSummary = {
   isRemote: boolean;
 }
 
-export type prove_TrackStatus = 'NEW_OK_1' | 'NEW_ZERO_PROOFS_2' | 'NEW_FAIL_PROOFS_3' | 'UPDATE_BROKEN_4' | 'UPDATE_NEW_PROOFS_5' | 'UPDATE_OK_6'
+export type prove_TrackStatus = 0 /* 'NEW_OK_1' */ | 1 /* 'NEW_ZERO_PROOFS_2' */ | 2 /* 'NEW_FAIL_PROOFS_3' */ | 3 /* 'UPDATE_BROKEN_4' */ | 4 /* 'UPDATE_NEW_PROOFS_5' */ | 5 /* 'UPDATE_OK_6' */
 
 export type prove_TrackOptions = {
   localOnly: boolean;
   bypassConfirm: boolean;
 }
 
+export type prove_IdentifyReason = {
+  reason: string;
+}
+
 export type prove_IdentifyOutcome = {
   username: string;
-  status: ?Status;
+  status?: ?Status;
   warnings: Array<string>;
-  trackUsed: ?TrackSummary;
+  trackUsed?: ?TrackSummary;
   trackStatus: TrackStatus;
   numTrackFailures: int;
   numTrackChanges: int;
@@ -2256,10 +2515,11 @@ export type prove_IdentifyOutcome = {
   revoked: Array<TrackDiff>;
   trackOptions: TrackOptions;
   forPGPPull: boolean;
+  reason: IdentifyReason;
 }
 
 export type prove_IdentifyRes = {
-  user: ?User;
+  user?: ?User;
   publicKeys: Array<PublicKey>;
   outcome: IdentifyOutcome;
   trackToken: string;
@@ -2363,11 +2623,11 @@ export type proveUi_Stream = {
   fd: int;
 }
 
-export type proveUi_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type proveUi_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
-export type proveUi_PromptOverwriteType = 'SOCIAL_0' | 'SITE_1'
+export type proveUi_PromptOverwriteType = 0 /* 'SOCIAL_0' */ | 1 /* 'SITE_1' */
 
-export type PromptOverwriteType = 'SOCIAL_0' | 'SITE_1'
+export type PromptOverwriteType = 0 /* 'SOCIAL_0' */ | 1 /* 'SITE_1' */
 
 export type provisionUi_Time = {
 }
@@ -2438,15 +2698,15 @@ export type provisionUi_Stream = {
   fd: int;
 }
 
-export type provisionUi_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type provisionUi_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
-export type provisionUi_ProvisionMethod = 'DEVICE_0' | 'GPG_1' | 'PAPER_KEY_2' | 'PASSPHRASE_3'
+export type provisionUi_ProvisionMethod = 0 /* 'DEVICE_0' */ | 1 /* 'PAPER_KEY_1' */ | 2 /* 'PASSPHRASE_2' */ | 3 /* 'GPG_IMPORT_3' */ | 4 /* 'GPG_SIGN_4' */
 
-export type ProvisionMethod = 'DEVICE_0' | 'GPG_1' | 'PAPER_KEY_2' | 'PASSPHRASE_3'
+export type ProvisionMethod = 0 /* 'DEVICE_0' */ | 1 /* 'PAPER_KEY_1' */ | 2 /* 'PASSPHRASE_2' */ | 3 /* 'GPG_IMPORT_3' */ | 4 /* 'GPG_SIGN_4' */
 
-export type provisionUi_DeviceType = 'DESKTOP_0' | 'MOBILE_1'
+export type provisionUi_DeviceType = 0 /* 'DESKTOP_0' */ | 1 /* 'MOBILE_1' */
 
-export type DeviceType = 'DESKTOP_0' | 'MOBILE_1'
+export type DeviceType = 0 /* 'DESKTOP_0' */ | 1 /* 'MOBILE_1' */
 
 export type provisionUi_SecretResponse = {
   secret: bytes;
@@ -2527,7 +2787,7 @@ export type quota_Stream = {
   fd: int;
 }
 
-export type quota_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type quota_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type quota_VerifySessionRes = {
   uid: UID;
@@ -2612,7 +2872,7 @@ export type revoke_Stream = {
   fd: int;
 }
 
-export type revoke_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type revoke_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type secretUi_Time = {
 }
@@ -2683,7 +2943,7 @@ export type secretUi_Stream = {
   fd: int;
 }
 
-export type secretUi_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type secretUi_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type secretUi_SecretEntryArg = {
   desc: string;
@@ -2828,13 +3088,14 @@ export type session_Stream = {
   fd: int;
 }
 
-export type session_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type session_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type session_Session = {
   uid: UID;
   username: string;
   token: string;
   deviceSubkeyKid: KID;
+  deviceSibkeyKid: KID;
 }
 
 export type Session = {
@@ -2842,6 +3103,7 @@ export type Session = {
   username: string;
   token: string;
   deviceSubkeyKid: KID;
+  deviceSibkeyKid: KID;
 }
 
 export type signup_Time = {
@@ -2913,7 +3175,7 @@ export type signup_Stream = {
   fd: int;
 }
 
-export type signup_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type signup_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type signup_SignupRes = {
   passphraseOk: boolean;
@@ -2996,7 +3258,7 @@ export type sigs_Stream = {
   fd: int;
 }
 
-export type sigs_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type sigs_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type sigs_Sig = {
   seqno: int;
@@ -3040,7 +3302,7 @@ export type sigs_SigListArgs = {
   sessionID: int;
   username: string;
   allKeys: boolean;
-  types: ?SigTypes;
+  types?: ?SigTypes;
   filterx: string;
   verbose: boolean;
   revoked: boolean;
@@ -3050,7 +3312,7 @@ export type SigListArgs = {
   sessionID: int;
   username: string;
   allKeys: boolean;
-  types: ?SigTypes;
+  types?: ?SigTypes;
   filterx: string;
   verbose: boolean;
   revoked: boolean;
@@ -3125,7 +3387,7 @@ export type streamUi_Stream = {
   fd: int;
 }
 
-export type streamUi_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type streamUi_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type test_Test = {
   reply: string;
@@ -3204,15 +3466,15 @@ export type track_Stream = {
   fd: int;
 }
 
-export type track_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type track_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
-export type track_ProofState = 'NONE_0' | 'OK_1' | 'TEMP_FAILURE_2' | 'PERM_FAILURE_3' | 'LOOKING_4' | 'SUPERSEDED_5' | 'POSTED_6' | 'REVOKED_7'
+export type track_ProofState = 0 /* 'NONE_0' */ | 1 /* 'OK_1' */ | 2 /* 'TEMP_FAILURE_2' */ | 3 /* 'PERM_FAILURE_3' */ | 4 /* 'LOOKING_4' */ | 5 /* 'SUPERSEDED_5' */ | 6 /* 'POSTED_6' */ | 7 /* 'REVOKED_7' */
 
-export type track_ProofStatus = 'NONE_0' | 'OK_1' | 'LOCAL_2' | 'FOUND_3' | 'BASE_ERROR_100' | 'HOST_UNREACHABLE_101' | 'PERMISSION_DENIED_103' | 'FAILED_PARSE_106' | 'DNS_ERROR_107' | 'AUTH_FAILED_108' | 'HTTP_500_150' | 'TIMEOUT_160' | 'INTERNAL_ERROR_170' | 'BASE_HARD_ERROR_200' | 'NOT_FOUND_201' | 'CONTENT_FAILURE_202' | 'BAD_USERNAME_203' | 'BAD_REMOTE_ID_204' | 'TEXT_NOT_FOUND_205' | 'BAD_ARGS_206' | 'CONTENT_MISSING_207' | 'TITLE_NOT_FOUND_208' | 'SERVICE_ERROR_209' | 'TOR_SKIPPED_210' | 'TOR_INCOMPATIBLE_211' | 'HTTP_300_230' | 'HTTP_400_240' | 'HTTP_OTHER_260' | 'EMPTY_JSON_270' | 'DELETED_301' | 'SERVICE_DEAD_302' | 'BAD_SIGNATURE_303' | 'BAD_API_URL_304' | 'UNKNOWN_TYPE_305' | 'NO_HINT_306' | 'BAD_HINT_TEXT_307'
+export type track_ProofStatus = 0 /* 'NONE_0' */ | 1 /* 'OK_1' */ | 2 /* 'LOCAL_2' */ | 3 /* 'FOUND_3' */ | 4 /* 'BASE_ERROR_100' */ | 5 /* 'HOST_UNREACHABLE_101' */ | 6 /* 'PERMISSION_DENIED_103' */ | 7 /* 'FAILED_PARSE_106' */ | 8 /* 'DNS_ERROR_107' */ | 9 /* 'AUTH_FAILED_108' */ | 10 /* 'HTTP_500_150' */ | 11 /* 'TIMEOUT_160' */ | 12 /* 'INTERNAL_ERROR_170' */ | 13 /* 'BASE_HARD_ERROR_200' */ | 14 /* 'NOT_FOUND_201' */ | 15 /* 'CONTENT_FAILURE_202' */ | 16 /* 'BAD_USERNAME_203' */ | 17 /* 'BAD_REMOTE_ID_204' */ | 18 /* 'TEXT_NOT_FOUND_205' */ | 19 /* 'BAD_ARGS_206' */ | 20 /* 'CONTENT_MISSING_207' */ | 21 /* 'TITLE_NOT_FOUND_208' */ | 22 /* 'SERVICE_ERROR_209' */ | 23 /* 'TOR_SKIPPED_210' */ | 24 /* 'TOR_INCOMPATIBLE_211' */ | 25 /* 'HTTP_300_230' */ | 26 /* 'HTTP_400_240' */ | 27 /* 'HTTP_OTHER_260' */ | 28 /* 'EMPTY_JSON_270' */ | 29 /* 'DELETED_301' */ | 30 /* 'SERVICE_DEAD_302' */ | 31 /* 'BAD_SIGNATURE_303' */ | 32 /* 'BAD_API_URL_304' */ | 33 /* 'UNKNOWN_TYPE_305' */ | 34 /* 'NO_HINT_306' */ | 35 /* 'BAD_HINT_TEXT_307' */
 
-export type track_ProofType = 'NONE_0' | 'KEYBASE_1' | 'TWITTER_2' | 'GITHUB_3' | 'REDDIT_4' | 'COINBASE_5' | 'HACKERNEWS_6' | 'GENERIC_WEB_SITE_1000' | 'DNS_1001' | 'ROOTER_100001'
+export type track_ProofType = 0 /* 'NONE_0' */ | 1 /* 'KEYBASE_1' */ | 2 /* 'TWITTER_2' */ | 3 /* 'GITHUB_3' */ | 4 /* 'REDDIT_4' */ | 5 /* 'COINBASE_5' */ | 6 /* 'HACKERNEWS_6' */ | 7 /* 'GENERIC_WEB_SITE_1000' */ | 8 /* 'DNS_1001' */ | 9 /* 'ROOTER_100001' */
 
-export type track_TrackDiffType = 'NONE_0' | 'ERROR_1' | 'CLASH_2' | 'REVOKED_3' | 'UPGRADED_4' | 'NEW_5' | 'REMOTE_FAIL_6' | 'REMOTE_WORKING_7' | 'REMOTE_CHANGED_8'
+export type track_TrackDiffType = 0 /* 'NONE_0' */ | 1 /* 'ERROR_1' */ | 2 /* 'CLASH_2' */ | 3 /* 'REVOKED_3' */ | 4 /* 'UPGRADED_4' */ | 5 /* 'NEW_5' */ | 6 /* 'REMOTE_FAIL_6' */ | 7 /* 'REMOTE_WORKING_7' */ | 8 /* 'REMOTE_CHANGED_8' */
 
 export type track_TrackDiff = {
   type: TrackDiffType;
@@ -3225,18 +3487,22 @@ export type track_TrackSummary = {
   isRemote: boolean;
 }
 
-export type track_TrackStatus = 'NEW_OK_1' | 'NEW_ZERO_PROOFS_2' | 'NEW_FAIL_PROOFS_3' | 'UPDATE_BROKEN_4' | 'UPDATE_NEW_PROOFS_5' | 'UPDATE_OK_6'
+export type track_TrackStatus = 0 /* 'NEW_OK_1' */ | 1 /* 'NEW_ZERO_PROOFS_2' */ | 2 /* 'NEW_FAIL_PROOFS_3' */ | 3 /* 'UPDATE_BROKEN_4' */ | 4 /* 'UPDATE_NEW_PROOFS_5' */ | 5 /* 'UPDATE_OK_6' */
 
 export type track_TrackOptions = {
   localOnly: boolean;
   bypassConfirm: boolean;
 }
 
+export type track_IdentifyReason = {
+  reason: string;
+}
+
 export type track_IdentifyOutcome = {
   username: string;
-  status: ?Status;
+  status?: ?Status;
   warnings: Array<string>;
-  trackUsed: ?TrackSummary;
+  trackUsed?: ?TrackSummary;
   trackStatus: TrackStatus;
   numTrackFailures: int;
   numTrackChanges: int;
@@ -3246,10 +3512,11 @@ export type track_IdentifyOutcome = {
   revoked: Array<TrackDiff>;
   trackOptions: TrackOptions;
   forPGPPull: boolean;
+  reason: IdentifyReason;
 }
 
 export type track_IdentifyRes = {
-  user: ?User;
+  user?: ?User;
   publicKeys: Array<PublicKey>;
   outcome: IdentifyOutcome;
   trackToken: string;
@@ -3333,11 +3600,11 @@ export type ui_Stream = {
   fd: int;
 }
 
-export type ui_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type ui_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
-export type ui_PromptDefault = 'NONE_0' | 'YES_1' | 'NO_2'
+export type ui_PromptDefault = 0 /* 'NONE_0' */ | 1 /* 'YES_1' */ | 2 /* 'NO_2' */
 
-export type PromptDefault = 'NONE_0' | 'YES_1' | 'NO_2'
+export type PromptDefault = 0 /* 'NONE_0' */ | 1 /* 'YES_1' */ | 2 /* 'NO_2' */
 
 export type user_Time = {
 }
@@ -3408,7 +3675,7 @@ export type user_Stream = {
   fd: int;
 }
 
-export type user_LogLevel = 'NONE_0' | 'DEBUG_1' | 'INFO_2' | 'NOTICE_3' | 'WARN_4' | 'ERROR_5' | 'CRITICAL_6' | 'FATAL_7'
+export type user_LogLevel = 0 /* 'NONE_0' */ | 1 /* 'DEBUG_1' */ | 2 /* 'INFO_2' */ | 3 /* 'NOTICE_3' */ | 4 /* 'WARN_4' */ | 5 /* 'ERROR_5' */ | 6 /* 'CRITICAL_6' */ | 7 /* 'FATAL_7' */
 
 export type user_Tracker = {
   tracker: UID;

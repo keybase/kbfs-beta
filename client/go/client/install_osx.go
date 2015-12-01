@@ -8,7 +8,9 @@ package client
 import (
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"github.com/blang/semver"
 	"github.com/keybase/client/go/launchd"
 	"github.com/keybase/client/go/libkb"
+	"github.com/keybase/client/go/mounter"
 	keybase1 "github.com/keybase/client/go/protocol"
 )
 
@@ -29,24 +32,15 @@ const (
 	AppKBFSLabel     ServiceLabel = "keybase.kbfs"
 )
 
-func keybaseServiceStatus(g *libkb.GlobalContext, label string, bundleVersion string) keybase1.ServiceStatus {
+func keybaseServiceStatus(g *libkb.GlobalContext, label string) keybase1.ServiceStatus {
 	if label == "" {
 		label = defaultServiceLabel(g.Env.GetRunMode())
 	}
 	kbService := launchd.NewService(label)
 
 	st, done := serviceStatusFromLaunchd(kbService, path.Join(g.Env.GetRuntimeDir(), "keybased.info"))
-	st.BundleVersion = bundleVersion
+	st.BundleVersion = libkb.VersionString()
 	if done {
-		return st
-	}
-
-	// Something must be wrong if this build doesn't match the package version.
-	buildVersion := libkb.VersionString()
-	if bundleVersion != "" && bundleVersion != buildVersion {
-		st.InstallAction = keybase1.InstallAction_NONE
-		st.InstallStatus = keybase1.InstallStatus_ERROR
-		st.Status = errorStatus("INSTALL_ERROR", fmt.Sprintf("Version mismatch: %s != %s", bundleVersion, buildVersion))
 		return st
 	}
 
@@ -57,13 +51,18 @@ func keybaseServiceStatus(g *libkb.GlobalContext, label string, bundleVersion st
 	return st
 }
 
-func kbfsServiceStatus(g *libkb.GlobalContext, label string, bundleVersion string) keybase1.ServiceStatus {
+func kbfsServiceStatus(g *libkb.GlobalContext, label string) keybase1.ServiceStatus {
 	if label == "" {
 		label = defaultKBFSLabel(g.Env.GetRunMode())
 	}
 	kbfsService := launchd.NewService(label)
 
 	st, done := serviceStatusFromLaunchd(kbfsService, path.Join(g.Env.GetRuntimeDir(), "kbfs.info"))
+	bundleVersion, err := kbfsBundleVersion(g, "")
+	if err != nil {
+		st.Status = errorStatus("STATUS_ERROR", err.Error())
+		return st
+	}
 	st.BundleVersion = bundleVersion
 	if done {
 		return st
@@ -98,7 +97,7 @@ func installStatus(version string, bundleVersion string, lastExitStatus string) 
 				errorStatus("INSTALL_ERROR", err.Error())
 		}
 		if bsv.GT(sv) {
-			installStatus = keybase1.InstallStatus_NEEDS_UPGRADE
+			installStatus = keybase1.InstallStatus_INSTALLED
 			installAction = keybase1.InstallAction_UPGRADE
 		} else if bsv.EQ(sv) {
 			installStatus = keybase1.InstallStatus_INSTALLED
@@ -280,7 +279,7 @@ func installKeybaseService(g *libkb.GlobalContext, binPath string) (*keybase1.Se
 	envVars := defaultLaunchdEnvVars(g, label)
 
 	plist := launchd.NewPlist(label, binPath, plistArgs, envVars)
-	err := launchd.Install(plist, os.Stdout)
+	err := launchd.Install(plist, ioutil.Discard)
 	if err != nil {
 		return nil, err
 	}
@@ -292,9 +291,25 @@ func installKeybaseService(g *libkb.GlobalContext, binPath string) (*keybase1.Se
 }
 
 // Uninstall keybase all services for this run mode.
-func uninstallKeybaseServices(runMode libkb.RunMode) {
-	launchd.Uninstall(AppServiceLabel.labelForRunMode(runMode), os.Stdout)
-	launchd.Uninstall(BrewServiceLabel.labelForRunMode(runMode), os.Stdout)
+func uninstallKeybaseServices(runMode libkb.RunMode) error {
+	err1 := launchd.Uninstall(AppServiceLabel.labelForRunMode(runMode), ioutil.Discard)
+	err2 := launchd.Uninstall(BrewServiceLabel.labelForRunMode(runMode), ioutil.Discard)
+	return libkb.CombineErrors(err1, err2)
+}
+
+func kbfsBundleVersion(g *libkb.GlobalContext, binPath string) (string, error) {
+	runMode := g.Env.GetRunMode()
+	kbfsBinPath, err := kbfsBinPath(runMode, binPath)
+	if err != nil {
+		return "", err
+	}
+
+	kbfsVersionOutput, err := exec.Command(kbfsBinPath, "--version").Output()
+	if err != nil {
+		return "", err
+	}
+	kbfsVersion := strings.TrimSpace(string(kbfsVersionOutput))
+	return kbfsVersion, nil
 }
 
 func installKBFSService(g *libkb.GlobalContext, binPath string) (*keybase1.ServiceStatus, error) {
@@ -308,18 +323,18 @@ func installKBFSService(g *libkb.GlobalContext, binPath string) (*keybase1.Servi
 
 	// Create mount dir if it doesn't exist
 	if _, err := os.Stat(mountPath); os.IsNotExist(err) {
-		// TODO Make dir hidden so it only shows when mounted?
-		err := os.MkdirAll(mountPath, libkb.PermDir)
+		// Make the dir so we can't go into it while unmounted.
+		err := os.MkdirAll(mountPath, 0600)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	plistArgs := []string{mountPath}
+	plistArgs := []string{"-mount-type=force", mountPath}
 	envVars := defaultLaunchdEnvVars(g, label)
 
 	plist := launchd.NewPlist(label, kbfsBinPath, plistArgs, envVars)
-	err = launchd.Install(plist, os.Stdout)
+	err = launchd.Install(plist, ioutil.Discard)
 	if err != nil {
 		return nil, err
 	}
@@ -330,9 +345,10 @@ func installKBFSService(g *libkb.GlobalContext, binPath string) (*keybase1.Servi
 	return &st, nil
 }
 
-func uninstallKBFSServices(runMode libkb.RunMode) {
-	launchd.Uninstall(AppKBFSLabel.labelForRunMode(runMode), os.Stdout)
-	launchd.Uninstall(BrewKBFSLabel.labelForRunMode(runMode), os.Stdout)
+func uninstallKBFSServices(runMode libkb.RunMode) error {
+	err1 := launchd.Uninstall(AppKBFSLabel.labelForRunMode(runMode), ioutil.Discard)
+	err2 := launchd.Uninstall(BrewKBFSLabel.labelForRunMode(runMode), ioutil.Discard)
+	return libkb.CombineErrors(err1, err2)
 }
 
 // Lookup the default service label for this build.
@@ -349,9 +365,9 @@ func (l ServiceLabel) labelForRunMode(runMode libkb.RunMode) string {
 	}
 }
 
-func Install(g *libkb.GlobalContext, binPath string, components []string, force bool) []keybase1.InstallComponent {
+func Install(g *libkb.GlobalContext, binPath string, components []string, force bool) []keybase1.ComponentStatus {
 	var err error
-	status := []keybase1.InstallComponent{}
+	status := []keybase1.ComponentStatus{}
 
 	g.Log.Debug("Installing components: %s", components)
 
@@ -359,27 +375,27 @@ func Install(g *libkb.GlobalContext, binPath string, components []string, force 
 		g.Log.Debug("Checking command line")
 		err = installCommandLine(g, binPath, true) // Always force CLI install
 		if err != nil {
-			status = append(status, keybase1.InstallComponent{Name: "cli", Status: errorStatus("INSTALL_ERROR", err.Error())})
+			status = append(status, keybase1.ComponentStatus{Name: "cli", Status: errorStatus("INSTALL_ERROR", err.Error())})
 		} else {
-			status = append(status, keybase1.InstallComponent{Name: "cli", Status: keybase1.Status{Name: "OK"}})
+			status = append(status, keybase1.ComponentStatus{Name: "cli", Status: keybase1.Status{Name: "OK"}})
 		}
 	}
 
 	if libkb.IsIn("service", components, false) {
 		err = installService(g, binPath, force)
 		if err != nil {
-			status = append(status, keybase1.InstallComponent{Name: "service", Status: errorStatus("INSTALL_ERROR", err.Error())})
+			status = append(status, keybase1.ComponentStatus{Name: "service", Status: errorStatus("INSTALL_ERROR", err.Error())})
 		} else {
-			status = append(status, keybase1.InstallComponent{Name: "service", Status: keybase1.Status{Name: "OK"}})
+			status = append(status, keybase1.ComponentStatus{Name: "service", Status: keybase1.Status{Name: "OK"}})
 		}
 	}
 
 	if libkb.IsIn("kbfs", components, false) {
 		err = installKBFS(g, binPath, force)
 		if err != nil {
-			status = append(status, keybase1.InstallComponent{Name: "kbfs", Status: errorStatus("INSTALL_ERROR", err.Error())})
+			status = append(status, keybase1.ComponentStatus{Name: "kbfs", Status: errorStatus("INSTALL_ERROR", err.Error())})
 		} else {
-			status = append(status, keybase1.InstallComponent{Name: "kbfs", Status: keybase1.Status{Name: "OK"}})
+			status = append(status, keybase1.ComponentStatus{Name: "kbfs", Status: keybase1.Status{Name: "OK"}})
 		}
 	}
 
@@ -446,8 +462,8 @@ func installService(g *libkb.GlobalContext, binPath string, force bool) error {
 	}
 	g.Log.Debug("Using binPath: %s", bp)
 	g.Log.Info("Checking service")
-	keybaseStatus := keybaseServiceStatus(g, "", "")
-	g.Log.Info("Service: %s", keybaseStatus.InstallStatus.String())
+	keybaseStatus := keybaseServiceStatus(g, "")
+	g.Log.Info("Service: %s (Action: %s)", keybaseStatus.InstallStatus.String(), keybaseStatus.InstallAction.String())
 	if keybaseStatus.NeedsInstall() || force {
 		g.Log.Info("Installing Keybase service")
 		uninstallKeybaseServices(g.Env.GetRunMode())
@@ -467,8 +483,8 @@ func installKBFS(g *libkb.GlobalContext, binPath string, force bool) error {
 		return err
 	}
 	g.Log.Info("Checking KBFS")
-	kbfsStatus := kbfsServiceStatus(g, "", "")
-	g.Log.Info("KBFS: %s", kbfsStatus.InstallStatus.String())
+	kbfsStatus := kbfsServiceStatus(g, "")
+	g.Log.Info("KBFS: %s (Action: %s)", kbfsStatus.InstallStatus.String(), kbfsStatus.InstallAction.String())
 	if kbfsStatus.NeedsInstall() || force {
 		g.Log.Info("Installing KBFS")
 		uninstallKBFSServices(g.Env.GetRunMode())
@@ -482,6 +498,101 @@ func installKBFS(g *libkb.GlobalContext, binPath string, force bool) error {
 	return nil
 }
 
+func Uninstall(g *libkb.GlobalContext, components []string) []keybase1.ComponentStatus {
+	var err error
+	status := []keybase1.ComponentStatus{}
+
+	g.Log.Debug("Uninstalling components: %s", components)
+
+	if libkb.IsIn("cli", components, false) {
+		g.Log.Debug("Checking command line")
+		err = uninstallCommandLine(g)
+		if err != nil {
+			status = append(status, keybase1.ComponentStatus{Name: "cli", Status: errorStatus("UNINSTALL_ERROR", err.Error())})
+		} else {
+			status = append(status, keybase1.ComponentStatus{Name: "cli", Status: keybase1.Status{Name: "OK"}})
+		}
+	}
+
+	if libkb.IsIn("kbfs", components, false) {
+		err = uninstallKBFS(g)
+		if err != nil {
+			status = append(status, keybase1.ComponentStatus{Name: "kbfs", Status: errorStatus("UNINSTALL_ERROR", err.Error())})
+		} else {
+			status = append(status, keybase1.ComponentStatus{Name: "kbfs", Status: keybase1.Status{Name: "OK"}})
+		}
+	}
+
+	if libkb.IsIn("service", components, false) {
+		err = uninstallService(g)
+		if err != nil {
+			status = append(status, keybase1.ComponentStatus{Name: "service", Status: errorStatus("UNINSTALL_ERROR", err.Error())})
+		} else {
+			status = append(status, keybase1.ComponentStatus{Name: "service", Status: keybase1.Status{Name: "OK"}})
+		}
+	}
+
+	return status
+}
+
+func uninstallCommandLine(g *libkb.GlobalContext) error {
+	linkPath := filepath.Join("/usr/local/bin", binName())
+
+	fi, err := os.Lstat(linkPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	isLink := (fi.Mode()&os.ModeSymlink != 0)
+	if !isLink {
+		return fmt.Errorf("Path is not a symlink: %s", linkPath)
+	}
+	return os.Remove(linkPath)
+}
+
+func uninstallService(g *libkb.GlobalContext) error {
+	return uninstallKeybaseServices(g.Env.GetRunMode())
+}
+
+func uninstallKBFS(g *libkb.GlobalContext) error {
+	err := uninstallKBFSServices(g.Env.GetRunMode())
+	if err != nil {
+		return err
+	}
+
+	mountPath := kbfsMountPath(g.Env.GetHome(), g.Env.GetRunMode())
+	if _, err := os.Stat(mountPath); os.IsNotExist(err) {
+		return nil
+	}
+	mounted, err := mounter.IsMounted(g, mountPath)
+	if err != nil {
+		return err
+	}
+	if mounted {
+		err = mounter.Unmount(g, mountPath, false)
+		if err != nil {
+			return err
+		}
+	}
+	empty, err := libkb.IsDirEmpty(mountPath)
+	if err != nil {
+		return err
+	}
+	if !empty {
+		return fmt.Errorf("Mount has files after unmounting: %s", mountPath)
+	}
+	return trashDir(g, mountPath)
+}
+
+// We're only moving the folder in case something somehow managed to get at it
+// in between unmounting and checking if it had files.
+func trashDir(g *libkb.GlobalContext, dir string) error {
+	randString, err := libkb.RandString("Trash.", 20)
+	if err != nil {
+		return err
+	}
+	return os.Rename(dir, filepath.Join(g.Env.GetCacheDir(), randString))
+}
+
 func chooseBinPath(bp string) (string, error) {
 	if bp != "" {
 		return bp, nil
@@ -489,11 +600,24 @@ func chooseBinPath(bp string) (string, error) {
 	return binPath()
 }
 
+func brewPath(formula string) (string, error) {
+	// Get the homebrew install path prefix for this formula
+	prefixOutput, err := exec.Command("brew", "--prefix", formula).Output()
+	if err != nil {
+		return "", err
+	}
+	prefix := strings.TrimSpace(string(prefixOutput))
+	return prefix, nil
+}
+
 func binPath() (string, error) {
 	if libkb.IsBrewBuild {
-		// Use the brew opt bin directory.
-		binName := filepath.Base(os.Args[0])
-		return filepath.Join("/usr/local/opt", binName, "bin", binName), nil
+		binName := binName()
+		prefix, err := brewPath(binName)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(prefix, "bin", binName), nil
 	}
 
 	path := os.Args[0]
@@ -509,11 +633,22 @@ func binName() string {
 }
 
 func kbfsBinPath(runMode libkb.RunMode, binPath string) (string, error) {
+	// If it's brew lookup path by formula name
+	kbfsBinName := kbfsBinName(runMode)
+	if libkb.IsBrewBuild {
+		prefix, err := brewPath(kbfsBinName)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(prefix, "bin", kbfsBinName), nil
+	}
+
+	// Use the same directory as the binPath
 	path, err := chooseBinPath(binPath)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(filepath.Dir(path), kbfsBinName(runMode)), nil
+	return filepath.Join(filepath.Dir(path), kbfsBinName), nil
 }
 
 func kbfsBinName(runMode libkb.RunMode) string {
@@ -548,13 +683,13 @@ func kbfsMountPath(homeDir string, runMode libkb.RunMode) string {
 	}
 }
 
-func AutoInstallWithStatus(g *libkb.GlobalContext, binPath string, force bool) []keybase1.InstallComponent {
-	status := []keybase1.InstallComponent{}
+func AutoInstallWithStatus(g *libkb.GlobalContext, binPath string, force bool) []keybase1.ComponentStatus {
+	status := []keybase1.ComponentStatus{}
 	_, err := AutoInstall(g, binPath, force)
 	if err != nil {
-		status = append(status, keybase1.InstallComponent{Name: "service", Status: errorStatus("INSTALL_ERROR", err.Error())})
+		status = append(status, keybase1.ComponentStatus{Name: "service", Status: errorStatus("INSTALL_ERROR", err.Error())})
 	} else {
-		status = append(status, keybase1.InstallComponent{Name: "service", Status: keybase1.Status{Name: "OK"}})
+		status = append(status, keybase1.ComponentStatus{Name: "service", Status: keybase1.Status{Name: "OK"}})
 	}
 	return status
 }

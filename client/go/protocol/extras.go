@@ -386,8 +386,6 @@ func (s InstallStatus) String() string {
 		return "Error"
 	case InstallStatus_NOT_INSTALLED:
 		return "Not Installed"
-	case InstallStatus_NEEDS_UPGRADE:
-		return "Needs upgrade"
 	case InstallStatus_INSTALLED:
 		return "Installed"
 	}
@@ -427,4 +425,12 @@ func (k *KID) UnmarshalJSON(b []byte) error {
 
 func (k *KID) MarshalJSON() ([]byte, error) {
 	return Quote(k.String()), nil
+}
+
+func (f Folder) ToString() string {
+	prefix := "public/"
+	if f.Private {
+		prefix = "private/"
+	}
+	return prefix + f.Name
 }

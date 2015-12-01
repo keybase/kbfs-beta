@@ -404,6 +404,7 @@ const (
 	ForkType_NONE     ForkType = 0
 	ForkType_AUTO     ForkType = 1
 	ForkType_WATCHDOG ForkType = 2
+	ForkType_LAUNCHD  ForkType = 3
 )
 
 type Config struct {
@@ -428,7 +429,6 @@ const (
 	InstallStatus_UNKNOWN       InstallStatus = 0
 	InstallStatus_ERROR         InstallStatus = 1
 	InstallStatus_NOT_INSTALLED InstallStatus = 2
-	InstallStatus_NEEDS_UPGRADE InstallStatus = 3
 	InstallStatus_INSTALLED     InstallStatus = 4
 )
 
@@ -476,7 +476,7 @@ type FuseStatus struct {
 	Status        Status          `codec:"status" json:"status"`
 }
 
-type InstallComponent struct {
+type ComponentStatus struct {
 	Name   string `codec:"name" json:"name"`
 	Status Status `codec:"status" json:"status"`
 }
@@ -1175,6 +1175,13 @@ func (c FavoriteClient) FavoriteList(ctx context.Context, sessionID int) (res []
 	return
 }
 
+type ClientType int
+
+const (
+	ClientType_CLI ClientType = 0
+	ClientType_GUI ClientType = 1
+)
+
 type GPGKey struct {
 	Algorithm  string        `codec:"algorithm" json:"algorithm"`
 	KeyID      string        `codec:"keyID" json:"keyID"`
@@ -1206,11 +1213,17 @@ type SelectKeyArg struct {
 	Keys      []GPGKey `codec:"keys" json:"keys"`
 }
 
+type SignArg struct {
+	Msg         []byte `codec:"msg" json:"msg"`
+	Fingerprint []byte `codec:"fingerprint" json:"fingerprint"`
+}
+
 type GpgUiInterface interface {
 	WantToAddGPGKey(context.Context, int) (bool, error)
 	ConfirmDuplicateKeyChosen(context.Context, int) (bool, error)
 	SelectKeyAndPushOption(context.Context, SelectKeyAndPushOptionArg) (SelectKeyRes, error)
 	SelectKey(context.Context, SelectKeyArg) (string, error)
+	Sign(context.Context, SignArg) (string, error)
 }
 
 func GpgUiProtocol(i GpgUiInterface) rpc.Protocol {
@@ -1281,6 +1294,22 @@ func GpgUiProtocol(i GpgUiInterface) rpc.Protocol {
 				},
 				MethodType: rpc.MethodCall,
 			},
+			"sign": {
+				MakeArg: func() interface{} {
+					ret := make([]SignArg, 1)
+					return &ret
+				},
+				Handler: func(ctx context.Context, args interface{}) (ret interface{}, err error) {
+					typedArgs, ok := args.(*[]SignArg)
+					if !ok {
+						err = rpc.NewTypeError((*[]SignArg)(nil), args)
+						return
+					}
+					ret, err = i.Sign(ctx, (*typedArgs)[0])
+					return
+				},
+				MethodType: rpc.MethodCall,
+			},
 		},
 	}
 }
@@ -1308,6 +1337,11 @@ func (c GpgUiClient) SelectKeyAndPushOption(ctx context.Context, __arg SelectKey
 
 func (c GpgUiClient) SelectKey(ctx context.Context, __arg SelectKeyArg) (res string, err error) {
 	err = c.Cli.Call(ctx, "keybase.1.gpgUi.selectKey", []interface{}{__arg}, &res)
+	return
+}
+
+func (c GpgUiClient) Sign(ctx context.Context, __arg SignArg) (res string, err error) {
+	err = c.Cli.Call(ctx, "keybase.1.gpgUi.sign", []interface{}{__arg}, &res)
 	return
 }
 
@@ -1392,6 +1426,7 @@ const (
 	TrackDiffType_REMOTE_FAIL    TrackDiffType = 6
 	TrackDiffType_REMOTE_WORKING TrackDiffType = 7
 	TrackDiffType_REMOTE_CHANGED TrackDiffType = 8
+	TrackDiffType_NEW_ELDEST     TrackDiffType = 9
 )
 
 type TrackDiff struct {
@@ -1559,6 +1594,11 @@ type LinkCheckResult struct {
 	Hint        *SigHint     `codec:"hint,omitempty" json:"hint,omitempty"`
 }
 
+type ConfirmResult struct {
+	IdentityConfirmed bool `codec:"identityConfirmed" json:"identityConfirmed"`
+	RemoteConfirmed   bool `codec:"remoteConfirmed" json:"remoteConfirmed"`
+}
+
 type DelegateIdentifyUIArg struct {
 }
 
@@ -1630,7 +1670,7 @@ type IdentifyUiInterface interface {
 	FinishSocialProofCheck(context.Context, FinishSocialProofCheckArg) error
 	DisplayCryptocurrency(context.Context, DisplayCryptocurrencyArg) error
 	ReportTrackToken(context.Context, ReportTrackTokenArg) error
-	Confirm(context.Context, ConfirmArg) (bool, error)
+	Confirm(context.Context, ConfirmArg) (ConfirmResult, error)
 	Finish(context.Context, int) error
 }
 
@@ -1883,7 +1923,7 @@ func (c IdentifyUiClient) ReportTrackToken(ctx context.Context, __arg ReportTrac
 	return
 }
 
-func (c IdentifyUiClient) Confirm(ctx context.Context, __arg ConfirmArg) (res bool, err error) {
+func (c IdentifyUiClient) Confirm(ctx context.Context, __arg ConfirmArg) (res ConfirmResult, err error) {
 	err = c.Cli.Call(ctx, "keybase.1.identifyUi.confirm", []interface{}{__arg}, &res)
 	return
 }
@@ -1891,6 +1931,83 @@ func (c IdentifyUiClient) Confirm(ctx context.Context, __arg ConfirmArg) (res bo
 func (c IdentifyUiClient) Finish(ctx context.Context, sessionID int) (err error) {
 	__arg := FinishArg{SessionID: sessionID}
 	err = c.Cli.Call(ctx, "keybase.1.identifyUi.finish", []interface{}{__arg}, nil)
+	return
+}
+
+type KBCMFEncryptOptions struct {
+	Recipients   []string     `codec:"recipients" json:"recipients"`
+	TrackOptions TrackOptions `codec:"trackOptions" json:"trackOptions"`
+}
+
+type KbcmfEncryptArg struct {
+	SessionID int                 `codec:"sessionID" json:"sessionID"`
+	Source    Stream              `codec:"source" json:"source"`
+	Sink      Stream              `codec:"sink" json:"sink"`
+	Opts      KBCMFEncryptOptions `codec:"opts" json:"opts"`
+}
+
+type KbcmfDecryptArg struct {
+	SessionID int    `codec:"sessionID" json:"sessionID"`
+	Source    Stream `codec:"source" json:"source"`
+	Sink      Stream `codec:"sink" json:"sink"`
+}
+
+type KbcmfInterface interface {
+	KbcmfEncrypt(context.Context, KbcmfEncryptArg) error
+	KbcmfDecrypt(context.Context, KbcmfDecryptArg) error
+}
+
+func KbcmfProtocol(i KbcmfInterface) rpc.Protocol {
+	return rpc.Protocol{
+		Name: "keybase.1.kbcmf",
+		Methods: map[string]rpc.ServeHandlerDescription{
+			"kbcmfEncrypt": {
+				MakeArg: func() interface{} {
+					ret := make([]KbcmfEncryptArg, 1)
+					return &ret
+				},
+				Handler: func(ctx context.Context, args interface{}) (ret interface{}, err error) {
+					typedArgs, ok := args.(*[]KbcmfEncryptArg)
+					if !ok {
+						err = rpc.NewTypeError((*[]KbcmfEncryptArg)(nil), args)
+						return
+					}
+					err = i.KbcmfEncrypt(ctx, (*typedArgs)[0])
+					return
+				},
+				MethodType: rpc.MethodCall,
+			},
+			"kbcmfDecrypt": {
+				MakeArg: func() interface{} {
+					ret := make([]KbcmfDecryptArg, 1)
+					return &ret
+				},
+				Handler: func(ctx context.Context, args interface{}) (ret interface{}, err error) {
+					typedArgs, ok := args.(*[]KbcmfDecryptArg)
+					if !ok {
+						err = rpc.NewTypeError((*[]KbcmfDecryptArg)(nil), args)
+						return
+					}
+					err = i.KbcmfDecrypt(ctx, (*typedArgs)[0])
+					return
+				},
+				MethodType: rpc.MethodCall,
+			},
+		},
+	}
+}
+
+type KbcmfClient struct {
+	Cli GenericClient
+}
+
+func (c KbcmfClient) KbcmfEncrypt(ctx context.Context, __arg KbcmfEncryptArg) (err error) {
+	err = c.Cli.Call(ctx, "keybase.1.kbcmf.kbcmfEncrypt", []interface{}{__arg}, nil)
+	return
+}
+
+func (c KbcmfClient) KbcmfDecrypt(ctx context.Context, __arg KbcmfDecryptArg) (err error) {
+	err = c.Cli.Call(ctx, "keybase.1.kbcmf.kbcmfDecrypt", []interface{}{__arg}, nil)
 	return
 }
 
@@ -2130,9 +2247,10 @@ type GetConfiguredAccountsArg struct {
 }
 
 type LoginArg struct {
-	SessionID  int    `codec:"sessionID" json:"sessionID"`
-	DeviceType string `codec:"deviceType" json:"deviceType"`
-	Username   string `codec:"username" json:"username"`
+	SessionID  int        `codec:"sessionID" json:"sessionID"`
+	DeviceType string     `codec:"deviceType" json:"deviceType"`
+	Username   string     `codec:"username" json:"username"`
+	ClientType ClientType `codec:"clientType" json:"clientType"`
 }
 
 type ClearStoredSecretArg struct {
@@ -2492,11 +2610,6 @@ type MetadataResponse struct {
 	MdBlocks [][]byte `codec:"mdBlocks" json:"mdBlocks"`
 }
 
-type FolderUsersResponse struct {
-	Readers []UID `codec:"readers" json:"readers"`
-	Writers []UID `codec:"writers" json:"writers"`
-}
-
 type AuthenticateArg struct {
 	Signature string `codec:"signature" json:"signature"`
 }
@@ -2547,8 +2660,9 @@ type TruncateUnlockArg struct {
 	FolderID string `codec:"folderID" json:"folderID"`
 }
 
-type GetFolderUsersArg struct {
-	FolderID string `codec:"folderID" json:"folderID"`
+type GetFolderHandleArg struct {
+	FolderID  string `codec:"folderID" json:"folderID"`
+	Signature string `codec:"signature" json:"signature"`
 }
 
 type PingArg struct {
@@ -2564,7 +2678,7 @@ type MetadataInterface interface {
 	GetKey(context.Context, GetKeyArg) ([]byte, error)
 	TruncateLock(context.Context, string) (bool, error)
 	TruncateUnlock(context.Context, string) (bool, error)
-	GetFolderUsers(context.Context, string) (FolderUsersResponse, error)
+	GetFolderHandle(context.Context, GetFolderHandleArg) ([]byte, error)
 	Ping(context.Context) error
 }
 
@@ -2716,18 +2830,18 @@ func MetadataProtocol(i MetadataInterface) rpc.Protocol {
 				},
 				MethodType: rpc.MethodCall,
 			},
-			"getFolderUsers": {
+			"getFolderHandle": {
 				MakeArg: func() interface{} {
-					ret := make([]GetFolderUsersArg, 1)
+					ret := make([]GetFolderHandleArg, 1)
 					return &ret
 				},
 				Handler: func(ctx context.Context, args interface{}) (ret interface{}, err error) {
-					typedArgs, ok := args.(*[]GetFolderUsersArg)
+					typedArgs, ok := args.(*[]GetFolderHandleArg)
 					if !ok {
-						err = rpc.NewTypeError((*[]GetFolderUsersArg)(nil), args)
+						err = rpc.NewTypeError((*[]GetFolderHandleArg)(nil), args)
 						return
 					}
-					ret, err = i.GetFolderUsers(ctx, (*typedArgs)[0].FolderID)
+					ret, err = i.GetFolderHandle(ctx, (*typedArgs)[0])
 					return
 				},
 				MethodType: rpc.MethodCall,
@@ -2799,9 +2913,8 @@ func (c MetadataClient) TruncateUnlock(ctx context.Context, folderID string) (re
 	return
 }
 
-func (c MetadataClient) GetFolderUsers(ctx context.Context, folderID string) (res FolderUsersResponse, err error) {
-	__arg := GetFolderUsersArg{FolderID: folderID}
-	err = c.Cli.Call(ctx, "keybase.1.metadata.getFolderUsers", []interface{}{__arg}, &res)
+func (c MetadataClient) GetFolderHandle(ctx context.Context, __arg GetFolderHandleArg) (res []byte, err error) {
+	err = c.Cli.Call(ctx, "keybase.1.metadata.getFolderHandle", []interface{}{__arg}, &res)
 	return
 }
 

@@ -4,7 +4,7 @@
 package engine
 
 import (
-	"fmt"
+	"errors"
 
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
@@ -67,12 +67,18 @@ func (e *TrackEngine) Run(ctx *Context) error {
 
 	// prompt if the identify is correct
 	outcome := ieng.Outcome().Export()
-	confirmed, err := ctx.IdentifyUI.Confirm(outcome)
+	result, err := ctx.IdentifyUI.Confirm(outcome)
 	if err != nil {
 		return err
 	}
-	if !confirmed {
-		return fmt.Errorf("Track not confirmed")
+	if !result.IdentityConfirmed {
+		return errors.New("Track not confirmed")
+	}
+
+	// if they didn't specify local only on the command line, then if they answer no to posting
+	// the tracking statement publicly to keybase, change LocalOnly to true here:
+	if !e.arg.Options.LocalOnly && !result.RemoteConfirmed {
+		e.arg.Options.LocalOnly = true
 	}
 
 	targ := &TrackTokenArg{

@@ -19,6 +19,7 @@ import (
 )
 
 type UI struct {
+	libkb.Contextified
 	Terminal    *Terminal
 	SecretEntry *SecretEntry
 }
@@ -55,22 +56,22 @@ func (ui BaseIdentifyUI) ReportTrackToken(_ libkb.IdentifyCacheToken) error {
 func (ui BaseIdentifyUI) Finish() {
 }
 
-func (ui BaseIdentifyUI) baseConfirm(o *keybase1.IdentifyOutcome) (bool, error) {
+func (ui BaseIdentifyUI) baseConfirm(o *keybase1.IdentifyOutcome) (keybase1.ConfirmResult, error) {
 	warnings := libkb.ImportWarnings(o.Warnings)
 	if !warnings.IsEmpty() {
 		ui.ShowWarnings(warnings)
 	}
 	if o.TrackOptions.BypassConfirm {
-		return true, nil
+		return keybase1.ConfirmResult{IdentityConfirmed: true, RemoteConfirmed: true}, nil
 	}
-	return false, nil
+	return keybase1.ConfirmResult{IdentityConfirmed: false, RemoteConfirmed: false}, nil
 }
 
 func (ui BaseIdentifyUI) LaunchNetworkChecks(i *keybase1.Identity, u *keybase1.User) {
 	return
 }
 
-func (ui IdentifyUI) Confirm(o *keybase1.IdentifyOutcome) (confirmed bool, err error) {
+func (ui IdentifyUI) Confirm(o *keybase1.IdentifyOutcome) (keybase1.ConfirmResult, error) {
 	return ui.baseConfirm(o)
 }
 
@@ -92,8 +93,7 @@ func (ui IdentifyTrackUI) ReportRevoked(del []keybase1.TrackDiff) {
 	}
 }
 
-func (ui IdentifyTrackUI) Confirm(o *keybase1.IdentifyOutcome) (confirmed bool, err error) {
-	confirmed = false
+func (ui IdentifyTrackUI) Confirm(o *keybase1.IdentifyOutcome) (result keybase1.ConfirmResult, err error) {
 	var prompt string
 	username := o.Username
 
@@ -141,33 +141,29 @@ func (ui IdentifyTrackUI) Confirm(o *keybase1.IdentifyOutcome) (confirmed bool, 
 
 	// Tracking statement exists and is unchanged, nothing to do
 	if !trackChanged {
-		confirmed = true
+		result.IdentityConfirmed = true
 		return
 	}
 
 	// Tracking statement doesn't exist or changed, lets prompt them with the details
-	if confirmed, err = ui.parent.PromptYesNo(PromptDescriptorTrackAction, prompt, promptDefault); err != nil {
+	if result.IdentityConfirmed, err = ui.parent.PromptYesNo(PromptDescriptorTrackAction, prompt, promptDefault); err != nil {
 		return
 	}
-	if !confirmed {
+	if !result.IdentityConfirmed {
 		return
 	}
 
 	// If we want to track remote, lets confirm (unless bypassing)
 	if !o.TrackOptions.LocalOnly {
 		if o.TrackOptions.BypassConfirm {
-			confirmed = true
+			result.RemoteConfirmed = true
 			return
 		}
 		prompt = "Publicly write tracking statement to server?"
-		if confirmed, err = ui.parent.PromptYesNo(PromptDescriptorTrackPublic, prompt, promptDefault); err != nil {
-			return
-		}
-		if !confirmed {
+		if result.RemoteConfirmed, err = ui.parent.PromptYesNo(PromptDescriptorTrackPublic, prompt, promptDefault); err != nil {
 			return
 		}
 	}
-	confirmed = true
 	return
 }
 
@@ -415,7 +411,7 @@ func (ui *UI) GetLogUI() libkb.LogUI {
 }
 
 func (ui *UI) GetGPGUI() libkb.GPGUI {
-	return NewGPGUI(ui.GetTerminalUI(), false)
+	return NewGPGUI(ui.G(), ui.GetTerminalUI(), false)
 }
 
 func (ui *UI) GetProvisionUI(role libkb.KexRole) libkb.ProvisionUI {

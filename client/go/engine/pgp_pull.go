@@ -152,12 +152,12 @@ func (e *PGPPullEngine) processUserWhenLoggedOut(ctx *Context, u string) error {
 	// prompt if the identify is correct
 	outcome := ieng.Outcome().Export()
 	outcome.ForPGPPull = true
-	confirmed, err := ctx.IdentifyUI.Confirm(outcome)
+	result, err := ctx.IdentifyUI.Confirm(outcome)
 	if err != nil {
 		return err
 	}
 
-	if !confirmed {
+	if !result.IdentityConfirmed {
 		e.G().Log.Warning("Not confirmed; skipping key import")
 		return nil
 	}
@@ -171,9 +171,7 @@ func (e *PGPPullEngine) processUserWhenLoggedOut(ctx *Context, u string) error {
 
 func (e *PGPPullEngine) Run(ctx *Context) error {
 
-	e.gpgClient = libkb.NewGpgCLI(libkb.GpgCLIArg{
-		LogUI: ctx.LogUI,
-	})
+	e.gpgClient = libkb.NewGpgCLI(e.G(), ctx.LogUI)
 	err := e.gpgClient.Configure()
 	if err != nil {
 		return err
