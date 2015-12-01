@@ -140,6 +140,10 @@ type createOp struct {
 	// This op should never be persisted.
 	renamed bool
 
+	// If true, during conflict resolution the blocks of the file will
+	// be copied.
+	forceCopy bool
+
 	// If this is set, ths create op needs to be turned has been
 	// turned into a symlink creation locally to avoid a cycle during
 	// conflict resolution, and the following field represents the
@@ -228,6 +232,13 @@ func (co *createOp) CheckConflict(renamer ConflictRenamer, mergedOp op) (
 }
 
 func (co *createOp) GetDefaultAction(mergedPath path) crAction {
+	if co.forceCopy {
+		return &renameUnmergedAction{
+			fromName: co.NewName,
+			toName:   co.NewName,
+			symPath:  co.crSymPath,
+		}
+	}
 	return &copyUnmergedEntryAction{
 		fromName: co.NewName,
 		toName:   co.NewName,
@@ -281,6 +292,11 @@ func (ro *rmOp) CheckConflict(renamer ConflictRenamer, mergedOp op) (
 			// happen if the merged branch deleted the old node and
 			// re-created it, in which case it is totally fine to drop
 			// this rm op for the original node.
+			return &dropUnmergedAction{op: ro}, nil
+		}
+	case *rmOp:
+		if realMergedOp.OldName == ro.OldName {
+			// Both removed the same file.
 			return &dropUnmergedAction{op: ro}, nil
 		}
 	}
