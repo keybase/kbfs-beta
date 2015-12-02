@@ -137,6 +137,10 @@ export default {
       'critical': 6,
       'fatal': 7
     },
+    'ClientType': {
+      'cli': 0,
+      'gui': 1
+    },
     'ProofState': {
       'none': 0,
       'ok': 1,
@@ -216,6 +220,10 @@ export default {
       'updateBroken': 4,
       'updateNewProofs': 5,
       'updateOk': 6
+    },
+    'IdentifySource': {
+      'cli': 0,
+      'kbfs': 1
     }
   },
   'identifyUi': {
