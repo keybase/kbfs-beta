@@ -1,0 +1,5 @@
+build
+tmp
+build_keybase
+build_kbfs
+node_modules
