@@ -13,11 +13,12 @@ import (
 
 	"golang.org/x/net/context"
 
+	"sync"
+
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
 	"github.com/keybase/client/go/spotty"
 	rpc "github.com/keybase/go-framed-msgpack-rpc"
-	"sync"
 )
 
 type UI struct {
@@ -39,6 +40,8 @@ type BaseIdentifyUI struct {
 }
 
 func (ui BaseIdentifyUI) SetStrict(b bool) {}
+
+func (ui BaseIdentifyUI) DisplayUserCard(keybase1.UserCard) {}
 
 type IdentifyUI struct {
 	BaseIdentifyUI
@@ -175,7 +178,7 @@ func (ui IdentifyTrackUI) Confirm(o *keybase1.IdentifyOutcome) (result keybase1.
 }
 
 func (ui BaseIdentifyUI) ReportHook(s string) {
-	os.Stderr.Write([]byte(s + "\n"))
+	ui.parent.ErrorWriter().Write([]byte(s + "\n"))
 }
 
 func (ui BaseIdentifyUI) ShowWarnings(w libkb.Warnings) {
@@ -445,6 +448,11 @@ func (ui *UI) GetProvisionUI(role libkb.KexRole) libkb.ProvisionUI {
 	return ProvisionUI{parent: ui, role: role}
 }
 
+func (ui *UI) GetPgpUI() libkb.PgpUI {
+	// PGPUI goes to stderr so it doesn't munge up stdout
+	return PgpUI{w: ui.ErrorWriter()}
+}
+
 //============================================================
 
 type ProveUI struct {
@@ -608,7 +616,7 @@ type SecretUI struct {
 }
 
 func (ui SecretUI) GetSecret(pinentry keybase1.SecretEntryArg, term *keybase1.SecretEntryArg) (*keybase1.SecretEntryRes, error) {
-	return ui.parent.SecretEntry.Get(pinentry, term, ui.parent)
+	return ui.parent.SecretEntry.Get(pinentry, term, ui.parent.ErrorWriter())
 }
 
 func (ui *UI) Configure() error {
@@ -660,7 +668,7 @@ func (ui SecretUI) GetNewPassphrase(earg keybase1.GetNewPassphraseArg) (eres key
 			rm = ""
 		}
 
-		if text, eres.StoreSecret, err = ui.ppprompt(arg); err != nil {
+		if text, eres.StoreSecret, err = ui.passphrasePrompt(arg); err != nil {
 			return
 		}
 
@@ -671,7 +679,7 @@ func (ui SecretUI) GetNewPassphrase(earg keybase1.GetNewPassphraseArg) (eres key
 
 		arg2 := arg
 		arg2.UseSecretStore = false
-		if text2, _, err = ui.ppprompt(arg2); err != nil {
+		if text2, _, err = ui.passphrasePrompt(arg2); err != nil {
 			return
 		}
 		if text == text2 {
@@ -687,7 +695,7 @@ func (ui SecretUI) GetNewPassphrase(earg keybase1.GetNewPassphraseArg) (eres key
 
 func (ui SecretUI) GetKeybasePassphrase(arg keybase1.GetKeybasePassphraseArg) (res keybase1.GetPassphraseRes, err error) {
 	desc := fmt.Sprintf("Please enter the Keybase passphrase for %s (12+ characters)", arg.Username)
-	res.Passphrase, res.StoreSecret, err = ui.ppprompt(libkb.PromptArg{
+	res.Passphrase, res.StoreSecret, err = ui.passphrasePrompt(libkb.PromptArg{
 		TerminalPrompt: "keybase passphrase",
 		PinentryPrompt: "Your passphrase",
 		PinentryDesc:   desc,
@@ -700,7 +708,7 @@ func (ui SecretUI) GetKeybasePassphrase(arg keybase1.GetKeybasePassphraseArg) (r
 
 func (ui SecretUI) GetPaperKeyPassphrase(arg keybase1.GetPaperKeyPassphraseArg) (text string, err error) {
 	desc := fmt.Sprintf("Please enter a paper backup key passphrase for %s", arg.Username)
-	text, _, err = ui.ppprompt(libkb.PromptArg{
+	text, _, err = ui.passphrasePrompt(libkb.PromptArg{
 		TerminalPrompt: "paper backup key passphrase",
 		PinentryPrompt: "Paper backup key passphrase",
 		PinentryDesc:   desc,
@@ -712,24 +720,18 @@ func (ui SecretUI) GetPaperKeyPassphrase(arg keybase1.GetPaperKeyPassphraseArg) 
 }
 
 func (ui SecretUI) GetPassphrase(pin keybase1.GUIEntryArg, term *keybase1.SecretEntryArg) (res keybase1.GetPassphraseRes, err error) {
-	// if this gets called, then the delegate ui wasn't available.
-	// so only use the terminal
-	if term == nil {
-		term = &keybase1.SecretEntryArg{
-			Prompt:         pin.Prompt,
-			UseSecretStore: pin.Features.SecretStorage.Allow,
-		}
-	}
-	s, err := ui.parent.Terminal.GetSecret(term)
-	if err != nil {
-		return res, err
-	}
-	res.Passphrase = s.Text
-	res.StoreSecret = s.StoreSecret
-	return res, nil
+	res.Passphrase, res.StoreSecret, err = ui.passphrasePrompt(libkb.PromptArg{
+		TerminalPrompt: pin.Prompt,
+		PinentryPrompt: pin.WindowTitle,
+		PinentryDesc:   pin.Prompt,
+		Checker:        &libkb.CheckPassphraseSimple,
+		RetryMessage:   pin.RetryLabel,
+		UseSecretStore: pin.Features.StoreSecret.Allow,
+	})
+	return res, err
 }
 
-func (ui SecretUI) ppprompt(arg libkb.PromptArg) (text string, storeSecret bool, err error) {
+func (ui SecretUI) passphrasePrompt(arg libkb.PromptArg) (text string, storeSecret bool, err error) {
 
 	first := true
 	var res *keybase1.SecretEntryRes
@@ -925,7 +927,11 @@ func (ui *UI) Output(s string) error {
 }
 
 func (ui *UI) OutputWriter() io.Writer {
-	return os.Stdout
+	return libkb.OutputWriter()
+}
+
+func (ui *UI) ErrorWriter() io.Writer {
+	return libkb.ErrorWriter()
 }
 
 func (ui *UI) Printf(format string, a ...interface{}) (n int, err error) {

@@ -40,6 +40,7 @@ build-stamp: \
 	json/notify_session.json \
 	json/notify_users.json \
 	json/pgp.json \
+	json/pgp_ui.json \
 	json/prove.json \
 	json/prove_ui.json \
 	json/provision_ui.json \
@@ -69,10 +70,12 @@ objc-build-stamp: build-stamp
 js/flow-types.js: build-stamp
 	@mkdir -p js/
 	node ./bin/flow.js
+	cp ./js/flow-types.js ../react-native/react/constants/types
 
 js/keybase_v1.js: build-stamp
 	@mkdir -p js/
 	node ./bin/js.js
+	cp ./js/keybase_v1.js ../react-native/react/constants/types
 
 swift-build-stamp: build-stamp
 	ruby ./bin/swift.rb

@@ -347,6 +347,18 @@ type BlockPointer struct {
 	RefNonce BlockRefNonce `codec:"r,omitempty"`
 }
 
+func (p BlockPointer) String() string {
+	s := fmt.Sprintf("BlockPointer{ID: %s, KeyGen: %d, DataVer: %d, Creator: %s", p.ID, p.KeyGen, p.DataVer, p.Creator)
+	if len(p.Writer) > 0 {
+		s += fmt.Sprintf(", Writer: %s", p.Writer)
+	}
+	if p.RefNonce != zeroBlockRefNonce {
+		s += fmt.Sprintf(", RefNonce: %s", p.RefNonce)
+	}
+	s += "}"
+	return s
+}
+
 // BlockInfo contains all information about a block in KBFS and its
 // contents.
 //
@@ -646,6 +658,18 @@ func (h *TlfHandle) ToKBFolder(ctx context.Context, config Config) keybase1.Fold
 // Equal returns true if two TlfHandles are equal.
 func (h *TlfHandle) Equal(rhs *TlfHandle, config Config) bool {
 	return bytes.Equal(h.ToBytes(config), rhs.ToBytes(config))
+}
+
+// Users returns a list of all reader and writer UIDs for the tlf.
+func (h *TlfHandle) Users() []keybase1.UID {
+	var users []keybase1.UID
+	for _, uid := range h.Writers {
+		users = append(users, uid)
+	}
+	for _, uid := range h.Readers {
+		users = append(users, uid)
+	}
+	return users
 }
 
 // Favorite is a top-level favorited folder name.
@@ -978,7 +1002,7 @@ type ReportedError struct {
 	Level ReportingLevel
 	Time  time.Time
 	Error fmt.Stringer
-	// TODO: stacktrace would be nice
+	Stack []uintptr
 }
 
 // MergeStatus represents the merge status of a TLF.

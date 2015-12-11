@@ -35,9 +35,9 @@ out_dir="$build_dir/Keybase-darwin-x64"
 shared_support_dir="$out_dir/Keybase.app/Contents/SharedSupport"
 resources_dir="$out_dir/Keybase.app/Contents/Resources/"
 
-keybase_url="https://github.com/keybase/client/releases/download/v$keybase_version/keybase-$keybase_version.tgz"
+keybase_url="https://github.com/keybase/client/releases/download/v$keybase_version/keybase-$keybase_version-darwin.tgz"
 kbfs_url="https://github.com/keybase/kbfs-beta/releases/download/v$kbfs_version/kbfs-$kbfs_version.tgz"
-installer_url="https://github.com/keybase/client/releases/download/v1.0.4-4/KeybaseInstaller-1.1.0-0.tgz"
+installer_url="https://github.com/keybase/client/releases/download/v1.0.5-6/KeybaseInstaller-1.1.1.tgz"
 
 keybase_bin="$tmp_dir/keybase"
 kbfs_bin="$tmp_dir/kbfs"
@@ -121,7 +121,7 @@ sign() {
 # Create dmg from Keybase.app
 package_dmg() {
   cd $out_dir
-  dmg_name="$app_name-$app_version+$comment.dmg"
+  dmg_name="$app_name-$app_version-$comment.dmg"
   appdmg="appdmg.json"
 
   osx_installer="$client_dir/osx/Install"

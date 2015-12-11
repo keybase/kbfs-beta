@@ -109,8 +109,8 @@
 		},
 		{
 			"path": "github.com/keybase/go-crypto/openpgp/armor",
-			"revision": "67d171e99a58463b40209d86a5438f5b708d8ad0",
-			"revisionTime": "2015-10-12T10:46:00-04:00"
+			"revision": "37775caa3ccd71d0bd7bab8bcd6af282b577dc22",
+			"revisionTime": "2015-12-04T17:01:02-05:00"
 		},
 		{
 			"path": "github.com/keybase/go-crypto/openpgp/clearsign",
@@ -139,8 +139,8 @@
 		},
 		{
 			"path": "github.com/keybase/go-framed-msgpack-rpc",
-			"revision": "ea5ba68758df7c171f045227f9c5981419437e6e",
-			"revisionTime": "2015-12-01T10:28:27-08:00"
+			"revision": "5f85a2a031aa3a8ebd07895a3576fc9f30ea774a",
+			"revisionTime": "2015-12-02T18:35:35-08:00"
 		},
 		{
 			"path": "github.com/keybase/go-jsonw",
@@ -156,6 +156,11 @@
 			"path": "github.com/keybase/go-keychain",
 			"revision": "5b9b2fabbf4433c8c613329a87470b716abf12af",
 			"revisionTime": "2015-11-17T11:50:13-08:00"
+		},
+		{
+			"path": "github.com/keybase/go-logging",
+			"revision": "d7b8c00ee8a21d4cfe58c75c0f09c6d3d030d80f",
+			"revisionTime": "2015-12-09T11:25:47-08:00"
 		},
 		{
 			"path": "github.com/keybase/go-osxkeychain",
@@ -201,11 +206,6 @@
 			"path": "github.com/natefinch/npipe",
 			"revision": "0938d701e50e580f5925c773055eb6d6b32a0cbc",
 			"revisionTime": "2014-10-08T16:43:58+02:00"
-		},
-		{
-			"path": "github.com/op/go-logging",
-			"revision": "f2de3fa73ede49624df5ca7467011ac4fcd43635",
-			"revisionTime": "2015-11-24T23:46:48+01:00"
 		},
 		{
 			"path": "github.com/syndtr/goleveldb/leveldb",

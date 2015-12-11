@@ -160,6 +160,10 @@
     "symbols" : [ "NONE_0", "DEBUG_1", "INFO_2", "NOTICE_3", "WARN_4", "ERROR_5", "CRITICAL_6", "FATAL_7" ]
   }, {
     "type" : "enum",
+    "name" : "ClientType",
+    "symbols" : [ "CLI_0", "GUI_1" ]
+  }, {
+    "type" : "enum",
     "name" : "ProofState",
     "symbols" : [ "NONE_0", "OK_1", "TEMP_FAILURE_2", "PERM_FAILURE_3", "LOOKING_4", "SUPERSEDED_5", "POSTED_6", "REVOKED_7" ]
   }, {
@@ -355,6 +359,9 @@
       "name" : "keyQuery",
       "type" : "string"
     }, {
+      "name" : "skipTrack",
+      "type" : "boolean"
+    }, {
       "name" : "trackOptions",
       "type" : "TrackOptions"
     } ]
@@ -384,9 +391,6 @@
     }, {
       "name" : "signedBy",
       "type" : "string"
-    }, {
-      "name" : "trackOptions",
-      "type" : "TrackOptions"
     } ]
   }, {
     "type" : "record",
@@ -394,9 +398,6 @@
     "fields" : [ {
       "name" : "signedBy",
       "type" : "string"
-    }, {
-      "name" : "trackOptions",
-      "type" : "TrackOptions"
     }, {
       "name" : "signature",
       "type" : "bytes"
