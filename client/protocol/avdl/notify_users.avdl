@@ -1,8 +1,0 @@
-
-@namespace("keybase.1")
-protocol NotifyUsers {
-  import idl "common.avdl";
-
-  @notify("")
-  void userChanged(UID uid);
-}

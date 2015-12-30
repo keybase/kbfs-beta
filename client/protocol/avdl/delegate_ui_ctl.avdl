@@ -1,8 +1,0 @@
-@namespace("keybase.1")
-
-protocol delegateUiCtl {
-  import idl "common.avdl";
-
-  void registerIdentifyUI();
-  void registerSecretUI();
-}
