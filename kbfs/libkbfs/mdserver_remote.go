@@ -20,7 +20,7 @@ const (
 	// MdServerClientName is the client name to include in an authentication token.
 	MdServerClientName = "libkbfs_mdserver_remote"
 	// MdServerClientVersion is the client version to include in an authentication token.
-	MdServerClientVersion = Version + "-" + Build
+	MdServerClientVersion = Version + "-" + DefaultBuild
 )
 
 // MDServerRemote is an implementation of the MDServer interface.
@@ -57,7 +57,7 @@ func NewMDServerRemote(config Config, srvAddr string) *MDServerRemote {
 	mdServer.authToken = NewAuthToken(config,
 		MdServerTokenServer, MdServerTokenExpireIn,
 		MdServerClientName, MdServerClientVersion, mdServer)
-	conn := NewTLSConnection(config, srvAddr, MDServerErrorUnwrapper{}, mdServer, true)
+	conn := NewTLSConnection(config, srvAddr, GetRootCerts(srvAddr), MDServerErrorUnwrapper{}, mdServer, true)
 	mdServer.conn = conn
 	mdServer.client = keybase1.MetadataClient{Cli: conn.GetClient()}
 	return mdServer
@@ -66,7 +66,7 @@ func NewMDServerRemote(config Config, srvAddr string) *MDServerRemote {
 // OnConnect implements the ConnectionHandler interface.
 func (md *MDServerRemote) OnConnect(ctx context.Context,
 	conn *Connection, client keybase1.GenericClient,
-	_ *rpc.Server) error {
+	server *rpc.Server) error {
 
 	// get a new signature
 	signature, err := md.authToken.Sign(ctx)
@@ -79,6 +79,11 @@ func (md *MDServerRemote) OnConnect(ctx context.Context,
 	pingIntervalSeconds, err := c.Authenticate(ctx, signature)
 	if err != nil {
 		return err
+	}
+
+	// request a list of folders needing rekey action
+	if err := md.getFoldersForRekey(ctx, c, server); err != nil {
+		md.log.Warning("MDServerRemote: getFoldersForRekey failed with %v", err)
 	}
 
 	// start pinging
@@ -156,7 +161,10 @@ func (md *MDServerRemote) OnDoCommandError(err error, wait time.Duration) {
 }
 
 // OnDisconnected implements the ConnectionHandler interface.
-func (md *MDServerRemote) OnDisconnected() {
+func (md *MDServerRemote) OnDisconnected(status DisconnectStatus) {
+	if status == StartingNonFirstConnection {
+		md.log.Warning("MDServerRemote is disconnected")
+	}
 	md.cancelObservers()
 	md.resetPingTicker(0)
 	if md.authToken != nil {
@@ -208,8 +216,13 @@ func (md *MDServerRemote) get(ctx context.Context, id TlfID, handle *TlfHandle,
 		Unmerged:      mStatus == Unmerged,
 		LogTags:       LogTagsFromContextToMap(ctx),
 	}
+
+	var err error
 	if id == NullTlfID {
-		arg.FolderHandle = handle.ToBytes(md.config)
+		arg.FolderHandle, err = handle.ToBytes(md.config)
+		if err != nil {
+			return id, nil, err
+		}
 	} else {
 		arg.FolderID = id.String()
 	}
@@ -321,6 +334,18 @@ func (md *MDServerRemote) MetadataUpdate(_ context.Context, arg keybase1.Metadat
 	return nil
 }
 
+// FolderNeedsRekey implements the MetadataUpdateProtocol interface.
+func (md *MDServerRemote) FolderNeedsRekey(_ context.Context, arg keybase1.FolderNeedsRekeyArg) error {
+	id := ParseTlfID(arg.FolderID)
+	if id == NullTlfID {
+		return MDServerErrorBadRequest{"Invalid folder ID"}
+	}
+
+	// TODO: send this to a rekeyer routine.
+	md.log.Debug("MDServerRemote: folder needs rekey: %s", id.String())
+	return nil
+}
+
 // RegisterForUpdate implements the MDServer interface for MDServerRemote.
 func (md *MDServerRemote) RegisterForUpdate(ctx context.Context, id TlfID,
 	currHead MetadataRevision) (<-chan error, error) {
@@ -382,6 +407,25 @@ func (md *MDServerRemote) RegisterForUpdate(ctx context.Context, id TlfID,
 	}
 
 	return c, err
+}
+
+// getFoldersForRekey registers to receive updates about folders needing rekey actions.
+func (md *MDServerRemote) getFoldersForRekey(ctx context.Context,
+	client keybase1.MetadataClient, server *rpc.Server) error {
+	// get this device's crypt public key
+	cryptKey, err := md.config.KBPKI().GetCurrentCryptPublicKey(ctx)
+	if err != nil {
+		return err
+	}
+	// we'll get replies asynchronously as to not block the connection
+	// for doing other active work for the user. they will be sent to
+	// the FolderNeedsRekey handler.
+	if err := server.Register(keybase1.MetadataUpdateProtocol(md)); err != nil {
+		if _, ok := err.(rpc.AlreadyRegisteredError); !ok {
+			return err
+		}
+	}
+	return client.GetFoldersForRekey(ctx, cryptKey.KID)
 }
 
 // Shutdown implements the MDServer interface for MDServerRemote.

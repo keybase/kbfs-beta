@@ -160,7 +160,6 @@ func MakeTestConfigOrBust(t logger.TestLogBackend,
 func ConfigAsUser(config *ConfigLocal, loggedInUser libkb.NormalizedUsername) *ConfigLocal {
 	c := NewConfigLocal()
 	c.SetLoggerMaker(config.loggerFn)
-	c.SetRootCerts(config.RootCerts())
 
 	c.SetBlockSplitter(config.BlockSplitter())
 	c.SetKeyManager(NewKeyManagerStandard(c))
@@ -489,11 +488,10 @@ func (tc TestClock) Now() time.Time {
 	return tc.T
 }
 
-// TestStateForTlf runs the state checker for the given TLF.
-func TestStateForTlf(t *testing.T, ctx context.Context,
-	config Config, tlf TlfID) {
-	sc := NewStateChecker(config)
-	if err := sc.CheckMergedState(ctx, tlf); err != nil {
-		t.Errorf("State check failed: %v", err)
+// CheckConfigAndShutdown shuts down the given config, but fails the
+// test if there's an error.
+func CheckConfigAndShutdown(t *testing.T, config Config) {
+	if err := config.Shutdown(); err != nil {
+		t.Errorf(err.Error())
 	}
 }

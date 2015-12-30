@@ -18,12 +18,11 @@ func crTestInit(t *testing.T) (mockCtrl *gomock.Controller, config *ConfigMock,
 	mockCtrl = gomock.NewController(ctr)
 	config = NewConfigMock(mockCtrl, ctr)
 	id, _, _ := NewFolder(t, 1, 1, false, false)
-	fbo := NewFolderBranchOps(config, FolderBranch{id, MasterBranch}, standard)
-	cr = NewConflictResolver(config, fbo)
+	fbo := newFolderBranchOps(config, FolderBranch{id, MasterBranch}, standard)
 	// usernames don't matter for these tests
 	config.mockKbpki.EXPECT().GetNormalizedUsername(gomock.Any(), gomock.Any()).
 		AnyTimes().Return(libkb.NormalizedUsername("mockUser"), nil)
-	return mockCtrl, config, cr
+	return mockCtrl, config, fbo.cr
 }
 
 func crTestShutdown(mockCtrl *gomock.Controller, config *ConfigMock,
@@ -300,10 +299,10 @@ func testCRGetCROrBust(t *testing.T, config Config,
 func TestCRMergedChainsSimple(t *testing.T) {
 	var userName1, userName2 libkb.NormalizedUsername = "u1", "u2"
 	config1, uid1, ctx := kbfsOpsConcurInit(t, userName1, userName2)
-	defer config1.Shutdown()
+	defer CheckConfigAndShutdown(t, config1)
 
 	config2 := ConfigAsUser(config1.(*ConfigLocal), userName2)
-	defer config2.Shutdown()
+	defer CheckConfigAndShutdown(t, config2)
 	uid2, err := config2.KBPKI().GetCurrentUID(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -332,7 +331,6 @@ func TestCRMergedChainsSimple(t *testing.T) {
 	cr1 := testCRGetCROrBust(t, config1, fb)
 	cr2 := testCRGetCROrBust(t, config2, fb)
 	cr2.Shutdown()
-	cr2.inputChan = make(chan conflictInput)
 
 	// user2 makes a file (causes a conflict, and goes unstaged)
 	_, _, err = config2.KBFSOps().CreateFile(ctx, dir2, "file2", false)
@@ -347,7 +345,7 @@ func TestCRMergedChainsSimple(t *testing.T) {
 	mergedPaths[expectedUnmergedPath.tailPointer()] = mergedPath
 	expectedActions := map[BlockPointer]crActionList{
 		mergedPath.tailPointer(): {&copyUnmergedEntryAction{
-			"file2", "file2", "", false, false}},
+			"file2", "file2", "", false, false, DirEntry{}, nil}},
 	}
 	testCRCheckPathsAndActions(t, cr2, []path{expectedUnmergedPath},
 		mergedPaths, nil, expectedActions)
@@ -359,10 +357,10 @@ func TestCRMergedChainsSimple(t *testing.T) {
 func TestCRMergedChainsDifferentDirectories(t *testing.T) {
 	var userName1, userName2 libkb.NormalizedUsername = "u1", "u2"
 	config1, uid1, ctx := kbfsOpsConcurInit(t, userName1, userName2)
-	defer config1.Shutdown()
+	defer CheckConfigAndShutdown(t, config1)
 
 	config2 := ConfigAsUser(config1.(*ConfigLocal), userName2)
-	defer config2.Shutdown()
+	defer CheckConfigAndShutdown(t, config2)
 	uid2, err := config2.KBPKI().GetCurrentUID(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -393,7 +391,6 @@ func TestCRMergedChainsDifferentDirectories(t *testing.T) {
 	cr1 := testCRGetCROrBust(t, config1, fb)
 	cr2 := testCRGetCROrBust(t, config2, fb)
 	cr2.Shutdown()
-	cr2.inputChan = make(chan conflictInput)
 
 	// user2 makes a file in dir B
 	_, _, err = config2.KBFSOps().CreateFile(ctx, dirB2, "file2", false)
@@ -408,7 +405,7 @@ func TestCRMergedChainsDifferentDirectories(t *testing.T) {
 	mergedPaths[expectedUnmergedPath.tailPointer()] = mergedPath
 	expectedActions := map[BlockPointer]crActionList{
 		mergedPath.tailPointer(): {&copyUnmergedEntryAction{
-			"file2", "file2", "", false, false}},
+			"file2", "file2", "", false, false, DirEntry{}, nil}},
 	}
 	testCRCheckPathsAndActions(t, cr2, []path{expectedUnmergedPath},
 		mergedPaths, nil, expectedActions)
@@ -420,10 +417,10 @@ func TestCRMergedChainsDifferentDirectories(t *testing.T) {
 func TestCRMergedChainsDeletedDirectories(t *testing.T) {
 	var userName1, userName2 libkb.NormalizedUsername = "u1", "u2"
 	config1, uid1, ctx := kbfsOpsConcurInit(t, userName1, userName2)
-	defer config1.Shutdown()
+	defer CheckConfigAndShutdown(t, config1)
 
 	config2 := ConfigAsUser(config1.(*ConfigLocal), userName2)
-	defer config2.Shutdown()
+	defer CheckConfigAndShutdown(t, config2)
 	uid2, err := config2.KBPKI().GetCurrentUID(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -439,7 +436,6 @@ func TestCRMergedChainsDeletedDirectories(t *testing.T) {
 	cr1 := testCRGetCROrBust(t, config1, fb)
 	cr2 := testCRGetCROrBust(t, config2, fb)
 	cr2.Shutdown()
-	cr2.inputChan = make(chan conflictInput)
 
 	nodesB := testCRSharedFolderForUsers(t, uid1, configs,
 		[]string{"dirA", "dirB"})
@@ -497,9 +493,11 @@ func TestCRMergedChainsDeletedDirectories(t *testing.T) {
 	dirAPtr1 := cr1.fbo.nodeCache.PathFromNode(dirA1).tailPointer()
 	expectedActions := map[BlockPointer]crActionList{
 		dirCPtr: {&copyUnmergedEntryAction{"file2", "file2", "",
-			false, false}},
-		dirBPtr:  {&copyUnmergedEntryAction{"dirC", "dirC", "", false, false}},
-		dirAPtr1: {&copyUnmergedEntryAction{"dirB", "dirB", "", false, false}},
+			false, false, DirEntry{}, nil}},
+		dirBPtr: {&copyUnmergedEntryAction{"dirC", "dirC", "", false, false,
+			DirEntry{}, nil}},
+		dirAPtr1: {&copyUnmergedEntryAction{"dirB", "dirB", "", false, false,
+			DirEntry{}, nil}},
 	}
 
 	testCRCheckPathsAndActions(t, cr2, []path{expectedUnmergedPath},
@@ -512,10 +510,10 @@ func TestCRMergedChainsDeletedDirectories(t *testing.T) {
 func TestCRMergedChainsRenamedDirectory(t *testing.T) {
 	var userName1, userName2 libkb.NormalizedUsername = "u1", "u2"
 	config1, uid1, ctx := kbfsOpsConcurInit(t, userName1, userName2)
-	defer config1.Shutdown()
+	defer CheckConfigAndShutdown(t, config1)
 
 	config2 := ConfigAsUser(config1.(*ConfigLocal), userName2)
-	defer config2.Shutdown()
+	defer CheckConfigAndShutdown(t, config2)
 	uid2, err := config2.KBPKI().GetCurrentUID(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -531,7 +529,6 @@ func TestCRMergedChainsRenamedDirectory(t *testing.T) {
 	cr1 := testCRGetCROrBust(t, config1, fb)
 	cr2 := testCRGetCROrBust(t, config2, fb)
 	cr2.Shutdown()
-	cr2.inputChan = make(chan conflictInput)
 
 	nodesB := testCRSharedFolderForUsers(t, uid1, configs,
 		[]string{"dirA", "dirB"})
@@ -578,7 +575,7 @@ func TestCRMergedChainsRenamedDirectory(t *testing.T) {
 
 	expectedActions := map[BlockPointer]crActionList{
 		mergedPath.tailPointer(): {&copyUnmergedEntryAction{
-			"file2", "file2", "", false, false}},
+			"file2", "file2", "", false, false, DirEntry{}, nil}},
 	}
 
 	testCRCheckPathsAndActions(t, cr2, []path{expectedUnmergedPath},
@@ -591,10 +588,10 @@ func TestCRMergedChainsRenamedDirectory(t *testing.T) {
 func TestCRMergedChainsComplex(t *testing.T) {
 	var userName1, userName2 libkb.NormalizedUsername = "u1", "u2"
 	config1, uid1, ctx := kbfsOpsConcurInit(t, userName1, userName2)
-	defer config1.Shutdown()
+	defer CheckConfigAndShutdown(t, config1)
 
 	config2 := ConfigAsUser(config1.(*ConfigLocal), userName2)
-	defer config2.Shutdown()
+	defer CheckConfigAndShutdown(t, config2)
 	uid2, err := config2.KBPKI().GetCurrentUID(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -617,7 +614,6 @@ func TestCRMergedChainsComplex(t *testing.T) {
 	cr1 := testCRGetCROrBust(t, config1, fb)
 	cr2 := testCRGetCROrBust(t, config2, fb)
 	cr2.Shutdown()
-	cr2.inputChan = make(chan conflictInput)
 
 	nodesB := testCRSharedFolderForUsers(t, uid1, configs,
 		[]string{"dirA", "dirB"})
@@ -751,13 +747,13 @@ func TestCRMergedChainsComplex(t *testing.T) {
 	mergedPathE := cr1.fbo.nodeCache.PathFromNode(dirE1)
 	expectedActions := map[BlockPointer]crActionList{
 		mergedPathA.tailPointer(): {&copyUnmergedEntryAction{
-			"dirJ", "dirJ", "", false, false}},
+			"dirJ", "dirJ", "", false, false, DirEntry{}, nil}},
 		mergedPathE.tailPointer(): {&copyUnmergedEntryAction{
-			"dirF", "dirF", "", false, false}},
+			"dirF", "dirF", "", false, false, DirEntry{}, nil}},
 		mergedPathF.tailPointer(): {&copyUnmergedEntryAction{
-			"file3", "file3", "", false, false}},
+			"file3", "file3", "", false, false, DirEntry{}, nil}},
 		mergedPathH.tailPointer(): {&copyUnmergedEntryAction{
-			"file4", "file4", "", false, false}},
+			"file4", "file4", "", false, false, DirEntry{}, nil}},
 		mergedPathB.tailPointer(): {&rmMergedEntryAction{"dirD"}},
 	}
 	// `rm file5` doesn't get an action because the parent directory
@@ -771,10 +767,10 @@ func TestCRMergedChainsComplex(t *testing.T) {
 func TestCRMergedChainsRenameCycleSimple(t *testing.T) {
 	var userName1, userName2 libkb.NormalizedUsername = "u1", "u2"
 	config1, uid1, ctx := kbfsOpsConcurInit(t, userName1, userName2)
-	defer config1.Shutdown()
+	defer CheckConfigAndShutdown(t, config1)
 
 	config2 := ConfigAsUser(config1.(*ConfigLocal), userName2)
-	defer config2.Shutdown()
+	defer CheckConfigAndShutdown(t, config2)
 	uid2, err := config2.KBPKI().GetCurrentUID(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -800,7 +796,6 @@ func TestCRMergedChainsRenameCycleSimple(t *testing.T) {
 	cr1 := testCRGetCROrBust(t, config1, fb)
 	cr2 := testCRGetCROrBust(t, config2, fb)
 	cr2.Shutdown()
-	cr2.inputChan = make(chan conflictInput)
 
 	dirRootPtr := cr2.fbo.nodeCache.PathFromNode(dirRoot2).tailPointer()
 
@@ -842,7 +837,7 @@ func TestCRMergedChainsRenameCycleSimple(t *testing.T) {
 	expectedActions := map[BlockPointer]crActionList{
 		mergedPathRoot.tailPointer(): {&dropUnmergedAction{ro}},
 		mergedPathB.tailPointer(): {&copyUnmergedEntryAction{
-			"dirA", "dirA", "./../", false, false}},
+			"dirA", "dirA", "./../", false, false, DirEntry{}, nil}},
 	}
 
 	testCRCheckPathsAndActions(t, cr2, []path{unmergedPathRoot, unmergedPathB},
@@ -853,10 +848,10 @@ func TestCRMergedChainsRenameCycleSimple(t *testing.T) {
 func TestCRMergedChainsConflictSimple(t *testing.T) {
 	var userName1, userName2 libkb.NormalizedUsername = "u1", "u2"
 	config1, uid1, ctx := kbfsOpsConcurInit(t, userName1, userName2)
-	defer config1.Shutdown()
+	defer CheckConfigAndShutdown(t, config1)
 
 	config2 := ConfigAsUser(config1.(*ConfigLocal), userName2)
-	defer config2.Shutdown()
+	defer CheckConfigAndShutdown(t, config2)
 	uid2, err := config2.KBPKI().GetCurrentUID(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -876,7 +871,6 @@ func TestCRMergedChainsConflictSimple(t *testing.T) {
 	cr1 := testCRGetCROrBust(t, config1, fb)
 	cr2 := testCRGetCROrBust(t, config2, fb)
 	cr2.Shutdown()
-	cr2.inputChan = make(chan conflictInput)
 
 	// pause user 2
 	_, err = DisableUpdatesForTesting(config2, fb)
@@ -918,10 +912,10 @@ func TestCRMergedChainsConflictSimple(t *testing.T) {
 func TestCRMergedChainsConflictFileCollapse(t *testing.T) {
 	var userName1, userName2 libkb.NormalizedUsername = "u1", "u2"
 	config1, uid1, ctx := kbfsOpsConcurInit(t, userName1, userName2)
-	defer config1.Shutdown()
+	defer CheckConfigAndShutdown(t, config1)
 
 	config2 := ConfigAsUser(config1.(*ConfigLocal), userName2)
-	defer config2.Shutdown()
+	defer CheckConfigAndShutdown(t, config2)
 	uid2, err := config2.KBPKI().GetCurrentUID(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -941,7 +935,6 @@ func TestCRMergedChainsConflictFileCollapse(t *testing.T) {
 	cr1 := testCRGetCROrBust(t, config1, fb)
 	cr2 := testCRGetCROrBust(t, config2, fb)
 	cr2.Shutdown()
-	cr2.inputChan = make(chan conflictInput)
 
 	// user1 creates file
 	_, _, err = config1.KBFSOps().CreateFile(ctx, dirRoot1, "file", false)
@@ -1019,10 +1012,10 @@ func TestCRMergedChainsConflictFileCollapse(t *testing.T) {
 func TestCRDoActionsSimple(t *testing.T) {
 	var userName1, userName2 libkb.NormalizedUsername = "u1", "u2"
 	config1, uid1, ctx := kbfsOpsConcurInit(t, userName1, userName2)
-	defer config1.Shutdown()
+	defer CheckConfigAndShutdown(t, config1)
 
 	config2 := ConfigAsUser(config1.(*ConfigLocal), userName2)
-	defer config2.Shutdown()
+	defer CheckConfigAndShutdown(t, config2)
 	uid2, err := config2.KBPKI().GetCurrentUID(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -1051,7 +1044,6 @@ func TestCRDoActionsSimple(t *testing.T) {
 	cr1 := testCRGetCROrBust(t, config1, fb)
 	cr2 := testCRGetCROrBust(t, config2, fb)
 	cr2.Shutdown()
-	cr2.inputChan = make(chan conflictInput)
 
 	// user2 makes a file (causes a conflict, and goes unstaged)
 	_, _, err = config2.KBFSOps().CreateFile(ctx, dir2, "file2", false)
@@ -1104,10 +1096,10 @@ func TestCRDoActionsSimple(t *testing.T) {
 func TestCRDoActionsWriteConflict(t *testing.T) {
 	var userName1, userName2 libkb.NormalizedUsername = "u1", "u2"
 	config1, uid1, ctx := kbfsOpsConcurInit(t, userName1, userName2)
-	defer config1.Shutdown()
+	defer CheckConfigAndShutdown(t, config1)
 
 	config2 := ConfigAsUser(config1.(*ConfigLocal), userName2)
-	defer config2.Shutdown()
+	defer CheckConfigAndShutdown(t, config2)
 	uid2, err := config2.KBPKI().GetCurrentUID(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -1149,7 +1141,6 @@ func TestCRDoActionsWriteConflict(t *testing.T) {
 	cr1 := testCRGetCROrBust(t, config1, fb)
 	cr2 := testCRGetCROrBust(t, config2, fb)
 	cr2.Shutdown()
-	cr2.inputChan = make(chan conflictInput)
 
 	// user1 writes the file
 	err = config1.KBFSOps().Write(ctx, file1, []byte{1, 2, 3}, 0)

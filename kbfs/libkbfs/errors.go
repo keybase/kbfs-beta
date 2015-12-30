@@ -65,12 +65,36 @@ func (e BadTLFNameError) Error() string {
 	return fmt.Sprintf("TLF name %s is in an incorrect format", e.Name)
 }
 
-// InvalidPathError indicates an invalid (i.e., empty) path was encountered.
-type InvalidPathError struct{}
+// InvalidBlockPointerError indicates an invalid block pointer was
+// encountered.
+type InvalidBlockPointerError struct {
+	ptr BlockPointer
+}
+
+// Error implements the error interface for InvalidPathError.
+func (e InvalidBlockPointerError) Error() string {
+	return fmt.Sprintf("Invalid block pointer %s", e.ptr)
+}
+
+// InvalidPathError indicates an invalid path was encountered.
+type InvalidPathError struct {
+	p path
+}
 
 // Error implements the error interface for InvalidPathError.
 func (e InvalidPathError) Error() string {
-	return "Invalid path"
+	return fmt.Sprintf("Invalid path %s", e.p.DebugString())
+}
+
+// InvalidParentPathError indicates a path without a valid parent was
+// encountered.
+type InvalidParentPathError struct {
+	p path
+}
+
+// Error implements the error interface for InvalidParentPathError.
+func (e InvalidParentPathError) Error() string {
+	return fmt.Sprintf("Path with invalid parent %s", e.p.DebugString())
 }
 
 // DirNotEmptyError indicates that the user tried to unlink a
@@ -163,17 +187,32 @@ func NewWriteAccessError(ctx context.Context, config Config, dir *TlfHandle,
 	return WriteAccessError{uid.String(), dirname}
 }
 
-// NotDirError indicates that the user tried to perform a
-// directory-specific operation on something that isn't a
-// subdirectory.
-type NotDirError struct {
-	path path
+// NotFileBlockError indicates that a file block was expected but a
+// block of a different type was found.
+//
+// ptr and branch should be filled in, but p may be empty.
+type NotFileBlockError struct {
+	ptr    BlockPointer
+	branch BranchName
+	p      path
 }
 
-// Error implements the error interface for NotDirError
-func (e NotDirError) Error() string {
-	return fmt.Sprintf("%s is not a directory (in folder %s)",
-		&e.path, e.path.Tlf)
+func (e NotFileBlockError) Error() string {
+	return fmt.Sprintf("The block at %s is not a file block (branch=%s, path=%s)", e.ptr, e.branch, e.p)
+}
+
+// NotDirBlockError indicates that a file block was expected but a
+// block of a different type was found.
+//
+// ptr and branch should be filled in, but p may be empty.
+type NotDirBlockError struct {
+	ptr    BlockPointer
+	branch BranchName
+	p      path
+}
+
+func (e NotDirBlockError) Error() string {
+	return fmt.Sprintf("The block at %s is not a dir block (branch=%s, path=%s)", e.ptr, e.branch, e.p)
 }
 
 // NotFileError indicates that the user tried to perform a
@@ -682,4 +721,17 @@ type NoChainFoundError struct {
 // Error implements the error interface for NoChainFoundError.
 func (e NoChainFoundError) Error() string {
 	return fmt.Sprintf("No chain found for %v", e.ptr)
+}
+
+// DisallowedPrefixError indicates that the user attempted to create
+// an entry using a name with a disallowed prefix.
+type DisallowedPrefixError struct {
+	name   string
+	prefix string
+}
+
+// Error implements the error interface for NoChainFoundError.
+func (e DisallowedPrefixError) Error() string {
+	return fmt.Sprintf("Cannot create %s because it has the prefix %s",
+		e.name, e.prefix)
 }

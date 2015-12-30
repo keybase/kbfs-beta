@@ -94,52 +94,52 @@ type KBFSOps interface {
 	// top-level folders.  This is a remote-access operation.
 	GetFavorites(ctx context.Context) ([]*Favorite, error)
 	// GetOrCreateRootNodeByHandle returns the root node and root
-	// directory entry associated with the given TlfHandle and branch,
+	// entry info associated with the given TlfHandle and branch,
 	// if the logged-in user has read permissions to the top-level
 	// folder.  It creates the folder if one doesn't exist yet (and
 	// branch == MasterBranch), and the logged-in user has write
 	// permissions to the top-level folder.  This is a remote-access
 	// operation.
 	GetOrCreateRootNodeForHandle(ctx context.Context, handle *TlfHandle,
-		branch BranchName) (Node, DirEntry, error)
-	// GetRootNode returns the root node, root directory entry, and
+		branch BranchName) (Node, EntryInfo, error)
+	// GetRootNode returns the root node, root entry info, and
 	// handle associated with the given TlfID and branch, if the
 	// logged-in user has read permissions to the top-level folder.
 	// This is a remote-access operation.
 	GetRootNode(ctx context.Context, folderBranch FolderBranch) (
-		Node, DirEntry, *TlfHandle, error)
+		Node, EntryInfo, *TlfHandle, error)
 	// GetDirChildren returns a map of children in the directory,
-	// mapped to their EntryType, if the logged-in user has read
+	// mapped to their EntryInfo, if the logged-in user has read
 	// permission for the top-level folder.  This is a remote-access
 	// operation.
-	GetDirChildren(ctx context.Context, dir Node) (map[string]EntryType, error)
-	// Lookup returns the Node and directory entry associated with a
+	GetDirChildren(ctx context.Context, dir Node) (map[string]EntryInfo, error)
+	// Lookup returns the Node and entry info associated with a
 	// given name in a directory, if the logged-in user has read
 	// permissions to the top-level folder.  The returned Node is nil
 	// if the name is a symlink.  This is a remote-access operation.
-	Lookup(ctx context.Context, dir Node, name string) (Node, DirEntry, error)
-	// Stat returns the directory entry associated with a
+	Lookup(ctx context.Context, dir Node, name string) (Node, EntryInfo, error)
+	// Stat returns the entry info associated with a
 	// given Node, if the logged-in user has read permissions to the
 	// top-level folder.  This is a remote-access operation.
-	Stat(ctx context.Context, node Node) (DirEntry, error)
+	Stat(ctx context.Context, node Node) (EntryInfo, error)
 	// CreateDir creates a new subdirectory under the given node, if
 	// the logged-in user has write permission to the top-level
 	// folder.  Returns the new Node for the created subdirectory, and
-	// its new directory entry.  This is a remote-sync operation.
+	// its new entry info.  This is a remote-sync operation.
 	CreateDir(ctx context.Context, dir Node, name string) (
-		Node, DirEntry, error)
+		Node, EntryInfo, error)
 	// CreateFile creates a new file under the given node, if the
 	// logged-in user has write permission to the top-level folder.
 	// Returns the new Node for the created file, and its new
-	// directory entry.  This is a remote-sync operation.
+	// entry info.  This is a remote-sync operation.
 	CreateFile(ctx context.Context, dir Node, name string, isEx bool) (
-		Node, DirEntry, error)
+		Node, EntryInfo, error)
 	// CreateLink creates a new symlink under the given node, if the
 	// logged-in user has write permission to the top-level folder.
-	// Returns the new directory entry for the created symlink.  This
+	// Returns the new entry info for the created symlink.  This
 	// is a remote-sync operation.
 	CreateLink(ctx context.Context, dir Node, fromName string, toPath string) (
-		DirEntry, error)
+		EntryInfo, error)
 	// RemoveDir removes the subdirectory represented by the given
 	// node, if the logged-in user has write permission to the
 	// top-level folder.  Will return an error if the subdirectory is
@@ -226,7 +226,7 @@ type KBFSOps interface {
 	SyncFromServer(ctx context.Context, folderBranch FolderBranch) error
 	// Shutdown is called to clean up any resources associated with
 	// this KBFSOps instance.
-	Shutdown()
+	Shutdown() error
 }
 
 // KeybaseDaemon is an interface for communicating with the local
@@ -406,29 +406,51 @@ type KeyCache interface {
 	PutTLFCryptKey(TlfID, KeyGen, TLFCryptKey) error
 }
 
+// BlockCacheLifetime denotes the lifetime of an entry in BlockCache.
+type BlockCacheLifetime int
+
+const (
+	// TransientEntry means that the cache entry may be evicted at
+	// any time.
+	TransientEntry BlockCacheLifetime = iota
+	// PermanentEntry means that the cache entry must remain until
+	// explicitly removed from the cache.
+	PermanentEntry
+)
+
 // BlockCache gets and puts plaintext dir blocks and file blocks into
 // a cache.
 type BlockCache interface {
 	// Get gets the block associated with the given block ID.  Returns
 	// the dirty block for the given ID, if one exists.
 	Get(ptr BlockPointer, branch BranchName) (Block, error)
-	// CheckForKnownPtr sees whether this client already knows a block
-	// ID for the given file block (which must be a direct file block
-	// containing data), within the top-level folder.  Returns the
-	// full BlockPointer associated with that ID, including key and
-	// data versions.  If no ID is known, return an uninitialized
-	// BlockPointer and a nil error.
+	// CheckForKnownPtr sees whether this cache has a transient
+	// entry for the given file block, which must be a direct file
+	// block containing data).  Returns the full BlockPointer
+	// associated with that ID, including key and data versions.
+	// If no ID is known, return an uninitialized BlockPointer and
+	// a nil error.
 	CheckForKnownPtr(tlf TlfID, block *FileBlock) (BlockPointer, error)
 	// Put stores the final (content-addressable) block associated
-	// with the given block ID.
-	Put(ptr BlockPointer, tlf TlfID, block Block) error
-	// PutDirty stores a dirty block currently identified by the given
-	// block pointer and branch name.
+	// with the given block ID. If lifetime is TransientEntry,
+	// then it is assumed that the block exists on the server and
+	// the entry may be evicted from the cache at any time. If
+	// lifetime is PermanentEntry, then it is assumed that the
+	// block doesn't exist on the server and must remain in the
+	// cache until explicitly removed. As an intermediary state,
+	// as when a block is being sent to the server, the block may
+	// be put into the cache both with TransientEntry and
+	// PermanentEntry -- these are two separate entries. This is
+	// fine, since the block should be the same.
+	Put(ptr BlockPointer, tlf TlfID, block Block, lifetime BlockCacheLifetime) error
+	// PutDirty stores a dirty block currently identified by the
+	// given block pointer and branch name. (The lifetime is
+	// implicitly permanent.)
 	PutDirty(ptr BlockPointer, branch BranchName, block Block) error
-	// Delete removes the (non-dirty) block associated with the given
-	// block ID from the cache.  No error is returned if no block
-	// exists for the given ID.
-	Delete(id BlockID) error
+	// Delete removes the permanent entry for the non-dirty block
+	// associated with the given block ID from the cache.  No
+	// error is returned if no block exists for the given ID.
+	DeletePermanent(id BlockID) error
 	// DeleteDirty removes the dirty block associated with the given
 	// block pointer and branch from the cache.  No error is returned
 	// if no block exists for the given ID.
@@ -893,8 +915,6 @@ type Config interface {
 	// flush dirty files, even without a sync from the user.  Should
 	// be true except for during some testing.
 	DoBackgroundFlushes() bool
-	RootCerts() []byte
-	SetRootCerts([]byte)
 	MakeLogger(module string) logger.Logger
 	SetLoggerMaker(func(module string) logger.Logger)
 	// MetricsRegistry may be nil, which should be interpreted as
@@ -904,7 +924,10 @@ type Config interface {
 	MetricsRegistry() metrics.Registry
 	SetMetricsRegistry(metrics.Registry)
 	// Shutdown is called to free config resources.
-	Shutdown()
+	Shutdown() error
+	// CheckStateOnShutdown tells the caller whether or not it is safe
+	// to check the state of the system on shutdown.
+	CheckStateOnShutdown() bool
 }
 
 // NodeCache holds Nodes, and allows libkbfs to update them when

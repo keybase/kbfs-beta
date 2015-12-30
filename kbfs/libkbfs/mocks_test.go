@@ -202,10 +202,10 @@ func (_mr *_MockKBFSOpsRecorder) GetFavorites(arg0 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetFavorites", arg0)
 }
 
-func (_m *MockKBFSOps) GetOrCreateRootNodeForHandle(ctx context.Context, handle *TlfHandle, branch BranchName) (Node, DirEntry, error) {
+func (_m *MockKBFSOps) GetOrCreateRootNodeForHandle(ctx context.Context, handle *TlfHandle, branch BranchName) (Node, EntryInfo, error) {
 	ret := _m.ctrl.Call(_m, "GetOrCreateRootNodeForHandle", ctx, handle, branch)
 	ret0, _ := ret[0].(Node)
-	ret1, _ := ret[1].(DirEntry)
+	ret1, _ := ret[1].(EntryInfo)
 	ret2, _ := ret[2].(error)
 	return ret0, ret1, ret2
 }
@@ -214,10 +214,10 @@ func (_mr *_MockKBFSOpsRecorder) GetOrCreateRootNodeForHandle(arg0, arg1, arg2 i
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetOrCreateRootNodeForHandle", arg0, arg1, arg2)
 }
 
-func (_m *MockKBFSOps) GetRootNode(ctx context.Context, folderBranch FolderBranch) (Node, DirEntry, *TlfHandle, error) {
+func (_m *MockKBFSOps) GetRootNode(ctx context.Context, folderBranch FolderBranch) (Node, EntryInfo, *TlfHandle, error) {
 	ret := _m.ctrl.Call(_m, "GetRootNode", ctx, folderBranch)
 	ret0, _ := ret[0].(Node)
-	ret1, _ := ret[1].(DirEntry)
+	ret1, _ := ret[1].(EntryInfo)
 	ret2, _ := ret[2].(*TlfHandle)
 	ret3, _ := ret[3].(error)
 	return ret0, ret1, ret2, ret3
@@ -227,9 +227,9 @@ func (_mr *_MockKBFSOpsRecorder) GetRootNode(arg0, arg1 interface{}) *gomock.Cal
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetRootNode", arg0, arg1)
 }
 
-func (_m *MockKBFSOps) GetDirChildren(ctx context.Context, dir Node) (map[string]EntryType, error) {
+func (_m *MockKBFSOps) GetDirChildren(ctx context.Context, dir Node) (map[string]EntryInfo, error) {
 	ret := _m.ctrl.Call(_m, "GetDirChildren", ctx, dir)
-	ret0, _ := ret[0].(map[string]EntryType)
+	ret0, _ := ret[0].(map[string]EntryInfo)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -238,10 +238,10 @@ func (_mr *_MockKBFSOpsRecorder) GetDirChildren(arg0, arg1 interface{}) *gomock.
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetDirChildren", arg0, arg1)
 }
 
-func (_m *MockKBFSOps) Lookup(ctx context.Context, dir Node, name string) (Node, DirEntry, error) {
+func (_m *MockKBFSOps) Lookup(ctx context.Context, dir Node, name string) (Node, EntryInfo, error) {
 	ret := _m.ctrl.Call(_m, "Lookup", ctx, dir, name)
 	ret0, _ := ret[0].(Node)
-	ret1, _ := ret[1].(DirEntry)
+	ret1, _ := ret[1].(EntryInfo)
 	ret2, _ := ret[2].(error)
 	return ret0, ret1, ret2
 }
@@ -250,9 +250,9 @@ func (_mr *_MockKBFSOpsRecorder) Lookup(arg0, arg1, arg2 interface{}) *gomock.Ca
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "Lookup", arg0, arg1, arg2)
 }
 
-func (_m *MockKBFSOps) Stat(ctx context.Context, node Node) (DirEntry, error) {
+func (_m *MockKBFSOps) Stat(ctx context.Context, node Node) (EntryInfo, error) {
 	ret := _m.ctrl.Call(_m, "Stat", ctx, node)
-	ret0, _ := ret[0].(DirEntry)
+	ret0, _ := ret[0].(EntryInfo)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -261,10 +261,10 @@ func (_mr *_MockKBFSOpsRecorder) Stat(arg0, arg1 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "Stat", arg0, arg1)
 }
 
-func (_m *MockKBFSOps) CreateDir(ctx context.Context, dir Node, name string) (Node, DirEntry, error) {
+func (_m *MockKBFSOps) CreateDir(ctx context.Context, dir Node, name string) (Node, EntryInfo, error) {
 	ret := _m.ctrl.Call(_m, "CreateDir", ctx, dir, name)
 	ret0, _ := ret[0].(Node)
-	ret1, _ := ret[1].(DirEntry)
+	ret1, _ := ret[1].(EntryInfo)
 	ret2, _ := ret[2].(error)
 	return ret0, ret1, ret2
 }
@@ -273,10 +273,10 @@ func (_mr *_MockKBFSOpsRecorder) CreateDir(arg0, arg1, arg2 interface{}) *gomock
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "CreateDir", arg0, arg1, arg2)
 }
 
-func (_m *MockKBFSOps) CreateFile(ctx context.Context, dir Node, name string, isEx bool) (Node, DirEntry, error) {
+func (_m *MockKBFSOps) CreateFile(ctx context.Context, dir Node, name string, isEx bool) (Node, EntryInfo, error) {
 	ret := _m.ctrl.Call(_m, "CreateFile", ctx, dir, name, isEx)
 	ret0, _ := ret[0].(Node)
-	ret1, _ := ret[1].(DirEntry)
+	ret1, _ := ret[1].(EntryInfo)
 	ret2, _ := ret[2].(error)
 	return ret0, ret1, ret2
 }
@@ -285,9 +285,9 @@ func (_mr *_MockKBFSOpsRecorder) CreateFile(arg0, arg1, arg2, arg3 interface{}) 
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "CreateFile", arg0, arg1, arg2, arg3)
 }
 
-func (_m *MockKBFSOps) CreateLink(ctx context.Context, dir Node, fromName string, toPath string) (DirEntry, error) {
+func (_m *MockKBFSOps) CreateLink(ctx context.Context, dir Node, fromName string, toPath string) (EntryInfo, error) {
 	ret := _m.ctrl.Call(_m, "CreateLink", ctx, dir, fromName, toPath)
-	ret0, _ := ret[0].(DirEntry)
+	ret0, _ := ret[0].(EntryInfo)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -429,8 +429,10 @@ func (_mr *_MockKBFSOpsRecorder) SyncFromServer(arg0, arg1 interface{}) *gomock.
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "SyncFromServer", arg0, arg1)
 }
 
-func (_m *MockKBFSOps) Shutdown() {
-	_m.ctrl.Call(_m, "Shutdown")
+func (_m *MockKBFSOps) Shutdown() error {
+	ret := _m.ctrl.Call(_m, "Shutdown")
+	ret0, _ := ret[0].(error)
+	return ret0
 }
 
 func (_mr *_MockKBFSOpsRecorder) Shutdown() *gomock.Call {
@@ -944,14 +946,14 @@ func (_mr *_MockBlockCacheRecorder) CheckForKnownPtr(arg0, arg1 interface{}) *go
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "CheckForKnownPtr", arg0, arg1)
 }
 
-func (_m *MockBlockCache) Put(ptr BlockPointer, tlf TlfID, block Block) error {
-	ret := _m.ctrl.Call(_m, "Put", ptr, tlf, block)
+func (_m *MockBlockCache) Put(ptr BlockPointer, tlf TlfID, block Block, lifetime BlockCacheLifetime) error {
+	ret := _m.ctrl.Call(_m, "Put", ptr, tlf, block, lifetime)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-func (_mr *_MockBlockCacheRecorder) Put(arg0, arg1, arg2 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "Put", arg0, arg1, arg2)
+func (_mr *_MockBlockCacheRecorder) Put(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "Put", arg0, arg1, arg2, arg3)
 }
 
 func (_m *MockBlockCache) PutDirty(ptr BlockPointer, branch BranchName, block Block) error {
@@ -964,14 +966,14 @@ func (_mr *_MockBlockCacheRecorder) PutDirty(arg0, arg1, arg2 interface{}) *gomo
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "PutDirty", arg0, arg1, arg2)
 }
 
-func (_m *MockBlockCache) Delete(id BlockID) error {
-	ret := _m.ctrl.Call(_m, "Delete", id)
+func (_m *MockBlockCache) DeletePermanent(id BlockID) error {
+	ret := _m.ctrl.Call(_m, "DeletePermanent", id)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-func (_mr *_MockBlockCacheRecorder) Delete(arg0 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "Delete", arg0)
+func (_mr *_MockBlockCacheRecorder) DeletePermanent(arg0 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "DeletePermanent", arg0)
 }
 
 func (_m *MockBlockCache) DeleteDirty(ptr BlockPointer, branch BranchName) error {
@@ -2376,24 +2378,6 @@ func (_mr *_MockConfigRecorder) DoBackgroundFlushes() *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "DoBackgroundFlushes")
 }
 
-func (_m *MockConfig) RootCerts() []byte {
-	ret := _m.ctrl.Call(_m, "RootCerts")
-	ret0, _ := ret[0].([]byte)
-	return ret0
-}
-
-func (_mr *_MockConfigRecorder) RootCerts() *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "RootCerts")
-}
-
-func (_m *MockConfig) SetRootCerts(_param0 []byte) {
-	_m.ctrl.Call(_m, "SetRootCerts", _param0)
-}
-
-func (_mr *_MockConfigRecorder) SetRootCerts(arg0 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "SetRootCerts", arg0)
-}
-
 func (_m *MockConfig) MakeLogger(module string) logger.Logger {
 	ret := _m.ctrl.Call(_m, "MakeLogger", module)
 	ret0, _ := ret[0].(logger.Logger)
@@ -2430,12 +2414,24 @@ func (_mr *_MockConfigRecorder) SetMetricsRegistry(arg0 interface{}) *gomock.Cal
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "SetMetricsRegistry", arg0)
 }
 
-func (_m *MockConfig) Shutdown() {
-	_m.ctrl.Call(_m, "Shutdown")
+func (_m *MockConfig) Shutdown() error {
+	ret := _m.ctrl.Call(_m, "Shutdown")
+	ret0, _ := ret[0].(error)
+	return ret0
 }
 
 func (_mr *_MockConfigRecorder) Shutdown() *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "Shutdown")
+}
+
+func (_m *MockConfig) CheckStateOnShutdown() bool {
+	ret := _m.ctrl.Call(_m, "CheckStateOnShutdown")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+func (_mr *_MockConfigRecorder) CheckStateOnShutdown() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "CheckStateOnShutdown")
 }
 
 // Mock of NodeCache interface
@@ -2595,6 +2591,18 @@ func (_m *MockcrAction) EXPECT() *_MockcrActionRecorder {
 	return _m.recorder
 }
 
+func (_m *MockcrAction) swapUnmergedBlock(unmergedChains *crChains, mergedChains *crChains, unmergedBlock *DirBlock) (bool, BlockPointer, error) {
+	ret := _m.ctrl.Call(_m, "swapUnmergedBlock", unmergedChains, mergedChains, unmergedBlock)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(BlockPointer)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+func (_mr *_MockcrActionRecorder) swapUnmergedBlock(arg0, arg1, arg2 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "swapUnmergedBlock", arg0, arg1, arg2)
+}
+
 func (_m *MockcrAction) do(ctx context.Context, unmergedCopier fileBlockDeepCopier, mergedCopier fileBlockDeepCopier, unmergedBlock *DirBlock, mergedBlock *DirBlock) error {
 	ret := _m.ctrl.Call(_m, "do", ctx, unmergedCopier, mergedCopier, unmergedBlock, mergedBlock)
 	ret0, _ := ret[0].(error)
@@ -2605,14 +2613,14 @@ func (_mr *_MockcrActionRecorder) do(arg0, arg1, arg2, arg3, arg4 interface{}) *
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "do", arg0, arg1, arg2, arg3, arg4)
 }
 
-func (_m *MockcrAction) updateOps(unmergedMostRecent BlockPointer, mergedMostRecent BlockPointer, mergedBlock *DirBlock, unmergedChains *crChains, mergedChains *crChains) error {
-	ret := _m.ctrl.Call(_m, "updateOps", unmergedMostRecent, mergedMostRecent, mergedBlock, unmergedChains, mergedChains)
+func (_m *MockcrAction) updateOps(unmergedMostRecent BlockPointer, mergedMostRecent BlockPointer, unmergedBlock *DirBlock, mergedBlock *DirBlock, unmergedChains *crChains, mergedChains *crChains) error {
+	ret := _m.ctrl.Call(_m, "updateOps", unmergedMostRecent, mergedMostRecent, unmergedBlock, mergedBlock, unmergedChains, mergedChains)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-func (_mr *_MockcrActionRecorder) updateOps(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "updateOps", arg0, arg1, arg2, arg3, arg4)
+func (_mr *_MockcrActionRecorder) updateOps(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "updateOps", arg0, arg1, arg2, arg3, arg4, arg5)
 }
 
 func (_m *MockcrAction) String() string {

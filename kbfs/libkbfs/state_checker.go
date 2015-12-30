@@ -25,15 +25,11 @@ func NewStateChecker(config Config) *StateChecker {
 // the blocksFound map, if the given path represents an indirect
 // block.
 func (sc *StateChecker) findAllFileBlocks(ctx context.Context,
-	ops *FolderBranchOps, md *RootMetadata, file path,
+	ops *folderBranchOps, md *RootMetadata, file path,
 	blocksFound map[BlockPointer]bool) error {
-	block, err := ops.getBlockForReading(ctx, md, file, NewFileBlock)
+	fblock, err := ops.getFileBlockForReading(ctx, md, file.tailPointer(), file.Branch, file)
 	if err != nil {
 		return err
-	}
-	fblock, ok := block.(*FileBlock)
-	if !ok {
-		return NotFileError{file}
 	}
 
 	if !fblock.IsInd {
@@ -43,9 +39,8 @@ func (sc *StateChecker) findAllFileBlocks(ctx context.Context,
 	parentPath := file.parentPath()
 	for _, childPtr := range fblock.IPtrs {
 		blocksFound[childPtr.BlockPointer] = true
-		p := parentPath.ChildPathNoPtr(file.tailName())
-		p.path[len(p.path)-1].BlockPointer = childPtr.BlockPointer
-		err := sc.findAllFileBlocks(ctx, ops, md, *p, blocksFound)
+		p := parentPath.ChildPath(file.tailName(), childPtr.BlockPointer)
+		err := sc.findAllFileBlocks(ctx, ops, md, p, blocksFound)
 		if err != nil {
 			return err
 		}
@@ -57,15 +52,11 @@ func (sc *StateChecker) findAllFileBlocks(ctx context.Context,
 // the blocksFound map, and then recursively checks all
 // subdirectories.
 func (sc *StateChecker) findAllBlocksInPath(ctx context.Context,
-	ops *FolderBranchOps, md *RootMetadata, dir path,
+	ops *folderBranchOps, md *RootMetadata, dir path,
 	blocksFound map[BlockPointer]bool) error {
-	block, err := ops.getBlockForReading(ctx, md, dir, NewDirBlock)
+	dblock, err := ops.getDirBlockForReading(ctx, md, dir.tailPointer(), dir.Branch, dir)
 	if err != nil {
 		return err
-	}
-	dblock, ok := block.(*DirBlock)
-	if !ok {
-		return NotDirError{dir}
 	}
 
 	for name, de := range dblock.Children {
@@ -74,17 +65,16 @@ func (sc *StateChecker) findAllBlocksInPath(ctx context.Context,
 		}
 
 		blocksFound[de.BlockPointer] = true
-		p := dir.ChildPathNoPtr(name)
-		p.path[len(p.path)-1].BlockPointer = de.BlockPointer
+		p := dir.ChildPath(name, de.BlockPointer)
 
 		if de.Type == Dir {
-			err := sc.findAllBlocksInPath(ctx, ops, md, *p, blocksFound)
+			err := sc.findAllBlocksInPath(ctx, ops, md, p, blocksFound)
 			if err != nil {
 				return err
 			}
 		} else {
 			// If it's a file, check to see if it's indirect.
-			err := sc.findAllFileBlocks(ctx, ops, md, *p, blocksFound)
+			err := sc.findAllFileBlocks(ctx, ops, md, p, blocksFound)
 			if err != nil {
 				return err
 			}
@@ -104,7 +94,8 @@ func (sc *StateChecker) CheckMergedState(ctx context.Context, tlf TlfID) error {
 		return err
 	}
 	if len(rmds) == 0 {
-		return fmt.Errorf("No state to check for folder %s", tlf)
+		sc.log.CDebugf(ctx, "No state to check for folder %s", tlf)
+		return nil
 	}
 
 	// Re-embed block changes.

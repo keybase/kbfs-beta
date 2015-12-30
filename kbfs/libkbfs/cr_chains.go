@@ -112,6 +112,13 @@ type renameInfo struct {
 	newName           string
 }
 
+func (ri renameInfo) String() string {
+	return fmt.Sprintf(
+		"renameInfo{originalOldParent: %s, oldName: %s, originalNewParent: %s, newName: %s}",
+		ri.originalOldParent, ri.oldName,
+		ri.originalNewParent, ri.newName)
+}
+
 // crChains contains a crChain for every KBFS node affected by the
 // operations over a given set of MD updates.  The chains are indexed
 // by both the starting (original) and ending (most recent) pointers.
@@ -218,6 +225,22 @@ func (ccs *crChains) makeChainForOp(op op) error {
 			// this is a rename within the same directory
 			ndu = realOp.OldDir.Unref
 			ndr = realOp.OldDir.Ref
+		}
+
+		if len(realOp.Unrefs()) > 0 {
+			// Something was overwritten; make an explicit rm for it
+			// so we can check for conflicts.
+			roOverwrite := newRmOp(realOp.NewName, ndu)
+			roOverwrite.setWriterName(realOp.getWriterName())
+			roOverwrite.Dir.Ref = ndr
+			err = ccs.addOp(ndr, roOverwrite)
+			if err != nil {
+				return err
+			}
+			// Transfer any unrefs over.
+			for _, ptr := range realOp.Unrefs() {
+				roOverwrite.AddUnrefBlock(ptr)
+			}
 		}
 
 		co := newCreateOp(realOp.NewName, ndu, realOp.RenamedType)

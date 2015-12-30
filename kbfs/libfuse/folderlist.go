@@ -3,6 +3,7 @@ package libfuse
 import (
 	"os"
 	"sync"
+	"time"
 
 	"bazil.org/fuse"
 	"bazil.org/fuse/fs"
@@ -52,6 +53,25 @@ func (fl *FolderList) Lookup(ctx context.Context, req *fuse.LookupRequest, resp 
 		return child, nil
 	}
 
+	// Before parsing the tlf handle (which results in identify calls
+	// that cause tracker popups, first see if there's any quick
+	// normalization of usernames we can do.  For example, this avoids
+	// an identify in the case of "HEAD" which might just be a shell
+	// trying to look for a git repo rather than a real user lookup
+	// for "head" (KBFS-531).  Note that the name might still contain
+	// assertions, which will result in another alias in a subsequent
+	// lookup.
+	normalizedName, err := libkbfs.NormalizeUserNamesInTLF(req.Name)
+	if err != nil {
+		return nil, err
+	}
+	if normalizedName != req.Name {
+		n := &Alias{
+			canon: normalizedName,
+		}
+		return n, nil
+	}
+
 	dh, err := libkbfs.ParseTlfHandle(ctx, fl.fs.config, req.Name)
 	if err != nil {
 		return nil, err
@@ -77,6 +97,14 @@ func (fl *FolderList) Lookup(ctx context.Context, req *fuse.LookupRequest, resp 
 	}
 
 	rootNode, _, err := fl.fs.config.KBFSOps().GetOrCreateRootNodeForHandle(ctx, dh, libkbfs.MasterBranch)
+	if _, isWriteErr := err.(libkbfs.WriteAccessError); isWriteErr {
+		fl.fs.log.CDebugf(ctx, "Local user doesn't have permission to create "+
+			" %s and it doesn't exist yet, so making an empty folder", req.Name)
+		// Only cache this empty folder for a minute, in case a valid
+		// writer comes along and creates it.
+		resp.EntryValid = 60 * time.Second
+		return &EmptyFolder{fl.fs}, nil
+	}
 	if err != nil {
 		// TODO make errors aware of fuse
 		return nil, err

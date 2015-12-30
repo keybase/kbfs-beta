@@ -125,7 +125,11 @@ func (md *MDServerLocal) GetForHandle(ctx context.Context, handle *TlfHandle,
 		return id, nil, errors.New("MD server already shut down")
 	}
 
-	handleBytes := handle.ToBytes(md.config)
+	handleBytes, err := handle.ToBytes(md.config)
+	if err != nil {
+		return id, nil, err
+	}
+
 	buf, err := md.handleDb.Get(handleBytes, nil)
 	if err != nil && err != leveldb.ErrNotFound {
 		return id, nil, MDServerError{err}
@@ -138,6 +142,15 @@ func (md *MDServerLocal) GetForHandle(ctx context.Context, handle *TlfHandle,
 		}
 		rmds, err := md.GetForTLF(ctx, id, NullBranchID, mStatus)
 		return id, rmds, err
+	}
+
+	// Non-readers shouldn't be able to create the dir.
+	uid, err := md.config.KBPKI().GetCurrentUID(ctx)
+	if err != nil {
+		return id, nil, err
+	}
+	if !handle.IsReader(uid) {
+		return id, nil, MDServerErrorUnauthorized{}
 	}
 
 	// Allocate a new random ID.
@@ -618,4 +631,12 @@ func (md *MDServerLocal) copy(config Config) *MDServerLocal {
 	// observers correctly no matter where they got on the list.
 	return &MDServerLocal{config, md.handleDb, md.mdDb, md.branchDb, md.mutex,
 		md.observers, md.sessionHeads, md.shutdown, md.shutdownLock}
+}
+
+// isShutdown returns whether the logical, shared MDServer instance
+// has been shut down.
+func (md *MDServerLocal) isShutdown() bool {
+	md.shutdownLock.RLock()
+	defer md.shutdownLock.RUnlock()
+	return *md.shutdown
 }

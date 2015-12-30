@@ -35,6 +35,7 @@ func makeFS(t testing.TB, config *libkbfs.ConfigLocal) (
 	filesys := &FS{
 		config: config,
 		log:    logger.NewTestLogger(t),
+		errLog: logger.NewTestLogger(t),
 	}
 	ctx := context.Background()
 	ctx = context.WithValue(ctx, CtxAppIDKey, filesys)
@@ -123,41 +124,9 @@ func timeEqualFuzzy(a, b time.Time, skew time.Duration) bool {
 	return !a.Before(b1) && !a.After(b2)
 }
 
-func testStateForHandle(t *testing.T, config libkbfs.Config,
-	h *libkbfs.TlfHandle) {
-	ops := config.KBFSOps()
-	ctx := context.Background()
-	root, _, err := ops.GetOrCreateRootNodeForHandle(ctx, h,
-		libkbfs.MasterBranch)
-	if err != nil {
-		t.Fatalf("Couldn't get root for handle %s", h.ToString(ctx, config))
-	}
-
-	libkbfs.TestStateForTlf(t, ctx, config, root.GetFolderBranch().Tlf)
-}
-
-func testStateForPrivateFolder(t *testing.T, config libkbfs.Config,
-	tlf string) {
-	h, err := libkbfs.ParseTlfHandle(context.Background(), config, tlf)
-	if err != nil {
-		t.Fatalf("cannot parse %s as folder: %v", tlf, err)
-	}
-	testStateForHandle(t, config, h)
-}
-
-func testStateForPublicFolder(t *testing.T, config libkbfs.Config,
-	tlf string) {
-	h, err := libkbfs.ParseTlfHandle(context.Background(), config, tlf)
-	if err != nil {
-		t.Fatalf("cannot parse %s as folder: %v", tlf, err)
-	}
-	h.Readers = append(h.Readers, keybase1.PublicUID)
-	testStateForHandle(t, config, h)
-}
-
 func TestStatRoot(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -173,7 +142,7 @@ func TestStatRoot(t *testing.T) {
 
 func TestStatPrivate(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -185,12 +154,11 @@ func TestStatPrivate(t *testing.T) {
 	if g, e := fi.Mode().String(), `drwxr-xr-x`; g != e {
 		t.Errorf("wrong mode for folder: %q != %q", g, e)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestStatPublic(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -202,12 +170,11 @@ func TestStatPublic(t *testing.T) {
 	if g, e := fi.Mode().String(), `drwxr-xr-x`; g != e {
 		t.Errorf("wrong mode for folder: %q != %q", g, e)
 	}
-	testStateForPublicFolder(t, config, "jdoe")
 }
 
 func TestStatMyFolder(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -219,12 +186,11 @@ func TestStatMyFolder(t *testing.T) {
 	if g, e := fi.Mode().String(), `drwx------`; g != e {
 		t.Errorf("wrong mode for folder: %q != %q", g, e)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestStatNonexistentFolder(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -232,12 +198,11 @@ func TestStatNonexistentFolder(t *testing.T) {
 	if _, err := os.Lstat(path.Join(mnt.Dir, PrivateName, "does-not-exist")); !os.IsNotExist(err) {
 		t.Fatalf("expected ENOENT: %v", err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestStatAlias(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -257,12 +222,40 @@ func TestStatAlias(t *testing.T) {
 	if g, e := target, "jdoe"; g != e {
 		t.Errorf("wrong alias symlink target: %q != %q", g, e)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
+}
+
+// Test that we can determine a normalized alias without any identify
+// calls (regression test for KBFS-531).
+func TestStatAliasCausesNoIdentifies(t *testing.T) {
+	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
+	defer config.Shutdown()
+
+	mnt, _, cancelFn := makeFS(t, config)
+	defer mnt.Close()
+	defer cancelFn()
+
+	p := path.Join(mnt.Dir, PublicName, "HEAD")
+	// Even though "head" is not a real user in our config, this stat
+	// should succeed because no identify calls should be triggered.
+	fi, err := os.Lstat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g, e := fi.Mode().String(), `Lrwxrwxrwx`; g != e {
+		t.Errorf("wrong mode for alias : %q != %q", g, e)
+	}
+	target, err := os.Readlink(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g, e := target, "head"; g != e {
+		t.Errorf("wrong alias symlink target: %q != %q", g, e)
+	}
 }
 
 func TestStatMyPublic(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -274,12 +267,11 @@ func TestStatMyPublic(t *testing.T) {
 	if g, e := fi.Mode().String(), `drwxr-xr-x`; g != e {
 		t.Errorf("wrong mode for folder: %q != %q", g, e)
 	}
-	testStateForPublicFolder(t, config, "jdoe")
 }
 
 func TestReaddirRoot(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -292,7 +284,7 @@ func TestReaddirRoot(t *testing.T) {
 
 func TestReaddirPrivate(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -314,12 +306,11 @@ func TestReaddirPrivate(t *testing.T) {
 	checkDir(t, path.Join(mnt.Dir, PrivateName), map[string]fileInfoCheck{
 		"jdoe": mustBeDir,
 	})
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestReaddirPublic(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -342,23 +333,21 @@ func TestReaddirPublic(t *testing.T) {
 	checkDir(t, path.Join(mnt.Dir, PublicName), map[string]fileInfoCheck{
 		"jdoe": mustBeDir,
 	})
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestReaddirMyFolderEmpty(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
 
 	checkDir(t, path.Join(mnt.Dir, PrivateName, "jdoe"), map[string]fileInfoCheck{})
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestReaddirMyFolderWithFiles(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -377,7 +366,6 @@ func TestReaddirMyFolderWithFiles(t *testing.T) {
 		}
 	}
 	checkDir(t, path.Join(mnt.Dir, PrivateName, "jdoe"), files)
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func testOneCreateThenRead(t *testing.T, p string) {
@@ -405,14 +393,13 @@ func testOneCreateThenRead(t *testing.T, p string) {
 
 func TestCreateThenRead(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
 
 	p := path.Join(mnt.Dir, PrivateName, "jdoe", "myfile")
 	testOneCreateThenRead(t, p)
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 // Tests that writing and reading multiple files works, implicitly
@@ -421,7 +408,7 @@ func TestCreateThenRead(t *testing.T) {
 // with).
 func TestMultipleCreateThenRead(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -430,12 +417,11 @@ func TestMultipleCreateThenRead(t *testing.T) {
 	testOneCreateThenRead(t, p1)
 	p2 := path.Join(mnt.Dir, PrivateName, "jdoe", "myfile2")
 	testOneCreateThenRead(t, p2)
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestReadUnflushed(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -459,12 +445,11 @@ func TestReadUnflushed(t *testing.T) {
 	if g, e := string(buf), input; g != e {
 		t.Errorf("bad file contents: %q != %q", g, e)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestMountAgain(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 
 	const input = "hello, world\n"
 	const filename = "myfile"
@@ -492,12 +477,11 @@ func TestMountAgain(t *testing.T) {
 			t.Errorf("bad file contents: %q != %q", g, e)
 		}
 	}()
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestCreateExecutable(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -513,12 +497,11 @@ func TestCreateExecutable(t *testing.T) {
 	if g, e := fi.Mode().String(), `-rwxr-xr-x`; g != e {
 		t.Errorf("wrong mode for executable: %q != %q", g, e)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestMkdir(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -534,12 +517,11 @@ func TestMkdir(t *testing.T) {
 	if g, e := fi.Mode().String(), `drwx------`; g != e {
 		t.Errorf("wrong mode for subdir: %q != %q", g, e)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestMkdirAndCreateDeep(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	const input = "hello, world\n"
 
 	func() {
@@ -576,12 +558,11 @@ func TestMkdirAndCreateDeep(t *testing.T) {
 			t.Errorf("bad file contents: %q != %q", g, e)
 		}
 	}()
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestSymlink(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 
 	func() {
 		mnt, _, cancelFn := makeFS(t, config)
@@ -609,12 +590,11 @@ func TestSymlink(t *testing.T) {
 			t.Errorf("bad symlink target: %q != %q", g, e)
 		}
 	}()
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRename(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -647,12 +627,11 @@ func TestRename(t *testing.T) {
 	if _, err := ioutil.ReadFile(p1); !os.IsNotExist(err) {
 		t.Errorf("old name still exists: %v", err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRenameOverwrite(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -686,12 +665,11 @@ func TestRenameOverwrite(t *testing.T) {
 	if _, err := ioutil.ReadFile(p1); !os.IsNotExist(err) {
 		t.Errorf("old name still exists: %v", err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRenameCrossDir(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -729,12 +707,11 @@ func TestRenameCrossDir(t *testing.T) {
 	if _, err := ioutil.ReadFile(p1); !os.IsNotExist(err) {
 		t.Errorf("old name still exists: %v", err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRenameCrossFolder(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -783,13 +760,11 @@ func TestRenameCrossFolder(t *testing.T) {
 	if _, err := ioutil.ReadFile(p2); !os.IsNotExist(err) {
 		t.Errorf("new name exists even on error: %v", err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
-	testStateForPrivateFolder(t, config, "wsmith,jdoe")
 }
 
 func TestWriteThenRename(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -838,12 +813,11 @@ func TestWriteThenRename(t *testing.T) {
 	if _, err := ioutil.ReadFile(p1); !os.IsNotExist(err) {
 		t.Errorf("old name still exists: %v", err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestWriteThenRenameCrossDir(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -898,12 +872,11 @@ func TestWriteThenRenameCrossDir(t *testing.T) {
 	if _, err := ioutil.ReadFile(p1); !os.IsNotExist(err) {
 		t.Errorf("old name still exists: %v", err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRemoveFile(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -923,12 +896,11 @@ func TestRemoveFile(t *testing.T) {
 	if _, err := ioutil.ReadFile(p); !os.IsNotExist(err) {
 		t.Errorf("file still exists: %v", err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRemoveDir(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -947,12 +919,11 @@ func TestRemoveDir(t *testing.T) {
 	if _, err := os.Stat(p); !os.IsNotExist(err) {
 		t.Errorf("file still exists: %v", err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRemoveDirNotEmpty(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -974,12 +945,11 @@ func TestRemoveDirNotEmpty(t *testing.T) {
 	if _, err := ioutil.ReadFile(pFile); err != nil {
 		t.Errorf("file was lost: %v", err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRemoveFileWhileOpenWriting(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1009,12 +979,11 @@ func TestRemoveFileWhileOpenWriting(t *testing.T) {
 	if _, err := ioutil.ReadFile(p); !os.IsNotExist(err) {
 		t.Errorf("file still exists: %v", err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRemoveFileWhileOpenReading(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1052,19 +1021,18 @@ func TestRemoveFileWhileOpenReading(t *testing.T) {
 	if _, err := ioutil.ReadFile(p); !os.IsNotExist(err) {
 		t.Errorf("file still exists: %v", err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestRemoveFileWhileOpenReadingAcrossMounts(t *testing.T) {
 	config1 := libkbfs.MakeTestConfigOrBust(t, "user1",
 		"user2")
-	defer config1.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config1)
 	mnt1, fs1, cancelFn1 := makeFS(t, config1)
 	defer mnt1.Close()
 	defer cancelFn1()
 
 	config2 := libkbfs.ConfigAsUser(config1, "user2")
-	defer config2.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config2)
 	mnt2, _, cancelFn2 := makeFS(t, config2)
 	defer mnt2.Close()
 	defer cancelFn2()
@@ -1110,19 +1078,18 @@ func TestRemoveFileWhileOpenReadingAcrossMounts(t *testing.T) {
 	if _, err := ioutil.ReadFile(p1); !os.IsNotExist(err) {
 		t.Errorf("file still exists: %v", err)
 	}
-	testStateForPrivateFolder(t, config1, "user1,user2")
 }
 
 func TestRenameOverFileWhileOpenReadingAcrossMounts(t *testing.T) {
 	config1 := libkbfs.MakeTestConfigOrBust(t, "user1",
 		"user2")
-	defer config1.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config1)
 	mnt1, fs1, cancelFn1 := makeFS(t, config1)
 	defer mnt1.Close()
 	defer cancelFn1()
 
 	config2 := libkbfs.ConfigAsUser(config1, "user2")
-	defer config2.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config2)
 	mnt2, _, cancelFn2 := makeFS(t, config2)
 	defer mnt2.Close()
 	defer cancelFn2()
@@ -1185,12 +1152,11 @@ func TestRenameOverFileWhileOpenReadingAcrossMounts(t *testing.T) {
 	if g, e := string(buf), inputOther; g != e {
 		t.Errorf("bad file contents: %q != %q", g, e)
 	}
-	testStateForPrivateFolder(t, config1, "user1,user2")
 }
 
 func TestTruncateGrow(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1221,12 +1187,11 @@ func TestTruncateGrow(t *testing.T) {
 	if g, e := string(buf), input+strings.Repeat("\x00", newSize-len(input)); g != e {
 		t.Errorf("read wrong content: %q != %q", g, e)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestTruncateShrink(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1257,12 +1222,11 @@ func TestTruncateShrink(t *testing.T) {
 	if g, e := string(buf), input[:newSize]; g != e {
 		t.Errorf("read wrong content: %q != %q", g, e)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestChmodExec(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1284,12 +1248,11 @@ func TestChmodExec(t *testing.T) {
 	if g, e := fi.Mode().String(), `-rwxr-xr-x`; g != e {
 		t.Errorf("wrong mode: %q != %q", g, e)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestChmodNonExec(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1311,12 +1274,11 @@ func TestChmodNonExec(t *testing.T) {
 	if g, e := fi.Mode().String(), `-rw-r--r--`; g != e {
 		t.Errorf("wrong mode: %q != %q", g, e)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestChmodDir(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1334,12 +1296,11 @@ func TestChmodDir(t *testing.T) {
 	default:
 		t.Fatalf("expected a PathError, got %T: %v", err, err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestSetattrFileMtime(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1365,12 +1326,64 @@ func TestSetattrFileMtime(t *testing.T) {
 	if g, e := fi.ModTime(), mtime; !fsTimeEqual(g, e) {
 		t.Errorf("wrong mtime: %v !~= %v", g, e)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
+}
+
+func TestSetattrFileMtimeAfterWrite(t *testing.T) {
+	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
+	defer config.Shutdown()
+	mnt, _, cancelFn := makeFS(t, config)
+	defer mnt.Close()
+	defer cancelFn()
+
+	p := path.Join(mnt.Dir, PrivateName, "jdoe", "myfile")
+	const input = "hello, world\n"
+	if err := ioutil.WriteFile(p, []byte(input), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	const input2 = "second round of content"
+	{
+		ctx := context.Background()
+		dh, err := libkbfs.ParseTlfHandle(ctx, config, "jdoe")
+		if err != nil {
+			t.Fatalf("cannot parse folder for jdoe: %v", err)
+		}
+		ops := config.KBFSOps()
+		jdoe, _, err := ops.GetOrCreateRootNodeForHandle(ctx, dh,
+			libkbfs.MasterBranch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		myfile, _, err := ops.Lookup(ctx, jdoe, "myfile")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ops.Write(ctx, myfile, []byte(input2), 0); err != nil {
+			t.Fatal(err)
+		}
+		// Don't sync
+	}
+
+	mtime := time.Date(2015, 1, 2, 3, 4, 5, 6, time.Local)
+	// KBFS does not respect atime (which is ok), but we need to give
+	// something to the syscall.
+	atime := time.Date(2015, 7, 8, 9, 10, 11, 12, time.Local)
+	if err := os.Chtimes(p, atime, mtime); err != nil {
+		t.Fatal(err)
+	}
+
+	fi, err := os.Lstat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g, e := fi.ModTime(), mtime; !fsTimeEqual(g, e) {
+		t.Errorf("wrong mtime: %v !~= %v", g, e)
+	}
 }
 
 func TestSetattrFileMtimeNow(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1405,12 +1418,11 @@ func TestSetattrFileMtimeNow(t *testing.T) {
 	if g, e := fi.ModTime(), now; !timeEqualFuzzy(g, e, 1*time.Second) {
 		t.Errorf("mtime is wrong: %v !~= %v", g, e)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestSetattrDirMtime(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1435,12 +1447,11 @@ func TestSetattrDirMtime(t *testing.T) {
 	if g, e := fi.ModTime(), mtime; !fsTimeEqual(g, e) {
 		t.Errorf("wrong mtime: %v !~= %v", g, e)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestSetattrDirMtimeNow(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1474,12 +1485,11 @@ func TestSetattrDirMtimeNow(t *testing.T) {
 	if g, e := fi.ModTime(), now; !timeEqualFuzzy(g, e, 1*time.Second) {
 		t.Errorf("mtime is wrong: %v !~= %v", g, e)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestFsync(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1500,12 +1510,11 @@ func TestFsync(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatalf("close error: %v", err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestReaddirMyPublic(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1521,12 +1530,11 @@ func TestReaddirMyPublic(t *testing.T) {
 	}
 
 	checkDir(t, path.Join(mnt.Dir, PublicName, "jdoe"), files)
-	testStateForPublicFolder(t, config, "jdoe")
 }
 
 func TestReaddirOtherFolderAsReader(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	func() {
 		mnt, _, cancelFn := makeFS(t, config)
 		defer mnt.Close()
@@ -1539,7 +1547,7 @@ func TestReaddirOtherFolderAsReader(t *testing.T) {
 	}()
 
 	c2 := libkbfs.ConfigAsUser(config, "wsmith")
-	defer c2.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, c2)
 	mnt, _, cancelFn := makeFS(t, c2)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1547,12 +1555,25 @@ func TestReaddirOtherFolderAsReader(t *testing.T) {
 	checkDir(t, path.Join(mnt.Dir, PrivateName, "jdoe#wsmith"), map[string]fileInfoCheck{
 		"myfile": nil,
 	})
-	testStateForPrivateFolder(t, config, "jdoe#wsmith")
+}
+
+func TestReaddirMissingOtherFolderAsReader(t *testing.T) {
+	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
+	defer config.Shutdown()
+	c2 := libkbfs.ConfigAsUser(config, "wsmith")
+	defer c2.Shutdown()
+	mnt, _, cancelFn := makeFS(t, c2)
+	defer mnt.Close()
+	defer cancelFn()
+
+	// Check that folder that doesn't exist yet looks empty
+	checkDir(t, path.Join(mnt.Dir, PrivateName, "jdoe#wsmith"),
+		map[string]fileInfoCheck{})
 }
 
 func TestStatOtherFolder(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	func() {
 		mnt, _, cancelFn := makeFS(t, config)
 		defer mnt.Close()
@@ -1565,7 +1586,7 @@ func TestStatOtherFolder(t *testing.T) {
 	}()
 
 	c2 := libkbfs.ConfigAsUser(config, "wsmith")
-	defer c2.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, c2)
 	mnt, _, cancelFn := makeFS(t, c2)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1578,16 +1599,15 @@ func TestStatOtherFolder(t *testing.T) {
 	default:
 		t.Fatalf("expected a PathError, got %T: %v", err, err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestStatOtherFolderFirstUse(t *testing.T) {
 	// This triggers a different error than with the warmup.
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 
 	c2 := libkbfs.ConfigAsUser(config, "wsmith")
-	defer c2.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, c2)
 	mnt, _, cancelFn := makeFS(t, c2)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1600,12 +1620,11 @@ func TestStatOtherFolderFirstUse(t *testing.T) {
 	default:
 		t.Fatalf("expected a PathError, got %T: %v", err, err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestStatOtherFolderPublic(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	func() {
 		mnt, _, cancelFn := makeFS(t, config)
 		defer mnt.Close()
@@ -1618,7 +1637,7 @@ func TestStatOtherFolderPublic(t *testing.T) {
 	}()
 
 	c2 := libkbfs.ConfigAsUser(config, "wsmith")
-	defer c2.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, c2)
 	mnt, _, cancelFn := makeFS(t, c2)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1632,34 +1651,11 @@ func TestStatOtherFolderPublic(t *testing.T) {
 	if g, e := fi.Mode().String(), `drwxr-xr-x`; g != e {
 		t.Errorf("wrong mode for folder: %q != %q", g, e)
 	}
-	testStateForPublicFolder(t, config, "jdoe")
-}
-
-func TestStatOtherFolderPublicFirstUse(t *testing.T) {
-	// This triggers a different error than with the warmup.
-	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
-	defer config.Shutdown()
-
-	c2 := libkbfs.ConfigAsUser(config, "wsmith")
-	defer c2.Shutdown()
-	mnt, _, cancelFn := makeFS(t, c2)
-	defer mnt.Close()
-	defer cancelFn()
-
-	switch _, err := os.Lstat(path.Join(mnt.Dir, PublicName, "jdoe")); err := err.(type) {
-	case *os.PathError:
-		if g, e := err.Err, syscall.EACCES; g != e {
-			t.Fatalf("wrong error: %v != %v", g, e)
-		}
-	default:
-		t.Fatalf("expected a PathError, got %T: %v", err, err)
-	}
-	testStateForPublicFolder(t, config, "jdoe")
 }
 
 func TestReadPublicFile(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	const input = "hello, world\n"
 	func() {
 		mnt, _, cancelFn := makeFS(t, config)
@@ -1673,7 +1669,7 @@ func TestReadPublicFile(t *testing.T) {
 	}()
 
 	c2 := libkbfs.ConfigAsUser(config, "wsmith")
-	defer c2.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, c2)
 	mnt, _, cancelFn := makeFS(t, c2)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1685,12 +1681,11 @@ func TestReadPublicFile(t *testing.T) {
 	if g, e := string(buf), input; g != e {
 		t.Errorf("bad file contents: %q != %q", g, e)
 	}
-	testStateForPublicFolder(t, config, "jdoe")
 }
 
 func TestReaddirOtherFolderPublicAsAnyone(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	func() {
 		mnt, _, cancelFn := makeFS(t, config)
 		defer mnt.Close()
@@ -1703,7 +1698,7 @@ func TestReaddirOtherFolderPublicAsAnyone(t *testing.T) {
 	}()
 
 	c2 := libkbfs.ConfigAsUser(config, "wsmith")
-	defer c2.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, c2)
 	mnt, _, cancelFn := makeFS(t, c2)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1711,12 +1706,25 @@ func TestReaddirOtherFolderPublicAsAnyone(t *testing.T) {
 	checkDir(t, path.Join(mnt.Dir, PublicName, "jdoe"), map[string]fileInfoCheck{
 		"myfile": nil,
 	})
-	testStateForPublicFolder(t, config, "jdoe")
+}
+
+func TestReaddirMissingFolderPublicAsAnyone(t *testing.T) {
+	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
+	defer config.Shutdown()
+	c2 := libkbfs.ConfigAsUser(config, "wsmith")
+	defer c2.Shutdown()
+	mnt, _, cancelFn := makeFS(t, c2)
+	defer mnt.Close()
+	defer cancelFn()
+
+	// Make sure a public folder, not yet created by its writer, looks empty.
+	checkDir(t, path.Join(mnt.Dir, PublicName, "jdoe"),
+		map[string]fileInfoCheck{})
 }
 
 func TestReaddirOtherFolderAsAnyone(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	func() {
 		mnt, _, cancelFn := makeFS(t, config)
 		defer mnt.Close()
@@ -1729,7 +1737,7 @@ func TestReaddirOtherFolderAsAnyone(t *testing.T) {
 	}()
 
 	c2 := libkbfs.ConfigAsUser(config, "wsmith")
-	defer c2.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, c2)
 	mnt, _, cancelFn := makeFS(t, c2)
 	defer mnt.Close()
 	defer cancelFn()
@@ -1742,7 +1750,6 @@ func TestReaddirOtherFolderAsAnyone(t *testing.T) {
 	default:
 		t.Fatalf("expected a PathError, got %T: %v", err, err)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func syncFolderToServer(t *testing.T, tlf string, fs *FS) {
@@ -1771,7 +1778,7 @@ func syncPublicFolderToServer(t *testing.T, tlf string, fs *FS) {
 
 func TestInvalidateDataOnWrite(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt1, _, cancelFn1 := makeFS(t, config)
 	defer mnt1.Close()
 	defer cancelFn1()
@@ -1822,12 +1829,11 @@ func TestInvalidateDataOnWrite(t *testing.T) {
 			t.Errorf("wrong content: %q != %q", g, e)
 		}
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestInvalidatePublicDataOnWrite(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt1, _, cancelFn1 := makeFS(t, config)
 	defer mnt1.Close()
 	defer cancelFn1()
@@ -1878,12 +1884,11 @@ func TestInvalidatePublicDataOnWrite(t *testing.T) {
 			t.Errorf("wrong content: %q != %q", g, e)
 		}
 	}
-	testStateForPublicFolder(t, config, "jdoe")
 }
 
 func TestInvalidateDataOnTruncate(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt1, _, cancelFn1 := makeFS(t, config)
 	defer mnt1.Close()
 	defer cancelFn1()
@@ -1934,12 +1939,11 @@ func TestInvalidateDataOnTruncate(t *testing.T) {
 			t.Errorf("wrong content: %q != %q", g, e)
 		}
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestInvalidateDataOnLocalWrite(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, fs, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -2005,12 +2009,11 @@ func TestInvalidateDataOnLocalWrite(t *testing.T) {
 			t.Errorf("wrong content: %q != %q", g, e)
 		}
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func TestInvalidateEntryOnDelete(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe", "wsmith")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt1, _, cancelFn1 := makeFS(t, config)
 	defer mnt1.Close()
 	defer cancelFn1()
@@ -2044,7 +2047,6 @@ func TestInvalidateEntryOnDelete(t *testing.T) {
 	if buf, err := ioutil.ReadFile(path.Join(mnt2.Dir, PrivateName, "jdoe", "myfile")); !os.IsNotExist(err) {
 		t.Fatalf("expected ENOENT: %v: %q", err, buf)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 func testForErrorText(t *testing.T, path string, expectedErr error,
@@ -2078,7 +2080,7 @@ func testForErrorText(t *testing.T, path string, expectedErr error,
 func TestErrorFile(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
 	config.SetReporter(libkbfs.NewReporterSimple(config.Clock(), 0))
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -2103,7 +2105,6 @@ func TestErrorFile(t *testing.T) {
 		expectedErr, "dir")
 	testForErrorText(t, path.Join(mnt.Dir, PrivateName, "jdoe", libkbfs.ErrorFile),
 		expectedErr, "dir")
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 type testMountObserver struct {
@@ -2203,7 +2204,6 @@ func TestInvalidateAcrossMounts(t *testing.T) {
 	if g, e := string(buf), input1; g != e {
 		t.Errorf("wrong content: %q != %q", g, e)
 	}
-	testStateForPrivateFolder(t, config1, "user1,user2")
 }
 
 func TestInvalidateAppendAcrossMounts(t *testing.T) {
@@ -2275,7 +2275,6 @@ func TestInvalidateAppendAcrossMounts(t *testing.T) {
 	if g, e := string(buf), input1+input2; g != e {
 		t.Errorf("wrong content: %q != %q", g, e)
 	}
-	testStateForPrivateFolder(t, config1, "user1,user2")
 }
 
 func TestInvalidateRenameToUncachedDir(t *testing.T) {
@@ -2351,12 +2350,11 @@ func TestInvalidateRenameToUncachedDir(t *testing.T) {
 	if g, e := string(buf), input2; g != e {
 		t.Errorf("wrong content: %q != %q", g, e)
 	}
-	testStateForPrivateFolder(t, config1, "user1,user2")
 }
 
 func TestStatusFile(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
-	defer config.Shutdown()
+	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
 	defer mnt.Close()
 	defer cancelFn()
@@ -2389,7 +2387,6 @@ func TestStatusFile(t *testing.T) {
 		t.Fatalf("Status file contents (%s) didn't match expected status %v",
 			buf, status)
 	}
-	testStateForPrivateFolder(t, config, "jdoe")
 }
 
 // TODO: remove once we have automatic conflict resolution tests
@@ -2502,7 +2499,6 @@ func TestUnstageFile(t *testing.T) {
 	if g, e := string(buf), input1; g != e {
 		t.Errorf("wrong content: %q != %q", g, e)
 	}
-	testStateForPrivateFolder(t, config1, "user1,user2")
 }
 
 func TestSimpleCRNoConflict(t *testing.T) {
@@ -2511,11 +2507,13 @@ func TestSimpleCRNoConflict(t *testing.T) {
 	mnt1, fs1, cancelFn1 := makeFS(t, config1)
 	defer mnt1.Close()
 	defer cancelFn1()
+	defer libkbfs.CheckConfigAndShutdown(t, config1)
 
 	config2 := libkbfs.ConfigAsUser(config1, "user2")
 	mnt2, fs2, cancelFn2 := makeFS(t, config2)
 	defer mnt2.Close()
 	defer cancelFn2()
+	defer libkbfs.CheckConfigAndShutdown(t, config2)
 
 	if !mnt2.Conn.Protocol().HasInvalidate() {
 		t.Skip("Old FUSE protocol")
@@ -2663,11 +2661,13 @@ func TestSimpleCRConflictOnOpenFiles(t *testing.T) {
 	mnt1, fs1, cancelFn1 := makeFS(t, config1)
 	defer mnt1.Close()
 	defer cancelFn1()
+	defer libkbfs.CheckConfigAndShutdown(t, config1)
 
 	config2 := libkbfs.ConfigAsUser(config1, "user2")
 	mnt2, fs2, cancelFn2 := makeFS(t, config2)
 	defer mnt2.Close()
 	defer cancelFn2()
+	defer libkbfs.CheckConfigAndShutdown(t, config2)
 
 	if !mnt2.Conn.Protocol().HasInvalidate() {
 		t.Skip("Old FUSE protocol")
@@ -2848,11 +2848,13 @@ func TestSimpleCRConflictOnOpenMergedFile(t *testing.T) {
 	mnt1, fs1, cancelFn1 := makeFS(t, config1)
 	defer mnt1.Close()
 	defer cancelFn1()
+	defer libkbfs.CheckConfigAndShutdown(t, config1)
 
 	config2 := libkbfs.ConfigAsUser(config1, "user2")
 	mnt2, fs2, cancelFn2 := makeFS(t, config2)
 	defer mnt2.Close()
 	defer cancelFn2()
+	defer libkbfs.CheckConfigAndShutdown(t, config2)
 
 	if !mnt2.Conn.Protocol().HasInvalidate() {
 		t.Skip("Old FUSE protocol")

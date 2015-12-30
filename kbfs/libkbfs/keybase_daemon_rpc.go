@@ -31,6 +31,9 @@ type KeybaseDaemonRPC struct {
 	userCacheLock sync.RWMutex
 	// Map entries are removed when invalidated.
 	userCache map[keybase1.UID]UserInfo
+
+	lastNotificationFilenameLock sync.Mutex
+	lastNotificationFilename     string
 }
 
 var _ keybase1.NotifySessionInterface = (*KeybaseDaemonRPC)(nil)
@@ -193,8 +196,10 @@ func (k *KeybaseDaemonRPC) OnDoCommandError(err error, wait time.Duration) {
 }
 
 // OnDisconnected implements the ConnectionHandler interface.
-func (k *KeybaseDaemonRPC) OnDisconnected() {
-	k.log.Warning("KeybaseDaemonRPC is disconnected")
+func (k *KeybaseDaemonRPC) OnDisconnected(status DisconnectStatus) {
+	if status == StartingNonFirstConnection {
+		k.log.Warning("KeybaseDaemonRPC is disconnected")
+	}
 }
 
 // ShouldThrottle implements the ConnectionHandler interface.
@@ -288,8 +293,6 @@ func (k *KeybaseDaemonRPC) CurrentSession(ctx context.Context, sessionID int) (
 	if err != nil {
 		return SessionInfo{}, err
 	}
-	k.log.CDebugf(ctx, "got device subkey %s",
-		deviceSubkey.GetKID().ToShortIDString())
 	cryptPublicKey := CryptPublicKey{deviceSubkey.GetKID()}
 	verifyingKey := VerifyingKey{deviceSibkey.GetKID()}
 	s := SessionInfo{
@@ -298,6 +301,10 @@ func (k *KeybaseDaemonRPC) CurrentSession(ctx context.Context, sessionID int) (
 		CryptPublicKey: cryptPublicKey,
 		VerifyingKey:   verifyingKey,
 	}
+
+	k.log.CDebugf(
+		ctx, "new session with uid %s, crypt public key %s, and verifying key %s",
+		s.UID, s.CryptPublicKey, s.VerifyingKey)
 
 	k.setCachedCurrentSession(s)
 
@@ -321,6 +328,18 @@ func (k *KeybaseDaemonRPC) FavoriteList(ctx context.Context, sessionID int) ([]k
 
 // Notify implements the KeybaseDaemon interface for KeybaseDaemonRPC.
 func (k *KeybaseDaemonRPC) Notify(ctx context.Context, notification *keybase1.FSNotification) error {
+	// Reduce log spam by not repeating log lines for
+	// notifications with the same filename.
+	//
+	// TODO: Only do this in debug mode.
+	func() {
+		k.lastNotificationFilenameLock.Lock()
+		defer k.lastNotificationFilenameLock.Unlock()
+		if notification.Filename != k.lastNotificationFilename {
+			k.lastNotificationFilename = notification.Filename
+			k.log.CDebugf(ctx, "Sending notification for %s", notification.Filename)
+		}
+	}()
 	return k.kbfsClient.FSEvent(ctx, *notification)
 }
 

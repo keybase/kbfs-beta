@@ -19,7 +19,7 @@ const (
 	// BServerClientName is the client name to include in an authentication token.
 	BServerClientName = "libkbfs_bserver_remote"
 	// BServerClientVersion is the client version to include in an authentication token.
-	BServerClientVersion = Version + "-" + Build
+	BServerClientVersion = Version + "-" + DefaultBuild
 )
 
 // BlockServerRemote implements the BlockServer interface and
@@ -53,7 +53,7 @@ func NewBlockServerRemote(config Config, blkSrvAddr string) *BlockServerRemote {
 		BServerTokenServer, BServerTokenExpireIn,
 		BServerClientName, BServerClientVersion, bs)
 	// This will connect only on-demand due to the last argument.
-	conn := NewTLSConnection(config, blkSrvAddr, bServerErrorUnwrapper{}, bs, false)
+	conn := NewTLSConnection(config, blkSrvAddr, GetRootCerts(blkSrvAddr), bServerErrorUnwrapper{}, bs, false)
 	bs.client = keybase1.BlockClient{Cli: conn.GetClient()}
 	bs.shutdownFn = conn.Shutdown
 	return bs
@@ -120,8 +120,10 @@ func (b *BlockServerRemote) OnDoCommandError(err error, wait time.Duration) {
 }
 
 // OnDisconnected implements the ConnectionHandler interface.
-func (b *BlockServerRemote) OnDisconnected() {
-	b.log.Warning("BlockServerRemote is disconnected")
+func (b *BlockServerRemote) OnDisconnected(status DisconnectStatus) {
+	if status == StartingNonFirstConnection {
+		b.log.Warning("BlockServerRemote is disconnected")
+	}
 	if b.authToken != nil {
 		b.authToken.Shutdown()
 	}
@@ -284,6 +286,15 @@ func (b *BlockServerRemote) getNotDoneRefs(refs []keybase1.BlockReference, done 
 		}
 	}
 	return notDone
+}
+
+// GetUserQuotaInfo implements the BlockServer interface for BlockServerRemote
+func (b *BlockServerRemote) GetUserQuotaInfo(ctx context.Context) (info *UserQuotaInfo, err error) {
+	res, err := b.client.GetUserQuotaInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return UserQuotaInfoDecode(res, b.config)
 }
 
 // Shutdown implements the BlockServer interface for BlockServerRemote.

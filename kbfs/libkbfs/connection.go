@@ -10,10 +10,27 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff"
+	"github.com/keybase/client/go/client"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
 	rpc "github.com/keybase/go-framed-msgpack-rpc"
 	"golang.org/x/net/context"
+)
+
+// DisconnectStatus is the connection information passed to
+// ConnectionHandler.OnDisconnected().
+type DisconnectStatus int
+
+const (
+	// UsingExistingConnection means that an existing
+	// connection will be used.
+	UsingExistingConnection = 1
+	// StartingFirstConnection means that a connection will be
+	// started, and this is the first one.
+	StartingFirstConnection = iota
+	// StartingNonFirstConnection means that a connection will be
+	// started, and this is not the first one.
+	StartingNonFirstConnection DisconnectStatus = iota
 )
 
 // ConnectionHandler is the callback interface for interacting with the connection.
@@ -29,8 +46,9 @@ type ConnectionHandler interface {
 	// OnDoCommandError is called whenever there is an error during DoCommand
 	OnDoCommandError(err error, nextTime time.Duration)
 
-	// OnDisconnected is called whenever the connection notices it is disconnected.
-	OnDisconnected()
+	// OnDisconnected is called whenever the connection notices it
+	// is disconnected.
+	OnDisconnected(status DisconnectStatus)
 
 	// ShouldThrottle is called whenever an error is returned by
 	// an RPC function passed to Connection.DoCommand(), and
@@ -41,8 +59,8 @@ type ConnectionHandler interface {
 
 // ConnectionTransportTLS is a ConnectionTransport implementation that uses TLS+rpc.
 type ConnectionTransportTLS struct {
-	config  Config
-	srvAddr string
+	rootCerts []byte
+	srvAddr   string
 
 	// Protects everything below.
 	mutex           sync.Mutex
@@ -61,7 +79,7 @@ func (ct *ConnectionTransportTLS) Dial(ctx context.Context) (
 	err := runUnlessCanceled(ctx, func() error {
 		// load CA certificate
 		certs := x509.NewCertPool()
-		if !certs.AppendCertsFromPEM(ct.config.RootCerts()) {
+		if !certs.AppendCertsFromPEM(ct.rootCerts) {
 			return errors.New("Unable to load root certificates")
 		}
 		// connect
@@ -163,18 +181,21 @@ type Connection struct {
 	transport      ConnectionTransport
 	errorUnwrapper rpc.ErrorUnwrapper
 
-	mutex         sync.Mutex // protects: client, reconnectChan, and cancelFunc
-	client        keybase1.GenericClient
-	server        *rpc.Server
-	reconnectChan chan struct{}
-	cancelFunc    context.CancelFunc // used to cancel the reconnect loop
+	// protects everything below.
+	mutex             sync.Mutex
+	client            keybase1.GenericClient
+	server            *rpc.Server
+	reconnectChan     chan struct{}
+	reconnectErrPtr   *error             // Filled in with fatal reconnect err (if any) before reconnectChan is closed
+	cancelFunc        context.CancelFunc // used to cancel the reconnect loop
+	reconnectedBefore bool
 }
 
 // NewTLSConnection returns a connection that tries to connect to the
 // given server address with TLS.
-func NewTLSConnection(config Config, srvAddr string,
+func NewTLSConnection(config Config, srvAddr string, rootCerts []byte,
 	errorUnwrapper rpc.ErrorUnwrapper, handler ConnectionHandler, connectNow bool) *Connection {
-	transport := &ConnectionTransportTLS{config: config, srvAddr: srvAddr}
+	transport := &ConnectionTransportTLS{rootCerts: rootCerts, srvAddr: srvAddr}
 	return newConnectionWithTransport(config, handler, transport, errorUnwrapper, connectNow)
 }
 
@@ -283,18 +304,19 @@ func (c *Connection) waitForConnection(ctx context.Context) error {
 		// already connected
 		return nil
 	}
-	// inform the handler of our disconnected state
-	c.handler.OnDisconnected()
 	// kick-off a connection and wait for it to complete
 	// or for the caller to cancel.
-	reconnectChan := c.getReconnectChan()
+	reconnectChan, disconnectStatus, reconnectErrPtr := c.getReconnectChan()
+	// inform the handler of our disconnected state
+	c.handler.OnDisconnected(disconnectStatus)
 	select {
 	case <-ctx.Done():
 		// caller canceled
 		return ctx.Err()
 	case <-reconnectChan:
-		// reconnect complete
-		return nil
+		// Reconnect complete.  If something unretriable happened to
+		// shut down the connection, this will be non-nil.
+		return *reconnectErrPtr
 	}
 }
 
@@ -314,29 +336,63 @@ func (c *Connection) IsConnected() bool {
 }
 
 // This will either kick-off a new reconnection attempt or wait for an
-// existing attempt. Returns the channel associated with an attempt.
-func (c *Connection) getReconnectChan() chan struct{} {
+// existing attempt. Returns the channel associated with an attempt,
+// and whether or not a new one was created.  If a fatal error
+// happens, reconnectErrPtr will be filled in before reconnectChan is
+// closed.
+func (c *Connection) getReconnectChan() (
+	reconnectChan chan struct{}, disconnectStatus DisconnectStatus,
+	reconnectErrPtr *error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	if c.reconnectChan == nil {
 		var ctx context.Context
 		// for canceling the reconnect loop via Shutdown()
 		ctx, c.cancelFunc = context.WithCancel(context.Background())
-		c.reconnectChan = make(chan struct{}, 20)
-		go c.doReconnect(ctx, c.reconnectChan)
+		c.reconnectChan = make(chan struct{})
+		c.reconnectErrPtr = new(error)
+		if c.reconnectedBefore {
+			disconnectStatus = StartingNonFirstConnection
+		} else {
+			disconnectStatus = StartingFirstConnection
+			c.reconnectedBefore = true
+		}
+		go c.doReconnect(ctx, c.reconnectChan, c.reconnectErrPtr)
+	} else {
+		disconnectStatus = UsingExistingConnection
 	}
-	return c.reconnectChan
+	return c.reconnectChan, disconnectStatus, c.reconnectErrPtr
 }
 
-// doReconnect attempts a reconnection.
-func (c *Connection) doReconnect(ctx context.Context, reconnectChan chan struct{}) {
+// dontRetryOnConnect if the error indicates a condition that
+// shouldn't be retried.
+func dontRetryOnConnect(err error) bool {
+	// InputCanceledError likely means the user canceled a login
+	// dialog.
+	_, inputCanceled := err.(client.InputCanceledError)
+	return inputCanceled
+}
+
+// doReconnect attempts a reconnection.  It assumes that reconnectChan
+// and reconnectErrPtr are the same ones in c, but are passed in to
+// avoid having to take the mutex at the beginning of the method.
+func (c *Connection) doReconnect(ctx context.Context,
+	reconnectChan chan struct{}, reconnectErrPtr *error) {
 	// retry w/exponential backoff
 	backoff.RetryNotify(func() error {
 		// try to connect
 		err := c.connect(ctx)
-		// context was canceled by Shutdown()
-		if ctx.Err() != nil {
-			c.handler = nil // drop the circular reference
+		select {
+		case <-ctx.Done():
+			// context was canceled by Shutdown() or a user action
+			*reconnectErrPtr = ctx.Err()
+			// short-circuit Retry
+			return nil
+		default:
+		}
+		if dontRetryOnConnect(err) {
+			// A fatal error happened.
+			*reconnectErrPtr = err
 			// short-circuit Retry
 			return nil
 		}
@@ -351,6 +407,7 @@ func (c *Connection) doReconnect(ctx context.Context, reconnectChan chan struct{
 	close(reconnectChan)
 	c.reconnectChan = nil
 	c.cancelFunc = nil
+	c.reconnectErrPtr = nil
 }
 
 // GetClient returns an RPC client that uses DoCommand() for RPC
@@ -379,6 +436,7 @@ func (c *Connection) Shutdown() {
 		// close the connection
 		c.transport.Close()
 	}
+	c.handler = nil // drop the circular reference
 }
 
 type connectionClient struct {

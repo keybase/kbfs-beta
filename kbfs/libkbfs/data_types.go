@@ -24,6 +24,10 @@ const (
 	PublicUIDName = "public"
 )
 
+// disallowedPrefixes must not be allowed at the beginning of any
+// user-created directory entry name.
+var disallowedPrefixes = [...]string{".kbfs"}
+
 // UserInfo contains all the info about a keybase user that kbfs cares
 // about.
 type UserInfo struct {
@@ -347,6 +351,19 @@ type BlockPointer struct {
 	RefNonce BlockRefNonce `codec:"r,omitempty"`
 }
 
+// IsValid returns whether the block pointer is valid. A zero block
+// pointer is considered invalid.
+func (p BlockPointer) IsValid() bool {
+	if !p.ID.IsValid() {
+		return false
+	}
+
+	// TODO: Should also check KeyGen, DataVer, and Creator. (A
+	// bunch of tests use invalid values for one of these.)
+
+	return true
+}
+
 func (p BlockPointer) String() string {
 	s := fmt.Sprintf("BlockPointer{ID: %s, KeyGen: %d, DataVer: %d, Creator: %s", p.ID, p.KeyGen, p.DataVer, p.Creator)
 	if len(p.Writer) > 0 {
@@ -496,20 +513,56 @@ func sortUIDS(m map[keybase1.UID]struct{}) []keybase1.UID {
 	return s
 }
 
+func splitTLFNameIntoWritersAndReaders(name string) (
+	writerNames []string, readerNames []string, err error) {
+	splitNames := strings.SplitN(name, ReaderSep, 3)
+	if len(splitNames) > 2 {
+		return nil, nil, BadTLFNameError{name}
+	}
+	writerNames = strings.Split(splitNames[0], ",")
+	if len(splitNames) > 1 {
+		readerNames = strings.Split(splitNames[1], ",")
+	}
+	return writerNames, readerNames, nil
+}
+
+// NormalizeUserNamesInTLF parses the given TLF folder name and,
+// without doing any resolutions or identify calls, normalizes all
+// elements of the name that are bare user names.
+//
+// Note that this normalizes (i.e., lower-cases) any assertions in the
+// name as well, but doesn't resolve them.  This is safe since the
+// libkb assertion parser does that same thing.
+func NormalizeUserNamesInTLF(name string) (string, error) {
+	writerNames, readerNames, err := splitTLFNameIntoWritersAndReaders(name)
+	if err != nil {
+		return "", err
+	}
+	cWriterNames := make([]string, len(writerNames))
+	for i, w := range writerNames {
+		cWriterNames[i] = libkb.NewNormalizedUsername(w).String()
+	}
+	sort.Strings(cWriterNames)
+	ret := strings.Join(cWriterNames, ",")
+	if len(readerNames) > 0 {
+		cReaderNames := make([]string, len(readerNames))
+		for i, r := range readerNames {
+			cReaderNames[i] = libkb.NewNormalizedUsername(r).String()
+		}
+		sort.Strings(cReaderNames)
+		ret += ReaderSep + strings.Join(cReaderNames, ",")
+	}
+	return ret, nil
+}
+
 // ParseTlfHandle parses a TlfHandle from an encoded string. See
 // ToString for the opposite direction.
 func ParseTlfHandle(ctx context.Context, config Config, name string) (
 	*TlfHandle, error) {
-	splitNames := strings.SplitN(name, ReaderSep, 3)
-	if len(splitNames) > 2 {
-		return nil, BadTLFNameError{name}
+	writerNames, readerNames, err := splitTLFNameIntoWritersAndReaders(name)
+	if err != nil {
+		return nil, err
 	}
-	writerNames := strings.Split(splitNames[0], ",")
-	var readerNames []string
-	if len(splitNames) > 1 {
-		readerNames = strings.Split(splitNames[1], ",")
-	}
-
 	// parallelize the resolutions for each user
 	errCh := make(chan error, 1)
 	wc := make(chan keybase1.UID, len(writerNames))
@@ -632,18 +685,17 @@ func (h *TlfHandle) ToString(ctx context.Context, config Config) string {
 }
 
 // ToBytes marshals this TlfHandle.
-func (h *TlfHandle) ToBytes(config Config) (out []byte) {
+func (h *TlfHandle) ToBytes(config Config) (out []byte, err error) {
 	h.cacheMutex.Lock()
 	defer h.cacheMutex.Unlock()
 	if len(h.cachedBytes) > 0 {
-		return h.cachedBytes
+		return h.cachedBytes, nil
 	}
 
-	var err error
 	if out, err = config.Codec().Encode(h); err != nil {
 		h.cachedBytes = out
 	}
-	return
+	return out, err
 }
 
 // ToKBFolder converts a TlfHandle into a keybase1.Folder,
@@ -657,7 +709,9 @@ func (h *TlfHandle) ToKBFolder(ctx context.Context, config Config) keybase1.Fold
 
 // Equal returns true if two TlfHandles are equal.
 func (h *TlfHandle) Equal(rhs *TlfHandle, config Config) bool {
-	return bytes.Equal(h.ToBytes(config), rhs.ToBytes(config))
+	hBytes, _ := h.ToBytes(config)
+	rhsBytes, _ := rhs.ToBytes(config)
+	return bytes.Equal(hBytes, rhsBytes)
 }
 
 // Users returns a list of all reader and writer UIDs for the tlf.
@@ -696,6 +750,16 @@ type pathNode struct {
 	Name string
 }
 
+func (n pathNode) isValid() bool {
+	return n.BlockPointer.IsValid()
+}
+
+// DebugString returns a string representation of the node with all
+// pointer information.
+func (n pathNode) DebugString() string {
+	return fmt.Sprintf("%s(ptr=%s)", n.Name, n.BlockPointer)
+}
+
 // BranchName is the name given to a KBFS branch, for a particular
 // top-level folder.  Currently, the notion of a "branch" is
 // client-side only, and can be used to specify which root to use for
@@ -717,6 +781,14 @@ type FolderBranch struct {
 	Branch BranchName // master branch, by default
 }
 
+func (fb FolderBranch) String() string {
+	s := fb.Tlf.String()
+	if len(fb.Branch) > 0 {
+		s += fmt.Sprintf("(branch=%s)", fb.Branch)
+	}
+	return s
+}
+
 // path represents the full KBFS path to a particular location, so
 // that a flush can traverse backwards and fix up ids along the way.
 type path struct {
@@ -727,13 +799,23 @@ type path struct {
 // isValid() returns true if the path has at least one node (for the
 // root).
 func (p path) isValid() bool {
-	return len(p.path) >= 1
+	if len(p.path) < 1 {
+		return false
+	}
+
+	for _, n := range p.path {
+		if !n.isValid() {
+			return false
+		}
+	}
+
+	return true
 }
 
 // hasValidParent() returns true if this path is valid and
 // parentPath() is a valid path.
 func (p path) hasValidParent() bool {
-	return len(p.path) >= 2
+	return len(p.path) >= 2 && p.parentPath().isValid()
 }
 
 // tailName returns the name of the final node in the Path. Must be
@@ -746,6 +828,16 @@ func (p path) tailName() string {
 // Must be called with a valid path.
 func (p path) tailPointer() BlockPointer {
 	return p.path[len(p.path)-1].BlockPointer
+}
+
+// DebugString returns a string representation of the path with all
+// branch and pointer information.
+func (p path) DebugString() string {
+	debugNames := make([]string, 0, len(p.path))
+	for _, node := range p.path {
+		debugNames = append(debugNames, node.DebugString())
+	}
+	return fmt.Sprintf("%s:%s", p.FolderBranch, strings.Join(debugNames, "/"))
 }
 
 // String implements the fmt.Stringer interface for Path.
@@ -765,16 +857,22 @@ func (p path) parentPath() *path {
 	return &path{p.FolderBranch, p.path[:len(p.path)-1]}
 }
 
-// childPathNoPtr returns a new Path with the addition of a new entry
-// with the given name.  That final PathNode will have no BlockPointer.
-func (p path) ChildPathNoPtr(name string) *path {
-	child := &path{
+// ChildPath returns a new Path with the addition of a new entry
+// with the given name and BlockPointer.
+func (p path) ChildPath(name string, ptr BlockPointer) path {
+	child := path{
 		FolderBranch: p.FolderBranch,
 		path:         make([]pathNode, len(p.path), len(p.path)+1),
 	}
 	copy(child.path, p.path)
-	child.path = append(child.path, pathNode{Name: name})
+	child.path = append(child.path, pathNode{Name: name, BlockPointer: ptr})
 	return child
+}
+
+// ChildPathNoPtr returns a new Path with the addition of a new entry
+// with the given name.  That final PathNode will have no BlockPointer.
+func (p path) ChildPathNoPtr(name string) path {
+	return p.ChildPath(name, BlockPointer{})
 }
 
 // hasPublic returns whether or not this is a top-level folder that
@@ -885,9 +983,9 @@ func (et EntryType) String() string {
 	return "<invalid EntryType>"
 }
 
-// DirEntry is the MD for each child in a directory
-type DirEntry struct {
-	BlockInfo
+// EntryInfo is the (non-block-related) info a directory knows about
+// its child.
+type EntryInfo struct {
 	Type    EntryType
 	Size    uint64
 	SymPath string `codec:",omitempty"` // must be within the same root dir
@@ -895,6 +993,12 @@ type DirEntry struct {
 	Mtime int64
 	// Ctime is in unix nanoseconds
 	Ctime int64
+}
+
+// DirEntry is all the data info a directory know about its child.
+type DirEntry struct {
+	BlockInfo
+	EntryInfo
 }
 
 // IsInitialized returns true if this DirEntry has been initialized.
@@ -1028,4 +1132,49 @@ func (m MergeStatus) String() string {
 	default:
 		return "unknown"
 	}
+}
+
+//UsageStat is a tuple containing quota usage and amount of archived bytes
+type UsageStat struct {
+	Usage    int64
+	Archived int64
+}
+
+//UserQuotaInfo contains a user's quota usage information
+type UserQuotaInfo struct {
+	Folders map[string]*UsageStat
+	Total   UsageStat
+	Limit   int64
+}
+
+// Accum combines changes to the existing UserQuotaInfo object using accumulation function accumF.
+func (u *UserQuotaInfo) Accum(another *UserQuotaInfo, accumF func(int64, int64) int64) {
+	if another == nil {
+		return
+	}
+	u.Total.Usage = accumF(u.Total.Usage, another.Total.Usage)
+	u.Total.Archived = accumF(u.Total.Archived, another.Total.Archived)
+	for f, change := range another.Folders {
+		if _, ok := u.Folders[f]; !ok {
+			u.Folders[f] = &UsageStat{}
+		}
+		u.Folders[f].Usage = accumF(u.Folders[f].Usage, change.Usage)
+		u.Folders[f].Archived = accumF(u.Folders[f].Archived, change.Archived)
+	}
+}
+
+// ToBytes marshals this UserQuotaInfo
+func (u *UserQuotaInfo) ToBytes(config Config) ([]byte, error) {
+	return config.Codec().Encode(u)
+}
+
+// UserQuotaInfoDecode decodes b into a UserQuotaInfo
+func UserQuotaInfoDecode(b []byte, config Config) (*UserQuotaInfo, error) {
+	var info UserQuotaInfo
+	err := config.Codec().Decode(b, &info)
+	if err != nil {
+		return nil, err
+	}
+
+	return &info, nil
 }
