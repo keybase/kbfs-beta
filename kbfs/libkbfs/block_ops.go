@@ -18,7 +18,7 @@ var _ BlockOps = (*BlockOpsStandard)(nil)
 func (b *BlockOpsStandard) Get(ctx context.Context, md *RootMetadata,
 	blockPtr BlockPointer, block Block) error {
 	bserv := b.config.BlockServer()
-	buf, blockServerHalf, err := bserv.Get(ctx, blockPtr.ID, blockPtr)
+	buf, blockServerHalf, err := bserv.Get(ctx, blockPtr.ID, md.ID, blockPtr)
 	if err != nil {
 		// Temporary code to track down bad block
 		// requests. Remove when not needed anymore.
@@ -50,7 +50,13 @@ func (b *BlockOpsStandard) Get(ctx context.Context, md *RootMetadata,
 	}
 
 	// decrypt the block
-	return b.config.Crypto().DecryptBlock(encryptedBlock, blockCryptKey, block)
+	err = b.config.Crypto().DecryptBlock(encryptedBlock, blockCryptKey, block)
+	if err != nil {
+		return err
+	}
+
+	block.SetEncodedSize(uint32(len(buf)))
+	return nil
 }
 
 // Ready implements the BlockOps interface for BlockOpsStandard.
@@ -113,6 +119,9 @@ func (b *BlockOpsStandard) Ready(ctx context.Context, md *RootMetadata,
 		return
 	}
 
+	// Cache the encoded size.
+	block.SetEncodedSize(uint32(encodedSize))
+
 	return
 }
 
@@ -135,4 +144,15 @@ func (b *BlockOpsStandard) Delete(ctx context.Context, md *RootMetadata,
 	bserv := b.config.BlockServer()
 	err := bserv.RemoveBlockReference(ctx, id, md.ID, context)
 	return err
+}
+
+// Archive implements the BlockOps interface for BlockOpsStandard.
+func (b *BlockOpsStandard) Archive(ctx context.Context, md *RootMetadata,
+	ptrs []BlockPointer) error {
+	contexts := make(map[BlockID]BlockContext)
+	for _, ptr := range ptrs {
+		contexts[ptr.ID] = ptr
+	}
+
+	return b.config.BlockServer().ArchiveBlockReferences(ctx, md.ID, contexts)
 }

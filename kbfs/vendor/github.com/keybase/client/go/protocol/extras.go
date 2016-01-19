@@ -30,6 +30,7 @@ const (
 	SIG_ID_LEN         = 32
 	SIG_ID_SUFFIX      = 0x0f
 	SIG_SHORT_ID_BYTES = 27
+	SigIDQueryMin      = 8
 )
 
 const (
@@ -293,6 +294,22 @@ func (s SigID) Equal(t SigID) bool {
 	return s == t
 }
 
+func (s SigID) Match(q string, exact bool) bool {
+	if s.IsNil() {
+		return false
+	}
+
+	if exact {
+		return strings.ToLower(s.ToString(true)) == strings.ToLower(q)
+	}
+
+	if strings.HasPrefix(s.ToString(true), strings.ToLower(q)) {
+		return true
+	}
+
+	return false
+}
+
 func (s SigID) NotEqual(t SigID) bool {
 	return !s.Equal(t)
 }
@@ -301,7 +318,7 @@ func (s SigID) ToDisplayString(verbose bool) string {
 	if verbose {
 		return string(s)
 	}
-	return fmt.Sprintf("%s...", s[0:6])
+	return fmt.Sprintf("%s...", s[0:SigIDQueryMin])
 }
 
 func (s SigID) ToString(suffix bool) string {
@@ -456,4 +473,43 @@ func KIDFromRawKey(b []byte, keyType byte) KID {
 	tmp = append(tmp, b...)
 	tmp = append(tmp, byte(KidSuffix))
 	return KIDFromSlice(tmp)
+}
+
+type APIStatus interface {
+	Status() Status
+}
+
+type Error struct {
+	code    StatusCode
+	message string
+}
+
+func NewError(code StatusCode, message string) *Error {
+	if code == StatusCode_SCOk {
+		return nil
+	}
+	return &Error{code: code, message: message}
+}
+
+func FromError(err error) *Error {
+	return &Error{code: StatusCode_SCGeneric, message: err.Error()}
+}
+
+func StatusOK() Status {
+	return Status{Code: int(StatusCode_SCOk), Name: "OK", Desc: "OK"}
+}
+
+func StatusFromCode(code StatusCode, message string) Status {
+	if code == StatusCode_SCOk {
+		return StatusOK()
+	}
+	return NewError(code, message).Status()
+}
+
+func (e *Error) Error() string {
+	return e.message
+}
+
+func (e *Error) Status() Status {
+	return Status{Code: int(e.code), Name: "ERROR", Desc: e.message}
 }

@@ -139,7 +139,7 @@ func (b *BlockServerRemote) ShouldThrottle(err error) bool {
 }
 
 // Get implements the BlockServer interface for BlockServerRemote.
-func (b *BlockServerRemote) Get(ctx context.Context, id BlockID,
+func (b *BlockServerRemote) Get(ctx context.Context, id BlockID, tlfID TlfID,
 	context BlockContext) ([]byte, BlockCryptKeyServerHalf, error) {
 	var err error
 	size := -1
@@ -148,12 +148,15 @@ func (b *BlockServerRemote) Get(ctx context.Context, id BlockID,
 			id, context.GetWriter(), size, err)
 	}()
 
-	bid := keybase1.BlockIdCombo{
-		BlockHash: id.String(),
-		ChargedTo: context.GetWriter(),
+	arg := keybase1.GetBlockArg{
+		Bid: keybase1.BlockIdCombo{
+			BlockHash: id.String(),
+			ChargedTo: context.GetWriter(),
+		},
+		Folder: tlfID.String(),
 	}
 
-	res, err := b.client.GetBlock(ctx, bid)
+	res, err := b.client.GetBlock(ctx, arg)
 	if err != nil {
 		return nil, BlockCryptKeyServerHalf{}, err
 	}
@@ -164,7 +167,7 @@ func (b *BlockServerRemote) Get(ctx context.Context, id BlockID,
 	if kbuf, err = hex.DecodeString(res.BlockKey); err != nil {
 		return nil, BlockCryptKeyServerHalf{}, err
 	}
-	copy(bk.ServerHalf[:], kbuf)
+	copy(bk.data[:], kbuf)
 	return res.Buf, bk, nil
 }
 
@@ -247,8 +250,8 @@ func (b *BlockServerRemote) RemoveBlockReference(ctx context.Context, id BlockID
 	return err
 }
 
-// ArchiveBlockReference archives Block references
-func (b *BlockServerRemote) ArchiveBlockReference(ctx context.Context, tlfID TlfID, refs []keybase1.BlockReference) (err error) {
+func (b *BlockServerRemote) archiveBlockReferences(ctx context.Context,
+	tlfID TlfID, refs []keybase1.BlockReference) (err error) {
 	doneRefs := make(map[string]bool)
 	notDone := refs
 	prevProgress := true
@@ -265,10 +268,10 @@ func (b *BlockServerRemote) ArchiveBlockReference(ctx context.Context, tlfID Tlf
 			b.log.CWarningf(ctx, "BlockServerRemote.ArchiveBlockReference err=%v", err)
 		}
 		if len(res) == 0 && !prevProgress {
-			b.log.CErrorf(ctx, "BlockServerRemote.ArchiveBlockReference failed to make proress err=%v", err)
+			b.log.CErrorf(ctx, "BlockServerRemote.ArchiveBlockReference failed to make progress err=%v", err)
 			break
 		}
-		prevProgress = len(res) == 0
+		prevProgress = len(res) != 0
 		for _, ref := range res {
 			doneRefs[ref.Bid.BlockHash+string(ref.Nonce[:])] = true
 		}
@@ -295,6 +298,23 @@ func (b *BlockServerRemote) GetUserQuotaInfo(ctx context.Context) (info *UserQuo
 		return nil, err
 	}
 	return UserQuotaInfoDecode(res, b.config)
+}
+
+// ArchiveBlockReferences implements the BlockServer interface for
+// BlockServerRemote
+func (b *BlockServerRemote) ArchiveBlockReferences(ctx context.Context,
+	tlfID TlfID, contexts map[BlockID]BlockContext) error {
+	refs := make([]keybase1.BlockReference, 0, len(contexts))
+	for id, context := range contexts {
+		refs = append(refs, keybase1.BlockReference{
+			Bid: keybase1.BlockIdCombo{
+				ChargedTo: context.GetCreator(),
+				BlockHash: id.String(),
+			},
+			ChargedTo: context.GetWriter(),
+		})
+	}
+	return b.archiveBlockReferences(ctx, tlfID, refs)
 }
 
 // Shutdown implements the BlockServer interface for BlockServerRemote.

@@ -15,11 +15,11 @@ type encryptStream struct {
 	output     io.Writer
 	encoder    encoder
 	header     *EncryptionHeader
-	sessionKey SymmetricKey
+	payloadKey SymmetricKey
 	buffer     bytes.Buffer
-	nonce      *Nonce
 	inblock    []byte
-	tagKeys    []BoxPrecomputedSharedKey
+	headerHash []byte
+	macKeys    [][]byte
 
 	numBlocks encryptionBlockNumber // the lower 64 bits of the nonce
 
@@ -29,11 +29,6 @@ type encryptStream struct {
 }
 
 func (es *encryptStream) Write(plaintext []byte) (int, error) {
-
-	if !es.didHeader {
-		es.didHeader = true
-		es.err = es.encoder.Encode(es.header)
-	}
 
 	if es.err != nil {
 		return 0, es.err
@@ -68,17 +63,18 @@ func (es *encryptStream) encryptBytes(b []byte) error {
 		return err
 	}
 
-	nonce := es.nonce.ForPayloadBox(es.numBlocks)
-	ciphertext := secretbox.Seal([]byte{}, b, (*[24]byte)(nonce), (*[32]byte)(&es.sessionKey))
-	hash := sha512.Sum512(ciphertext)
+	nonce := nonceForChunkSecretBox(es.numBlocks)
+	ciphertext := secretbox.Seal([]byte{}, b, (*[24]byte)(nonce), (*[32]byte)(&es.payloadKey))
 
 	block := EncryptionBlock{
 		PayloadCiphertext: ciphertext,
 	}
 
-	for _, tagKey := range es.tagKeys {
-		hashBox := tagKey.Box(nonce, hash[:])
-		authenticator := hashBox[:secretbox.Overhead]
+	// Compute the digest to authenticate, and authenticate it for each
+	// recipient.
+	hashToAuthenticate := computePayloadHash(es.headerHash, nonce, ciphertext)
+	for _, macKey := range es.macKeys {
+		authenticator := hmacSHA512256(macKey, hashToAuthenticate)
 		block.HashAuthenticators = append(block.HashAuthenticators, authenticator)
 	}
 
@@ -135,63 +131,60 @@ func (es *encryptStream) init(sender BoxSecretKey, receivers []BoxPublicKey) err
 
 	// If we have a nil Sender key, then we really want the ephemeral key
 	// as the main encryption key.
-	senderAnon := false
 	if sender == nil {
 		sender = ephemeralKey
-		senderAnon = true
 	}
 
 	eh := &EncryptionHeader{
-		FormatName: SaltPackFormatName,
-		Version:    SaltPackCurrentVersion,
+		FormatName: SaltpackFormatName,
+		Version:    SaltpackCurrentVersion,
 		Type:       MessageTypeEncryption,
-		Sender:     ephemeralKey.GetPublicKey().ToKID(),
-		Receivers:  make([]receiverKeysCiphertexts, 0, len(receivers)),
+		Ephemeral:  ephemeralKey.GetPublicKey().ToKID(),
+		Receivers:  make([]receiverKeys, 0, len(receivers)),
 	}
 	es.header = eh
-	if err := randomFill(es.sessionKey[:]); err != nil {
+	if err := randomFill(es.payloadKey[:]); err != nil {
 		return err
 	}
 
-	es.nonce = NewNonceForEncryption(ephemeralKey.GetPublicKey())
+	eh.SenderSecretbox = secretbox.Seal([]byte{}, sender.GetPublicKey().ToKID(), (*[24]byte)(nonceForSenderKeySecretBox()), (*[32]byte)(&es.payloadKey))
 
-	rkp := receiverKeysPlaintext{
-		Sender:     sender.GetPublicKey().ToKID(),
-		SessionKey: es.sessionKey[:],
+	for _, receiver := range receivers {
+		payloadKeyBox := ephemeralKey.Box(receiver, nonceForPayloadKeyBox(), es.payloadKey[:])
+
+		keys := receiverKeys{PayloadKeyBox: payloadKeyBox}
+
+		// Don't specify the receivers if this public key wants to hide
+		if !receiver.HideIdentity() {
+			keys.ReceiverKID = receiver.ToKID()
+		}
+
+		eh.Receivers = append(eh.Receivers, keys)
 	}
 
-	rkpPacked, err := encodeToBytes(rkp)
+	// Encode the header to bytes, hash it, then double encode it.
+	headerBytes, err := encodeToBytes(es.header)
+	if err != nil {
+		return err
+	}
+	headerHash := sha512.Sum512(headerBytes)
+	es.headerHash = headerHash[:]
+	err = es.encoder.Encode(headerBytes)
 	if err != nil {
 		return err
 	}
 
-	nonce := es.nonce.ForKeyBox()
+	// Use the header hash to compute the MAC keys.
+	es.computeMACKeys(sender, receivers)
 
-	for _, receiver := range receivers {
-
-		ephemeralShared := ephemeralKey.Precompute(receiver)
-
-		keys := ephemeralShared.Box(nonce, rkpPacked)
-		if err != nil {
-			return err
-		}
-
-		rkc := receiverKeysCiphertexts{Keys: keys}
-
-		// Don't specify the receivers if this public key wants to hide
-		if !receiver.HideIdentity() {
-			rkc.ReceiverKID = receiver.ToKID()
-		}
-
-		eh.Receivers = append(eh.Receivers, rkc)
-
-		tagKey := ephemeralShared
-		if !senderAnon {
-			tagKey = sender.Precompute(receiver)
-		}
-		es.tagKeys = append(es.tagKeys, tagKey)
-	}
 	return nil
+}
+
+func (es *encryptStream) computeMACKeys(sender BoxSecretKey, receivers []BoxPublicKey) {
+	for _, receiver := range receivers {
+		macKey := computeMACKey(sender, receiver, es.headerHash)
+		es.macKeys = append(es.macKeys, macKey)
+	}
 }
 
 func (es *encryptStream) Close() error {
@@ -215,16 +208,14 @@ func (es *encryptStream) writeFooter() error {
 //
 // Returns an io.WriteClose that accepts plaintext data to be encrypted; and
 // also returns an error if initialization failed.
-func NewEncryptStream(ciphertext io.Writer, sender BoxSecretKey, receivers []BoxPublicKey) (plaintext io.WriteCloser, err error) {
+func NewEncryptStream(ciphertext io.Writer, sender BoxSecretKey, receivers []BoxPublicKey) (io.WriteCloser, error) {
 	es := &encryptStream{
 		output:  ciphertext,
 		encoder: newEncoder(ciphertext),
 		inblock: make([]byte, EncryptionBlockSize),
 	}
-	if err := es.init(sender, receivers); err != nil {
-		return nil, err
-	}
-	return es, nil
+	err := es.init(sender, receivers)
+	return es, err
 }
 
 // Seal a plaintext from the given sender, for the specified receiver groups.

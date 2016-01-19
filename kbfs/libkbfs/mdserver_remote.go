@@ -25,11 +25,12 @@ const (
 
 // MDServerRemote is an implementation of the MDServer interface.
 type MDServerRemote struct {
-	config    Config
-	conn      *Connection
-	client    keybase1.MetadataClient
-	log       logger.Logger
-	authToken *AuthToken
+	config       Config
+	conn         *Connection
+	client       keybase1.MetadataClient
+	log          logger.Logger
+	authToken    *AuthToken
+	squelchRekey bool
 
 	observerMu sync.Mutex // protects observers
 	observers  map[TlfID]chan<- error
@@ -46,6 +47,9 @@ var _ KeyServer = (*MDServerRemote)(nil)
 
 // Test that MDServerRemote fully implements the AuthTokenRefreshHandler interface.
 var _ AuthTokenRefreshHandler = (*MDServerRemote)(nil)
+
+// Test that MDServerRemote fully implements the ConnectionHandler interface.
+var _ ConnectionHandler = (*MDServerRemote)(nil)
 
 // NewMDServerRemote returns a new instance of MDServerRemote.
 func NewMDServerRemote(config Config, srvAddr string) *MDServerRemote {
@@ -68,23 +72,30 @@ func (md *MDServerRemote) OnConnect(ctx context.Context,
 	conn *Connection, client keybase1.GenericClient,
 	server *rpc.Server) error {
 
+	md.log.Debug("MDServerRemote: OnConnect called with a new connection")
+
 	// get a new signature
 	signature, err := md.authToken.Sign(ctx)
 	if err != nil {
+		md.log.Warning("MDServerRemote: error signing authentication token: %v", err)
 		return err
 	}
+	md.log.Debug("MDServerRemote: authentication token signed")
 
 	// authenticate -- using md.client here would cause problematic recursion.
 	c := keybase1.MetadataClient{Cli: cancelableClient{client}}
 	pingIntervalSeconds, err := c.Authenticate(ctx, signature)
 	if err != nil {
+		md.log.Warning("MDServerRemote: authentication error: %v", err)
 		return err
 	}
+	md.log.Debug("MDServerRemote: authentication successful; ping interval: %ds", pingIntervalSeconds)
 
 	// request a list of folders needing rekey action
 	if err := md.getFoldersForRekey(ctx, c, server); err != nil {
 		md.log.Warning("MDServerRemote: getFoldersForRekey failed with %v", err)
 	}
+	md.log.Debug("MDServerRemote: requested list of folders for rekey")
 
 	// start pinging
 	md.resetPingTicker(pingIntervalSeconds)
@@ -162,14 +173,13 @@ func (md *MDServerRemote) OnDoCommandError(err error, wait time.Duration) {
 
 // OnDisconnected implements the ConnectionHandler interface.
 func (md *MDServerRemote) OnDisconnected(status DisconnectStatus) {
-	if status == StartingNonFirstConnection {
-		md.log.Warning("MDServerRemote is disconnected")
-	}
+	md.log.Warning("MDServerRemote is disconnected: %v", status)
 	md.cancelObservers()
 	md.resetPingTicker(0)
 	if md.authToken != nil {
 		md.authToken.Shutdown()
 	}
+	md.config.RekeyQueue().Clear()
 }
 
 // ShouldThrottle implements the ConnectionHandler interface.
@@ -241,9 +251,9 @@ func (md *MDServerRemote) get(ctx context.Context, id TlfID, handle *TlfHandle,
 
 	// deserialize blocks
 	rmdses := make([]*RootMetadataSigned, len(response.MdBlocks))
-	for i := range response.MdBlocks {
+	for i, block := range response.MdBlocks {
 		var rmds RootMetadataSigned
-		err = md.config.Codec().Decode(response.MdBlocks[i], &rmds)
+		err = md.config.Codec().Decode(block.Block, &rmds)
 		if err != nil {
 			return id, rmdses, err
 		}
@@ -298,7 +308,7 @@ func (md *MDServerRemote) Put(ctx context.Context, rmds *RootMetadataSigned) err
 
 	// put request
 	arg := keybase1.PutMetadataArg{
-		MdBlock: rmdsBytes,
+		MdBlock: keybase1.MDBlock{Block: rmdsBytes},
 		LogTags: LogTagsFromContextToMap(ctx),
 	}
 	return md.client.PutMetadata(ctx, arg)
@@ -340,9 +350,18 @@ func (md *MDServerRemote) FolderNeedsRekey(_ context.Context, arg keybase1.Folde
 	if id == NullTlfID {
 		return MDServerErrorBadRequest{"Invalid folder ID"}
 	}
-
-	// TODO: send this to a rekeyer routine.
 	md.log.Debug("MDServerRemote: folder needs rekey: %s", id.String())
+	if md.squelchRekey {
+		md.log.Debug("MDServerRemote: rekey updates squelched for testing")
+		return nil
+	}
+	// queue the folder for rekeying
+	errChan := md.config.RekeyQueue().Enqueue(id)
+	select {
+	case err := <-errChan:
+		md.log.Warning("MDServerRemote: error queueing %s for rekey: %v", id, err)
+	default:
+	}
 	return nil
 }
 
@@ -425,7 +444,7 @@ func (md *MDServerRemote) getFoldersForRekey(ctx context.Context,
 			return err
 		}
 	}
-	return client.GetFoldersForRekey(ctx, cryptKey.KID)
+	return client.GetFoldersForRekey(ctx, cryptKey.kid)
 }
 
 // Shutdown implements the MDServer interface for MDServerRemote.
@@ -465,7 +484,7 @@ func (md *MDServerRemote) GetTLFCryptKeyServerHalf(ctx context.Context,
 	// get the key
 	arg := keybase1.GetKeyArg{
 		KeyHalfID: idBytes,
-		DeviceKID: cryptKey.KID.String(),
+		DeviceKID: cryptKey.kid.String(),
 		LogTags:   LogTagsFromContextToMap(ctx),
 	}
 	keyBytes, err := md.client.GetKey(ctx, arg)
@@ -508,4 +527,35 @@ func (md *MDServerRemote) PutTLFCryptKeyServerHalves(ctx context.Context,
 		LogTags:   LogTagsFromContextToMap(ctx),
 	}
 	return md.client.PutKeys(ctx, arg)
+}
+
+// DeleteTLFCryptKeyServerHalf is an implementation of the KeyServer interface.
+func (md *MDServerRemote) DeleteTLFCryptKeyServerHalf(ctx context.Context,
+	uid keybase1.UID, kid keybase1.KID,
+	serverHalfID TLFCryptKeyServerHalfID) error {
+	// encode the ID
+	idBytes, err := md.config.Codec().Encode(serverHalfID)
+	if err != nil {
+		return err
+	}
+
+	// get the key
+	arg := keybase1.DeleteKeyArg{
+		Uid:       uid,
+		DeviceKID: kid,
+		KeyHalfID: idBytes,
+		LogTags:   LogTagsFromContextToMap(ctx),
+	}
+	err = md.client.DeleteKey(ctx, arg)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// DisableRekeyUpdatesForTesting implements the MDServer interface.
+func (md *MDServerRemote) DisableRekeyUpdatesForTesting() {
+	// This doesn't need a lock for testing.
+	md.squelchRekey = true
 }

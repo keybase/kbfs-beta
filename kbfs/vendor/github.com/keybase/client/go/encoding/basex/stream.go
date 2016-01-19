@@ -3,9 +3,7 @@
 
 package basex
 
-import (
-	"io"
-)
+import "io"
 
 // Much of this code is adopted from Go's encoding/base64
 
@@ -190,6 +188,10 @@ func (d *decoder) Read(p []byte) (int, error) {
 	d.nbuf -= numBytesToDecode
 	copy(d.buf[0:d.nbuf], d.buf[numBytesToDecode:numBytesToDecode+d.nbuf])
 
+	if ret == 0 && d.err == nil && len(p) != 0 {
+		return 0, io.EOF
+	}
+
 	return ret, d.err
 }
 
@@ -204,12 +206,12 @@ func (r *filteringReader) Read(p []byte) (int, error) {
 	for n > 0 {
 		offset := 0
 		for i, b := range p[:n] {
-			dm := r.enc.decodeMap[b]
-			if dm == invalidByte {
+			typ := r.enc.getByteType(b)
+			if typ == invalidByteType {
 				return 0, CorruptInputError(r.nRead)
 			}
 			r.nRead++
-			if dm == skipByte {
+			if typ == skipByteType {
 				continue
 			}
 
@@ -242,7 +244,7 @@ func newDecoder(enc *Encoding, r io.Reader) io.Reader {
 	return &decoder{
 		enc:        enc,
 		r:          r,
-		buf:        make([]byte, 128*enc.base256BlockLen),
-		scratchbuf: make([]byte, 128*enc.baseXBlockLen),
+		buf:        make([]byte, 8192*enc.base256BlockLen),
+		scratchbuf: make([]byte, 8192*enc.baseXBlockLen),
 	}
 }

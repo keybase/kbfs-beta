@@ -10,6 +10,7 @@ import (
 // but also keeps track of stats.
 type KeybaseDaemonMeasured struct {
 	delegate              KeybaseDaemon
+	resolveTimer          metrics.Timer
 	identifyTimer         metrics.Timer
 	loadUserPlusKeysTimer metrics.Timer
 	currentSessionTimer   metrics.Timer
@@ -24,6 +25,7 @@ var _ KeybaseDaemon = KeybaseDaemonMeasured{}
 // NewKeybaseDaemonMeasured creates and returns a new KeybaseDaemonMeasured
 // instance with the given delegate and registry.
 func NewKeybaseDaemonMeasured(delegate KeybaseDaemon, r metrics.Registry) KeybaseDaemonMeasured {
+	resolveTimer := metrics.GetOrRegisterTimer("KeybaseDaemon.Resolve", r)
 	identifyTimer := metrics.GetOrRegisterTimer("KeybaseDaemon.Identify", r)
 	loadUserPlusKeysTimer := metrics.GetOrRegisterTimer("KeybaseDaemon.LoadUserPlusKeys", r)
 	currentSessionTimer := metrics.GetOrRegisterTimer("KeybaseDaemon.CurrentSession", r)
@@ -33,6 +35,7 @@ func NewKeybaseDaemonMeasured(delegate KeybaseDaemon, r metrics.Registry) Keybas
 	notifyTimer := metrics.GetOrRegisterTimer("KeybaseDaemon.Notify", r)
 	return KeybaseDaemonMeasured{
 		delegate:              delegate,
+		resolveTimer:          resolveTimer,
 		identifyTimer:         identifyTimer,
 		loadUserPlusKeysTimer: loadUserPlusKeysTimer,
 		currentSessionTimer:   currentSessionTimer,
@@ -43,11 +46,20 @@ func NewKeybaseDaemonMeasured(delegate KeybaseDaemon, r metrics.Registry) Keybas
 	}
 }
 
+// Resolve implements the KeybaseDaemon interface for KeybaseDaemonMeasured.
+func (k KeybaseDaemonMeasured) Resolve(ctx context.Context, assertion string) (
+	uid keybase1.UID, err error) {
+	k.resolveTimer.Time(func() {
+		uid, err = k.delegate.Resolve(ctx, assertion)
+	})
+	return uid, err
+}
+
 // Identify implements the KeybaseDaemon interface for KeybaseDaemonMeasured.
-func (k KeybaseDaemonMeasured) Identify(ctx context.Context, assertion string) (
+func (k KeybaseDaemonMeasured) Identify(ctx context.Context, assertion, reason string) (
 	userInfo UserInfo, err error) {
 	k.identifyTimer.Time(func() {
-		userInfo, err = k.delegate.Identify(ctx, assertion)
+		userInfo, err = k.delegate.Identify(ctx, assertion, reason)
 	})
 	return userInfo, err
 }

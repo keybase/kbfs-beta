@@ -39,7 +39,7 @@ func newKeybaseDaemonRPCWithFakeClient(t *testing.T) (
 func TestKeybaseDaemonRPCIdentifyCanceled(t *testing.T) {
 	c, ctlChan := newKeybaseDaemonRPCWithFakeClient(t)
 	f := func(ctx context.Context) error {
-		_, err := c.Identify(ctx, "")
+		_, err := c.Identify(ctx, "", "")
 		return err
 	}
 	testWithCanceledContext(t, context.Background(), ctlChan, ctlChan, f)
@@ -75,15 +75,15 @@ func (c *fakeKeybaseClient) Call(ctx context.Context, s string, args interface{}
 			Uid:             c.session.UID,
 			Username:        "fake username",
 			Token:           c.session.Token,
-			DeviceSubkeyKid: c.session.CryptPublicKey.KID,
-			DeviceSibkeyKid: c.session.VerifyingKey.KID,
+			DeviceSubkeyKid: c.session.CryptPublicKey.kid,
+			DeviceSibkeyKid: c.session.VerifyingKey.kid,
 		}
 
 		c.currentSessionCalled = true
 		return nil
 
-	case "keybase.1.identify.identify":
-		arg := args.([]interface{})[0].(keybase1.IdentifyArg)
+	case "keybase.1.identify.identify2":
+		arg := args.([]interface{})[0].(keybase1.Identify2Arg)
 		uidStr := strings.TrimPrefix(arg.UserAssertion, "uid:")
 		if len(uidStr) == len(arg.UserAssertion) {
 			return fmt.Errorf("Non-uid assertion %s", arg.UserAssertion)
@@ -95,8 +95,8 @@ func (c *fakeKeybaseClient) Call(ctx context.Context, s string, args interface{}
 			return fmt.Errorf("Could not find user info for UID %s", uid)
 		}
 
-		*res.(*keybase1.IdentifyRes) = keybase1.IdentifyRes{
-			User: &keybase1.User{
+		*res.(*keybase1.Identify2Res) = keybase1.Identify2Res{
+			Upk: keybase1.UserPlusKeys{
 				Uid:      uid,
 				Username: string(userInfo.Name),
 			},
@@ -185,6 +185,12 @@ func TestKeybaseDaemonSessionCache(t *testing.T) {
 
 	// Should be cached again.
 	testCurrentSession(t, client, c, session, expectCached)
+
+	// Should invalidate cache.
+	c.OnDisconnected(UsingExistingConnection)
+
+	// Should fill cache again.
+	testCurrentSession(t, client, c, session, expectCall)
 }
 
 func testLoadUserPlusKeys(
@@ -216,7 +222,7 @@ func testIdentify(
 	client.identifyCalled = false
 
 	ctx := context.Background()
-	info, err := c.Identify(ctx, "uid:"+string(uid))
+	info, err := c.Identify(ctx, "uid:"+string(uid), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,4 +292,11 @@ func TestKeybaseDaemonUserCache(t *testing.T) {
 
 	// Should be cached again.
 	testLoadUserPlusKeys(t, client, c, uid2, name2, expectCached)
+
+	// Should invalidate cache for all users.
+	c.OnDisconnected(UsingExistingConnection)
+
+	// Should fill cache again.
+	testLoadUserPlusKeys(t, client, c, uid1, name1, expectCall)
+	testLoadUserPlusKeys(t, client, c, uid2, name2, expectCall)
 }

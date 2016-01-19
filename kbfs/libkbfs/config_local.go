@@ -7,32 +7,48 @@ import (
 	metrics "github.com/rcrowley/go-metrics"
 )
 
+const (
+	// Max supported plaintext size of a file in KBFS.  TODO: increase
+	// this once we support multiple levels of indirection.
+	maxFileBytesDefault = 2 * 1024 * 1024 * 1024
+	// Max supported size of a directory entry name.
+	maxNameBytesDefault = 255
+	// Maximum supported plaintext size of a directory in KBFS. TODO:
+	// increase this once we support levels of indirection for
+	// directories.
+	maxDirBytesDefault = 512 * 1024
+)
+
 // ConfigLocal implements the Config interface using purely local
 // server objects (no KBFS operations used RPCs).
 type ConfigLocal struct {
-	kbfs      KBFSOps
-	kbpki     KBPKI
-	keyman    KeyManager
-	rep       Reporter
-	mdcache   MDCache
-	kcache    KeyCache
-	bcache    BlockCache
-	crypto    Crypto
-	codec     Codec
-	mdops     MDOps
-	kops      KeyOps
-	bops      BlockOps
-	mdserv    MDServer
-	bserv     BlockServer
-	keyserv   KeyServer
-	daemon    KeybaseDaemon
-	bsplit    BlockSplitter
-	notifier  Notifier
-	clock     Clock
-	renamer   ConflictRenamer
-	registry  metrics.Registry
-	loggerFn  func(prefix string) logger.Logger
-	noBGFlush bool // logic opposite so the default value is the common setting
+	kbfs         KBFSOps
+	kbpki        KBPKI
+	keyman       KeyManager
+	rep          Reporter
+	mdcache      MDCache
+	kcache       KeyCache
+	bcache       BlockCache
+	crypto       Crypto
+	codec        Codec
+	mdops        MDOps
+	kops         KeyOps
+	bops         BlockOps
+	mdserv       MDServer
+	bserv        BlockServer
+	keyserv      KeyServer
+	daemon       KeybaseDaemon
+	bsplit       BlockSplitter
+	notifier     Notifier
+	clock        Clock
+	renamer      ConflictRenamer
+	registry     metrics.Registry
+	loggerFn     func(prefix string) logger.Logger
+	noBGFlush    bool // logic opposite so the default value is the common setting
+	maxFileBytes uint64
+	maxNameBytes uint32
+	maxDirBytes  uint64
+	rekeyQueue   RekeyQueue
 }
 
 var _ Config = (*ConfigLocal)(nil)
@@ -61,7 +77,7 @@ func verifyingKeysToPublicKeys(keys []VerifyingKey) []keybase1.PublicKey {
 	publicKeys := make([]keybase1.PublicKey, len(keys))
 	for i, key := range keys {
 		publicKeys[i] = keybase1.PublicKey{
-			KID:      key.KID,
+			KID:      key.kid,
 			IsSibkey: true,
 		}
 	}
@@ -72,7 +88,7 @@ func cryptPublicKeysToPublicKeys(keys []CryptPublicKey) []keybase1.PublicKey {
 	publicKeys := make([]keybase1.PublicKey, len(keys))
 	for i, key := range keys {
 		publicKeys[i] = keybase1.PublicKey{
-			KID:      key.KID,
+			KID:      key.kid,
 			IsSibkey: false,
 		}
 	}
@@ -137,7 +153,6 @@ func MakeLocalUsers(users []libkb.NormalizedUsername) []LocalUser {
 // NewConfigLocal constructs a new ConfigLocal with default components.
 func NewConfigLocal() *ConfigLocal {
 	config := &ConfigLocal{}
-	config.SetKBFSOps(NewKBFSOpsStandard(config))
 	config.SetClock(wallClock{})
 	config.SetReporter(NewReporterSimple(config.Clock(), 10))
 	config.SetConflictRenamer(TimeAndWriterConflictRenamer{config})
@@ -148,7 +163,11 @@ func NewConfigLocal() *ConfigLocal {
 	config.SetMDOps(&MDOpsStandard{config})
 	config.SetBlockOps(&BlockOpsStandard{config})
 	config.SetKeyOps(&KeyOpsStandard{config})
-	config.SetNotifier(config.kbfs.(*KBFSOpsStandard))
+	config.SetRekeyQueue(NewRekeyQueueStandard(config))
+
+	config.maxFileBytes = maxFileBytesDefault
+	config.maxNameBytes = maxNameBytesDefault
+	config.maxDirBytes = maxDirBytesDefault
 
 	// Don't bother creating the registry if UseNilMetrics is set.
 	if !metrics.UseNilMetrics {
@@ -374,6 +393,21 @@ func (c *ConfigLocal) ReqsBufSize() int {
 	return 20
 }
 
+// MaxFileBytes implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) MaxFileBytes() uint64 {
+	return c.maxFileBytes
+}
+
+// MaxNameBytes implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) MaxNameBytes() uint32 {
+	return c.maxNameBytes
+}
+
+// MaxDirBytes implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) MaxDirBytes() uint64 {
+	return c.maxDirBytes
+}
+
 // MakeLogger implements the Config interface for ConfigLocal.
 func (c *ConfigLocal) MakeLogger(module string) logger.Logger {
 	return c.loggerFn(module)
@@ -403,6 +437,16 @@ func (c *ConfigLocal) MetricsRegistry() metrics.Registry {
 	return c.registry
 }
 
+// SetRekeyQueue implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) SetRekeyQueue(r RekeyQueue) {
+	c.rekeyQueue = r
+}
+
+// RekeyQueue implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) RekeyQueue() RekeyQueue {
+	return c.rekeyQueue
+}
+
 // SetMetricsRegistry implements the Config interface for ConfigLocal.
 func (c *ConfigLocal) SetMetricsRegistry(r metrics.Registry) {
 	c.registry = r
@@ -412,6 +456,7 @@ func (c *ConfigLocal) SetMetricsRegistry(r metrics.Registry) {
 func (c *ConfigLocal) Shutdown() error {
 	err := c.KBFSOps().Shutdown()
 	// Continue with shutdown regardless of err.
+	c.RekeyQueue().Clear()
 	c.MDServer().Shutdown()
 	c.KeyServer().Shutdown()
 	c.KeybaseDaemon().Shutdown()

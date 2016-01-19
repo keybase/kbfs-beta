@@ -62,12 +62,11 @@ type naclBoxSecretKey NaclDHKeyPair
 var _ saltpack.BoxSecretKey = naclBoxSecretKey{}
 
 func (n naclBoxSecretKey) Box(
-	receiver saltpack.BoxPublicKey, nonce *saltpack.Nonce, msg []byte) (
-	[]byte, error) {
+	receiver saltpack.BoxPublicKey, nonce *saltpack.Nonce, msg []byte) []byte {
 	ret := box.Seal([]byte{}, msg, (*[24]byte)(nonce),
 		(*[32]byte)(receiver.ToRawBoxKeyPointer()),
 		(*[32]byte)(n.Private))
-	return ret, nil
+	return ret
 }
 
 func (n naclBoxSecretKey) Unbox(
@@ -136,4 +135,11 @@ func BoxPublicKeyToKeybaseKID(k saltpack.BoxPublicKey) (ret keybase1.KID) {
 	}
 	p := k.ToKID()
 	return keybase1.KIDFromRawKey(p, KIDNaclDH)
+}
+
+func checkSaltpackBrand(b string) error {
+	if b != KeybaseSaltpackBrand {
+		return KeybaseSaltpackError{}
+	}
+	return nil
 }

@@ -599,6 +599,18 @@ func (e IncrementMissingBlockError) Error() string {
 		"such block exists on the server", e.ID)
 }
 
+// ArchiveMissingBlockError indicates that we tried to archive a block
+// reference that the server doesn't have.
+type ArchiveMissingBlockError struct {
+	ID  BlockID
+	Ref BlockRefNonce
+}
+
+func (e ArchiveMissingBlockError) Error() string {
+	return fmt.Sprintf("Tried to archive ref %s for block %v, but no "+
+		"such block ref exists on the server", e.Ref, e.ID)
+}
+
 // MDInvalidGetArguments indicates either the handle or top-level folder ID
 // specified in a get request was invalid.
 type MDInvalidGetArguments struct {
@@ -734,4 +746,111 @@ type DisallowedPrefixError struct {
 func (e DisallowedPrefixError) Error() string {
 	return fmt.Sprintf("Cannot create %s because it has the prefix %s",
 		e.name, e.prefix)
+}
+
+// FileTooBigError indicates that the user tried to write a file that
+// would be bigger than KBFS's supported size.
+type FileTooBigError struct {
+	p               path
+	size            int64
+	maxAllowedBytes uint64
+}
+
+// Error implements the error interface for FileTooBigError.
+func (e FileTooBigError) Error() string {
+	return fmt.Sprintf("File %s would have increased to %d bytes, which is "+
+		"over the supported limit of %d bytes", e.p, e.size, e.maxAllowedBytes)
+}
+
+// NameTooLongError indicates that the user tried to write a directory
+// entry name that would be bigger than KBFS's supported size.
+type NameTooLongError struct {
+	name            string
+	maxAllowedBytes uint32
+}
+
+// Error implements the error interface for NameTooLongError.
+func (e NameTooLongError) Error() string {
+	return fmt.Sprintf("New directory entry name %s has more than the maximum "+
+		"allowed number of bytes (%d)", e.name, e.maxAllowedBytes)
+}
+
+// DirTooBigError indicates that the user tried to write a directory
+// that would be bigger than KBFS's supported size.
+type DirTooBigError struct {
+	p               path
+	size            uint64
+	maxAllowedBytes uint64
+}
+
+// Error implements the error interface for DirTooBigError.
+func (e DirTooBigError) Error() string {
+	return fmt.Sprintf("Directory %s would have increased to at least %d "+
+		"bytes, which is over the supported limit of %d bytes", e.p,
+		e.size, e.maxAllowedBytes)
+}
+
+// TlfNameNotCanonical indicates that a name isn't a canonical, and
+// that another (not necessarily canonical) name should be tried.
+type TlfNameNotCanonical struct {
+	Name, NameToTry string
+}
+
+func (e TlfNameNotCanonical) Error() string {
+	return fmt.Sprintf("TLF name %s isn't canonical: try %s instead",
+		e.Name, e.NameToTry)
+}
+
+// NoCurrentSessionError indicates that the daemon has no current
+// session.  This is basically a wrapper for session.ErrNoSession,
+// needed to give the correct return error code to the OS.
+type NoCurrentSessionError struct {
+}
+
+// Error implements the error interface for NoCurrentSessionError.
+func (e NoCurrentSessionError) Error() string {
+	return "no current session"
+}
+
+// RekeyPermissionError indicates that the user tried to rekey a
+// top-level folder in a manner inconsistent with their permissions.
+type RekeyPermissionError struct {
+	User string
+	Dir  string
+}
+
+// Error implements the error interface for RekeyPermissionError
+func (e RekeyPermissionError) Error() string {
+	return fmt.Sprintf("%s is trying to rekey directory %s in a manner "+
+		"inconsistent with their role", e.User, e.Dir)
+}
+
+// NewRekeyPermissionError constructs a RekeyPermissionError for the given
+// directory and user.
+func NewRekeyPermissionError(ctx context.Context, config Config, dir *TlfHandle,
+	uid keybase1.UID) error {
+	dirname := dir.ToString(ctx, config)
+	if name, err2 := config.KBPKI().GetNormalizedUsername(ctx, uid); err2 == nil {
+		return RekeyPermissionError{string(name), dirname}
+	}
+	return RekeyPermissionError{uid.String(), dirname}
+}
+
+// InvalidKIDError is returned whenever an invalid KID is detected.
+type InvalidKIDError struct {
+	kid keybase1.KID
+}
+
+func (e InvalidKIDError) Error() string {
+	return fmt.Sprintf("Invalid KID %s", e.kid)
+}
+
+// InvalidByte32DataError is returned whenever invalid data for a
+// 32-byte type is detected.
+type InvalidByte32DataError struct {
+	data []byte
+}
+
+func (e InvalidByte32DataError) Error() string {
+	return fmt.Sprintf("Invalid byte32 data %v", e.data)
 }

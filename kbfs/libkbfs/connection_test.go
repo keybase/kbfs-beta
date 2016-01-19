@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/keybase/client/go/client"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
 	rpc "github.com/keybase/go-framed-msgpack-rpc"
@@ -88,6 +87,7 @@ func (ut *unitTester) Err() error {
 // Test a basic reconnect flow.
 func TestReconnectBasic(t *testing.T) {
 	config := NewConfigLocal()
+	setTestLogger(config, t)
 	unitTester := &unitTester{
 		doneChan:   make(chan bool),
 		errToThrow: errors.New("intentional error to trigger reconnect"),
@@ -109,7 +109,8 @@ func TestReconnectBasic(t *testing.T) {
 // Test when a user cancels a connection.
 func TestReconnectCanceled(t *testing.T) {
 	config := NewConfigLocal()
-	cancelErr := client.InputCanceledError{}
+	setTestLogger(config, t)
+	cancelErr := libkb.InputCanceledError{}
 	unitTester := &unitTester{
 		doneChan:   make(chan bool),
 		errToThrow: cancelErr,

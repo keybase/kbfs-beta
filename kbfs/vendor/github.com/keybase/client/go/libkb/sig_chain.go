@@ -50,7 +50,7 @@ func (sc *SigChain) LocalDelegate(kf *KeyFamily, key GenericKey, sigID keybase1.
 	}
 	if cki == nil {
 		sc.G().Log.Debug("LocalDelegate: creating new cki (signingKid: %s)", signingKid)
-		cki = NewComputedKeyInfos()
+		cki = NewComputedKeyInfos(sc.G())
 		cki.InsertLocalEldestKey(signingKid)
 	}
 
@@ -163,7 +163,7 @@ func (sc *SigChain) LoadFromServer(t *MerkleTriple, selfUID keybase1.UID) (dirty
 
 	for i := 0; i < lim; i++ {
 		var link *ChainLink
-		if link, err = ImportLinkFromServer(sc, v.AtIndex(i), selfUID); err != nil {
+		if link, err = ImportLinkFromServer(sc.G(), sc, v.AtIndex(i), selfUID); err != nil {
 			return
 		}
 		if link.GetSeqno() <= low {
@@ -397,7 +397,7 @@ func (sc *SigChain) verifySubchain(kf KeyFamily, links []*ChainLink) (cached boo
 		return
 	}
 
-	cki = NewComputedKeyInfos()
+	cki = NewComputedKeyInfos(sc.G())
 	ckf := ComputedKeyFamily{kf: &kf, cki: cki, Contextified: sc.Contextified}
 
 	first := true
@@ -500,7 +500,7 @@ func (sc *SigChain) VerifySigsAndComputeKeys(eldest keybase1.KID, ckf *ComputedK
 
 	if ckf.kf == nil || eldest.IsNil() {
 		sc.G().Log.Debug("| VerifyWithKey short-circuit, since no Key available")
-		sc.localCki = NewComputedKeyInfos()
+		sc.localCki = NewComputedKeyInfos(sc.G())
 		ckf.cki = sc.localCki
 		return
 	}
@@ -512,7 +512,7 @@ func (sc *SigChain) VerifySigsAndComputeKeys(eldest keybase1.KID, ckf *ComputedK
 	if links == nil || len(links) == 0 {
 		sc.G().Log.Debug("| Empty chain after we limited to eldest %s", eldest)
 		eldestKey, _ := ckf.FindKeyWithKIDUnsafe(eldest)
-		sc.localCki = NewComputedKeyInfos()
+		sc.localCki = NewComputedKeyInfos(sc.G())
 		err = sc.localCki.InsertServerEldestKey(eldestKey, sc.username)
 		ckf.cki = sc.localCki
 		return
@@ -543,6 +543,17 @@ func (sc *SigChain) GetLinkFromSeqno(seqno int) *ChainLink {
 func (sc *SigChain) GetLinkFromSigID(id keybase1.SigID) *ChainLink {
 	for _, link := range sc.chainLinks {
 		if link.GetSigID().Equal(id) {
+			return link
+		}
+	}
+	return nil
+}
+
+// GetLinkFromSigIDQuery will return true if it finds a ChainLink
+// with a SigID that starts with query.
+func (sc *SigChain) GetLinkFromSigIDQuery(query string) *ChainLink {
+	for _, link := range sc.chainLinks {
+		if link.GetSigID().Match(query, false) {
 			return link
 		}
 	}
@@ -648,7 +659,7 @@ func (l *SigChainLoader) LoadLinksFromStorage() (err error) {
 	suid := l.selfUID()
 
 	for curr != nil && goodKey {
-		l.G().Log.Debug("| loading link; curr=%s", curr)
+		l.G().VDL.Log(VLog1, "| loading link; curr=%s", curr)
 		if link, err = ImportLinkFromStorage(curr, suid, l.G()); err != nil {
 			return
 		}
@@ -669,6 +680,7 @@ func (l *SigChainLoader) LoadLinksFromStorage() (err error) {
 	}
 
 	reverse(links)
+	l.G().Log.Debug("| Loaded %d links", len(links))
 
 	l.links = links
 	return

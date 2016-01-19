@@ -22,6 +22,10 @@ var (
 	// end of the encryption stream.
 	ErrTrailingGarbage = errors.New("trailing garbage found at end of message")
 
+	// ErrFailedToReadHeaderBytes indicates that we failed to read the
+	// doubly-encoded header bytes object from the input stream.
+	ErrFailedToReadHeaderBytes = errors.New("failed to read header bytes")
+
 	// ErrPacketOverflow indicates that more than (2^64-2) packets were found in an encryption
 	// stream.  This would indicate a very big message, and results in an error here.
 	ErrPacketOverflow = errors.New("no more than 2^32 packets in a message are supported")
@@ -31,9 +35,6 @@ var (
 	// of randomness, so this should never happen
 	ErrInsufficientRandomness = errors.New("could not collect enough randomness")
 
-	// ErrBadArmorFrame shows up when the ASCII armor frame has non-ASCII
-	ErrBadArmorFrame = errors.New("bad frame found; had non-ASCII")
-
 	// ErrBadEphemeralKey is for when an ephemeral key fails to be properly
 	// imported.
 	ErrBadEphemeralKey = errors.New("bad ephermal key in header")
@@ -41,22 +42,23 @@ var (
 	// ErrBadReceivers shows up when you pass a bad receivers vector
 	ErrBadReceivers = errors.New("bad receivers argument")
 
-	// ErrBadSenderKey is returned if a key with the wrong number of bytes
+	// ErrBadSenderKeySecretbox is returned if the sender secretbox fails to
+	// open.
+	ErrBadSenderKeySecretbox = errors.New("sender secretbox failed to open")
+
+	// ErrBadSymmetricKey is returned if a key with the wrong number of bytes
 	// is discovered in the encryption header.
-	ErrBadSenderKey = errors.New("bad sender key; must be 32 bytes")
+	ErrBadSymmetricKey = errors.New("bad symmetric key; must be 32 bytes")
+
+	// ErrBadBoxKey is returned if a key with the wrong number of bytes
+	// is discovered in the encryption header.
+	ErrBadBoxKey = errors.New("bad box key; must be 32 bytes")
 
 	// ErrBadLookup is when the user-provided key lookup gives a bad value
 	ErrBadLookup = errors.New("bad key lookup")
 
 	// ErrBadSignature is returned when verification of a block fails.
 	ErrBadSignature = errors.New("invalid signature")
-
-	// ErrNoDetachedSignature is returned when there is no signature in the header.
-	ErrNoDetachedSignature = errors.New("no detached signature")
-
-	// ErrDetachedSignaturePresent is returned when there is a signature in the header and
-	// there shouldn't be.
-	ErrDetachedSignaturePresent = errors.New("detached signature present")
 )
 
 // ErrBadTag is generated when a payload hash doesn't match the hash
@@ -82,37 +84,27 @@ type ErrWrongMessageType struct {
 // ErrBadVersion is returned if a packet of an unsupported version is found.
 // Current, only Version1 is supported.
 type ErrBadVersion struct {
-	seqno    PacketSeqno
 	received Version
 }
 
-// ErrBadArmorHeader shows up when we get the wrong value for our header
-type ErrBadArmorHeader struct {
-	wanted   string
-	received string
+// ErrBadFrame shows up when the BEGIN or END frames have issues
+type ErrBadFrame struct {
+	msg string
 }
 
-// ErrBadArmorFooter shows up when we get the wrong value for our header
-type ErrBadArmorFooter struct {
-	wanted   string
-	received string
+func (e ErrBadFrame) Error() string {
+	return fmt.Sprintf("Error in framing: %s", e.msg)
 }
 
-func (e ErrBadArmorFooter) Error() string {
-	return fmt.Sprintf("Bad encryption armor footer; wanted '%s' but got '%s'",
-		e.wanted, e.received)
-}
-
-func (e ErrBadArmorHeader) Error() string {
-	return fmt.Sprintf("Bad encryption armor header; wanted '%s' but got '%s'",
-		e.wanted, e.received)
+func makeErrBadFrame(format string, args ...interface{}) error {
+	return ErrBadFrame{fmt.Sprintf(format, args...)}
 }
 
 func (e ErrWrongMessageType) Error() string {
 	return fmt.Sprintf("Wanted type=%d; got type=%d", e.wanted, e.received)
 }
 func (e ErrBadVersion) Error() string {
-	return fmt.Sprintf("In packet %d: unsupported version (%v)", e.seqno, e.received)
+	return fmt.Sprintf("Unsupported version (%v)", e.received)
 }
 func (e ErrBadCiphertext) Error() string {
 	return fmt.Sprintf("In packet %d: bad ciphertext; failed Poly1305", e)

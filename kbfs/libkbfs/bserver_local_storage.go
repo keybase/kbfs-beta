@@ -1,6 +1,7 @@
 package libkbfs
 
 import (
+	"errors"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -14,15 +15,19 @@ type blockEntry struct {
 	BlockData     []byte
 	Refs          map[BlockRefNonce]bool
 	KeyServerHalf BlockCryptKeyServerHalf
+	Archived      bool
+	Tlf           TlfID
 }
 
 // bserverLocalStorage abstracts the various methods of storing blocks
 // for bserverLocal.
 type bserverLocalStorage interface {
 	get(id BlockID) (blockEntry, error)
+	getAll(tlf TlfID) (map[BlockID]map[BlockRefNonce]bool, error)
 	put(id BlockID, entry blockEntry) error
 	addReference(id BlockID, refNonce BlockRefNonce) error
 	removeReference(id BlockID, refNonce BlockRefNonce) error
+	archiveReference(id BlockID, refNonce BlockRefNonce) error
 	shutdown()
 }
 
@@ -48,6 +53,24 @@ func (s *bserverMemStorage) get(id BlockID) (blockEntry, error) {
 	}
 
 	return entry, nil
+}
+
+func (s *bserverMemStorage) getAll(tlf TlfID) (
+	map[BlockID]map[BlockRefNonce]bool, error) {
+	res := make(map[BlockID]map[BlockRefNonce]bool)
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+
+	for id, entry := range s.m {
+		if entry.Tlf != tlf {
+			continue
+		}
+		res[id] = make(map[BlockRefNonce]bool)
+		for ref := range entry.Refs {
+			res[id][ref] = true
+		}
+	}
+	return res, nil
 }
 
 func (s *bserverMemStorage) put(id BlockID, entry blockEntry) error {
@@ -88,6 +111,20 @@ func (s *bserverMemStorage) removeReference(id BlockID, refNonce BlockRefNonce) 
 	} else {
 		s.m[id] = entry
 	}
+	return nil
+}
+
+func (s *bserverMemStorage) archiveReference(id BlockID, refNonce BlockRefNonce) error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	entry, ok := s.m[id]
+	if !ok {
+		return ArchiveMissingBlockError{id, refNonce}
+	}
+
+	entry.Archived = true
+	s.m[id] = entry
 	return nil
 }
 
@@ -144,6 +181,11 @@ func (s *bserverFileStorage) get(id BlockID) (blockEntry, error) {
 		return blockEntry{}, err
 	}
 	return entry, nil
+}
+
+func (s *bserverFileStorage) getAll(tlf TlfID) (
+	map[BlockID]map[BlockRefNonce]bool, error) {
+	return nil, errors.New("getAll not yet implemented for bserverFileStorage")
 }
 
 func (s *bserverFileStorage) putLocked(p string, entry blockEntry) error {
@@ -204,6 +246,23 @@ func (s *bserverFileStorage) removeReference(id BlockID, refNonce BlockRefNonce)
 	return s.putLocked(p, entry)
 }
 
+func (s *bserverFileStorage) archiveReference(id BlockID, refNonce BlockRefNonce) error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	p := s.buildPath(id)
+	entry, err := s.getLocked(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ArchiveMissingBlockError{id, refNonce}
+		}
+		return err
+	}
+
+	entry.Archived = true
+	return s.putLocked(p, entry)
+}
+
 func (s *bserverFileStorage) shutdown() {
 	// Nothing to do.
 }
@@ -248,6 +307,12 @@ func (s *bserverLeveldbStorage) get(id BlockID) (blockEntry, error) {
 		return blockEntry{}, err
 	}
 	return entry, nil
+}
+
+func (s *bserverLeveldbStorage) getAll(tlf TlfID) (
+	map[BlockID]map[BlockRefNonce]bool, error) {
+	return nil,
+		errors.New("getAll not yet implemented for bserverLeveldbStorage")
 }
 
 func (s *bserverLeveldbStorage) putLocked(id BlockID, entry blockEntry) error {
@@ -298,6 +363,22 @@ func (s *bserverLeveldbStorage) removeReference(id BlockID, refNonce BlockRefNon
 	if len(entry.Refs) == 0 {
 		return s.db.Delete(id.Bytes(), nil)
 	}
+	return s.putLocked(id, entry)
+}
+
+func (s *bserverLeveldbStorage) archiveReference(id BlockID, refNonce BlockRefNonce) error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	entry, err := s.getLocked(id)
+	if err != nil {
+		if err == leveldb.ErrNotFound {
+			return ArchiveMissingBlockError{id, refNonce}
+		}
+		return err
+	}
+
+	entry.Archived = true
 	return s.putLocked(id, entry)
 }
 

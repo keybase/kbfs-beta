@@ -36,12 +36,20 @@ type conflictInput struct {
 type ConflictResolver struct {
 	config Config
 	fbo    *folderBranchOps
+	log    logger.Logger
 
 	inputChanLock sync.RWMutex
 	inputChan     chan conflictInput
 
-	inputGroup sync.WaitGroup
-	log        logger.Logger
+	// We use a mutex, int, and channel to track and synchronize on
+	// the number of outstanding resolves.  We can't use a
+	// sync.WaitGroup because it requires that the Add() and the
+	// Wait() are fully synchronized, which means holding a mutex
+	// during Wait(), which can lead to deadlocks for users of
+	// ConflictResolver.
+	resolveLock sync.Mutex
+	numResolves int
+	isIdleCh    chan struct{} // leave as nil when initializing
 
 	inputLock sync.Mutex
 	currInput conflictInput
@@ -96,6 +104,20 @@ func (cr *ConflictResolver) stopProcessing() {
 	cr.inputChan = nil
 }
 
+func (cr *ConflictResolver) resolutionDone() {
+	cr.resolveLock.Lock()
+	defer cr.resolveLock.Unlock()
+	if cr.numResolves <= 0 {
+		panic(fmt.Sprintf("Bad number of resolves in resolutionDone: %d",
+			cr.numResolves))
+	}
+	cr.numResolves--
+	if cr.numResolves == 0 {
+		close(cr.isIdleCh)
+		cr.isIdleCh = nil
+	}
+}
+
 // processInput processes conflict resolution jobs from the given
 // channel until it is closed. This function uses a parameter for the
 // channel instead of accessing cr.inputChan directly so that it
@@ -140,7 +162,7 @@ func (cr *ConflictResolver) processInput(inputChan <-chan conflictInput) {
 		}()
 		if !valid {
 			cr.log.CDebugf(ctx, "Ignoring uninteresting input: %v", ci)
-			cr.inputGroup.Done()
+			cr.resolutionDone()
 			continue
 		}
 
@@ -159,7 +181,14 @@ func (cr *ConflictResolver) Resolve(unmerged MetadataRevision,
 		return
 	}
 
-	cr.inputGroup.Add(1)
+	func() {
+		cr.resolveLock.Lock()
+		defer cr.resolveLock.Unlock()
+		if cr.numResolves == 0 {
+			cr.isIdleCh = make(chan struct{})
+		}
+		cr.numResolves++
+	}()
 	cr.inputChan <- conflictInput{unmerged, merged}
 }
 
@@ -167,17 +196,18 @@ func (cr *ConflictResolver) Resolve(unmerged MetadataRevision,
 // complete (though not necessarily successful), or until the given
 // context is canceled.
 func (cr *ConflictResolver) Wait(ctx context.Context) error {
-	c := make(chan struct{}, 1)
-	go func() {
-		// TODO: From the WaitGroup documentation, it's unclear what
-		// happens if you call Wait() when there are no outstanding
-		// CRs, so we might want to avoid calling Wait in that case.
-		cr.inputGroup.Wait()
-		c <- struct{}{}
+	idleCh := func() chan struct{} {
+		cr.resolveLock.Lock()
+		defer cr.resolveLock.Unlock()
+		return cr.isIdleCh
 	}()
 
+	if idleCh == nil {
+		return nil
+	}
+
 	select {
-	case <-c:
+	case <-idleCh:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -1534,7 +1564,7 @@ func (cr *ConflictResolver) addMergedRecreates(ctx context.Context,
 					co.AddRefBlock(c.mostRecent)
 					writerName, err :=
 						cr.config.KBPKI().GetNormalizedUsername(
-							ctx, mergedChains.mostRecentMD.data.LastWriter)
+							ctx, mergedChains.mostRecentMD.LastModifyingWriter)
 					if err != nil {
 						return err
 					}
@@ -1690,12 +1720,12 @@ func (cr *ConflictResolver) fetchDirBlockCopy(ctx context.Context,
 type fileBlockMap map[BlockPointer]map[string]*FileBlock
 
 func (cr *ConflictResolver) makeFileBlockDeepCopy(ctx context.Context,
-	lState *lockState, md *RootMetadata, mergedMostRecent BlockPointer,
-	parentPath path, name string, ptr BlockPointer, blocks fileBlockMap) (
+	lState *lockState, chains *crChains, mergedMostRecent BlockPointer, parentPath path,
+	name string, ptr BlockPointer, blocks fileBlockMap) (
 	BlockPointer, error) {
-	fblock, err := cr.fbo.getFileBlockForReading(
-		ctx, lState, md, ptr, parentPath.Branch,
-		parentPath.ChildPath(name, ptr))
+	md := chains.mostRecentMD
+	fblock, err := cr.fbo.getFileBlockForReading(ctx, lState, md, ptr,
+		parentPath.Branch, parentPath.ChildPath(name, ptr))
 	if err != nil {
 		return BlockPointer{}, err
 	}
@@ -1705,7 +1735,6 @@ func (cr *ConflictResolver) makeFileBlockDeepCopy(ctx context.Context,
 	if err != nil {
 		return BlockPointer{}, err
 	}
-	cr.log.CDebugf(ctx, "Deep copying file %s: %v", name, newPtr)
 	if fblock.IsInd {
 		newID, err := cr.config.Crypto().MakeTemporaryBlockID()
 		if err != nil {
@@ -1725,6 +1754,21 @@ func (cr *ConflictResolver) makeFileBlockDeepCopy(ctx context.Context,
 		}
 		newPtr.SetWriter(uid)
 	}
+	cr.log.CDebugf(ctx, "Deep copying file %s: %v -> %v", name, ptr, newPtr)
+	// Mark this as having been created during this chain, so that
+	// later during block accounting we can infer the origin of the
+	// block.
+	chains.createdOriginals[newPtr] = true
+	// If this file was created within the branch, we should clean up
+	// all the old block pointers.
+	original, err := chains.originalFromMostRecentOrSame(ptr)
+	if err != nil {
+		return BlockPointer{}, err
+	}
+	newlyCreated := chains.isCreated(original)
+	if newlyCreated {
+		chains.toUnrefPointers[original] = true
+	}
 
 	if _, ok := blocks[mergedMostRecent]; !ok {
 		blocks[mergedMostRecent] = make(map[string]*FileBlock)
@@ -1733,14 +1777,19 @@ func (cr *ConflictResolver) makeFileBlockDeepCopy(ctx context.Context,
 	// Dup all of the leaf blocks.
 	// TODO: deal with multiple levels of indirection.
 	if fblock.IsInd {
-		for i, ptr := range fblock.IPtrs {
+		for i, iptr := range fblock.IPtrs {
+			if newlyCreated {
+				chains.toUnrefPointers[iptr.BlockPointer] = true
+			}
+
 			// Generate a new nonce for each one.
-			ptr.RefNonce, err = cr.config.Crypto().MakeBlockRefNonce()
+			iptr.RefNonce, err = cr.config.Crypto().MakeBlockRefNonce()
 			if err != nil {
 				return BlockPointer{}, err
 			}
-			ptr.SetWriter(uid)
-			fblock.IPtrs[i] = ptr
+			iptr.SetWriter(uid)
+			fblock.IPtrs[i] = iptr
+			chains.createdOriginals[iptr.BlockPointer] = true
 		}
 	}
 
@@ -1825,14 +1874,13 @@ func (cr *ConflictResolver) doActions(ctx context.Context,
 			// IDs, and later we will ready them.
 			unmergedFetcher := func(ctx context.Context, name string,
 				ptr BlockPointer) (BlockPointer, error) {
-				return cr.makeFileBlockDeepCopy(ctx,
-					lState, unmergedChains.mostRecentMD, mergedPath.tailPointer(),
-					unmergedPath, name, ptr, newFileBlocks)
+				return cr.makeFileBlockDeepCopy(ctx, lState, unmergedChains,
+					mergedPath.tailPointer(), unmergedPath, name, ptr,
+					newFileBlocks)
 			}
 			mergedFetcher := func(ctx context.Context, name string,
 				ptr BlockPointer) (BlockPointer, error) {
-				return cr.makeFileBlockDeepCopy(ctx,
-					lState, mergedChains.mostRecentMD,
+				return cr.makeFileBlockDeepCopy(ctx, lState, mergedChains,
 					mergedPath.tailPointer(), mergedPath, name,
 					ptr, newFileBlocks)
 			}
@@ -1980,7 +2028,10 @@ func (cr *ConflictResolver) makeRevertedOps(ctx context.Context,
 					// Set the Dir.Ref fields to be the same as the Unref
 					// -- they will be fixed up later.
 					rop.AddUpdate(ri.originalOldParent, ri.originalOldParent)
-					rop.AddUpdate(ri.originalNewParent, ri.originalNewParent)
+					if ri.originalNewParent != ri.originalOldParent {
+						rop.AddUpdate(ri.originalNewParent,
+							ri.originalNewParent)
+					}
 					for _, ptr := range cop.Unrefs() {
 						origPtr, err := chains.originalFromMostRecentOrSame(ptr)
 						if err != nil {
@@ -2186,6 +2237,7 @@ func crFixOpPointers(oldOps []op, updates map[BlockPointer]BlockPointer,
 			}
 			*ptr = newPtr
 		}
+
 		newOps = append(newOps, op)
 	}
 	return newOps, nil
@@ -2416,6 +2468,140 @@ func (cr *ConflictResolver) syncTree(ctx context.Context, lState *lockState,
 	return bps, nil
 }
 
+// calculateResolutionBytes figured out how many bytes are referenced
+// and unreferenced in the merged branch by this resolution.  It
+// should be called before the block changes are unembedded in md.
+func (cr *ConflictResolver) calculateResolutionUsage(ctx context.Context,
+	lState *lockState, md *RootMetadata, bps *blockPutState,
+	unmergedChains *crChains, mergedChains *crChains) error {
+	md.RefBytes = 0
+	md.UnrefBytes = 0
+	md.DiskUsage = mergedChains.mostRecentMD.DiskUsage
+
+	// Track the refs and unrefs in a set, to ensure no duplicates
+	refs := make(map[BlockPointer]bool)
+	unrefs := make(map[BlockPointer]bool)
+	for _, op := range md.data.Changes.Ops {
+		for _, ptr := range op.Refs() {
+			// Don't add usage it's an unembedded block change pointer.
+			if _, ok := unmergedChains.blockChangePointers[ptr]; !ok {
+				refs[ptr] = true
+			}
+		}
+		for _, ptr := range op.Unrefs() {
+			unrefs[ptr] = true
+			delete(refs, ptr)
+		}
+		for _, update := range op.AllUpdates() {
+			if update.Unref != update.Ref {
+				unrefs[update.Unref] = true
+				delete(refs, update.Unref)
+			}
+
+			refs[update.Ref] = true
+		}
+	}
+
+	localBlocks := make(map[BlockPointer]Block)
+	for _, bs := range bps.blockStates {
+		if bs.block != nil {
+			localBlocks[bs.blockPtr] = bs.block
+		}
+	}
+
+	// Add bytes for every ref'd block.
+	var err error
+	for ptr := range refs {
+		block, ok := localBlocks[ptr]
+		if !ok {
+			// Look up the block to get its size.  Since we don't know
+			// whether this is a file or directory, just look it up
+			// generically.
+			//
+			// TODO: If the block wasn't already in the cache, this
+			// call won't cache it, so it's kind of wasting work.
+			// Furthermore, we might be able to get the encoded size
+			// from other sources as well (such as its directory entry
+			// or its indirect file block) if we happened to have come
+			// across it before.
+			block, err = cr.fbo.getBlockForReading(ctx, lState, md, ptr,
+				cr.fbo.branch())
+			if err != nil {
+				return err
+			}
+		}
+
+		cr.log.CDebugf(ctx, "Ref'ing block %v", ptr)
+		size := uint64(block.GetEncodedSize())
+		md.RefBytes += size
+		md.DiskUsage += size
+	}
+
+	// Subtract bytes for every unref'd block that wasn't created in
+	// the unmerged branch
+	for ptr := range unrefs {
+		original, ok := unmergedChains.originals[ptr]
+		if !ok {
+			original = ptr
+		}
+		if original != ptr || unmergedChains.isCreated(original) {
+			// Only unref pointers that weren't created as part of the
+			// unmerged branch.  Either they existed already or they
+			// were created as part of the merged branch.
+			continue
+		}
+		// Also make sure this wasn't already removed on the merged branch.
+		original, ok = mergedChains.originals[ptr]
+		if !ok {
+			original = ptr
+		}
+		if mergedChains.isDeleted(original) {
+			continue
+		}
+
+		block, err := cr.fbo.getBlockForReading(ctx, lState,
+			mergedChains.mostRecentMD, ptr, cr.fbo.branch())
+		if err != nil {
+			return err
+		}
+
+		cr.log.CDebugf(ctx, "Unref'ing block %v", ptr)
+		size := uint64(block.GetEncodedSize())
+		md.UnrefBytes += size
+		md.DiskUsage -= size
+	}
+
+	// Any blocks that were created on the unmerged branch, but didn't
+	// survive the resolution, should be marked as unreferenced in the
+	// resolution.
+	toUnref := make(map[BlockPointer]bool)
+	for ptr := range unmergedChains.originals {
+		if !refs[ptr] && !unrefs[ptr] {
+			toUnref[ptr] = true
+		}
+	}
+	for ptr := range unmergedChains.createdOriginals {
+		if !refs[ptr] && !unrefs[ptr] && unmergedChains.byOriginal[ptr] != nil {
+			toUnref[ptr] = true
+		} else if _, ok := unmergedChains.blockChangePointers[ptr]; ok {
+			toUnref[ptr] = true
+		} else if _, ok := unmergedChains.toUnrefPointers[ptr]; ok {
+			toUnref[ptr] = true
+		}
+	}
+	for ptr := range toUnref {
+		// Put the unrefs on the final operations, to cancel out any
+		// stray refs in earlier ops.
+		cr.log.CDebugf(ctx, "Unreferencing dropped block %v", ptr)
+		md.data.Changes.Ops[len(md.data.Changes.Ops)-1].AddUnrefBlock(ptr)
+	}
+
+	cr.log.CDebugf(ctx, "New md byte usage: %d ref, %d unref, %d total usage "+
+		"(previously %d)", md.RefBytes, md.UnrefBytes, md.DiskUsage,
+		mergedChains.mostRecentMD.DiskUsage)
+	return nil
+}
+
 // syncBlocks takes in the complete set of paths affected by this
 // conflict resolution, and organizes them into a tree, which it then
 // syncs using syncTree.  It also puts all the resulting blocks to the
@@ -2501,6 +2687,11 @@ func (cr *ConflictResolver) syncBlocks(ctx context.Context, lState *lockState,
 		}
 	}
 
+	updates := make(map[BlockPointer]BlockPointer)
+	if root == nil {
+		return updates, newBlockPutState(0), nil
+	}
+
 	uid, err := cr.config.KBPKI().GetCurrentUID(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -2522,14 +2713,12 @@ func (cr *ConflictResolver) syncBlocks(ctx context.Context, lState *lockState,
 	}
 
 	// Create an update map, and fix up the gc ops.
-	updates := make(map[BlockPointer]BlockPointer)
 	for i, update := range gcOp.Updates {
 		// The unref should represent the most recent merged pointer
 		// for the block.  However, the other ops will be using the
 		// original pointer as the unref, so use that as the key.
 		updates[update.Unref] = update.Ref
-		chain, ok := mergedChains.byMostRecent[update.Unref]
-		if ok {
+		if chain, ok := mergedChains.byMostRecent[update.Unref]; ok {
 			updates[chain.original] = update.Ref
 		}
 
@@ -2575,6 +2764,24 @@ func (cr *ConflictResolver) syncBlocks(ctx context.Context, lState *lockState,
 		return nil, nil, err
 	}
 
+	// Clean up any gc updates that don't refer to blocks that exist
+	// in the merged branch.
+	var newUpdates []blockUpdate
+	for _, update := range gcOp.Updates {
+		// Ignore it if it doesn't descend from an original block
+		// pointer or one created in the merged branch.
+		if _, ok := unmergedChains.originals[update.Unref]; !ok &&
+			unmergedChains.byOriginal[update.Unref] == nil &&
+			mergedChains.byMostRecent[update.Unref] == nil {
+			cr.log.CDebugf(ctx, "Turning update from %v into just a ref for %v",
+				update.Unref, update.Ref)
+			gcOp.AddRefBlock(update.Ref)
+			continue
+		}
+		newUpdates = append(newUpdates, update)
+	}
+	gcOp.Updates = newUpdates
+
 	newOps[0] = gcOp // move the dummy ops to the front
 	md.data.Changes.Ops = newOps
 
@@ -2586,6 +2793,12 @@ func (cr *ConflictResolver) syncBlocks(ctx context.Context, lState *lockState,
 			cr.log.CDebugf(ctx, "remote op %s: update: %v -> %v", op,
 				update.Unref, update.Ref)
 		}
+	}
+
+	err = cr.calculateResolutionUsage(ctx, lState, md, bps, unmergedChains,
+		mergedChains)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// do the block changes need their own blocks?
@@ -2766,7 +2979,7 @@ func (e CRWrapError) String() string {
 func (cr *ConflictResolver) doResolve(ctx context.Context, ci conflictInput) {
 	cr.log.CDebugf(ctx, "Starting conflict resolution with input %v", ci)
 	var err error
-	defer cr.inputGroup.Done()
+	defer cr.resolutionDone()
 	defer func() {
 		cr.log.CDebugf(ctx, "Finished conflict resolution: %v", err)
 		if err != nil {
@@ -2796,9 +3009,13 @@ func (cr *ConflictResolver) doResolve(ctx context.Context, ci conflictInput) {
 	if err != nil {
 		return
 	}
-	if unmergedChains == nil || len(mergedPaths) == 0 {
+	if len(mergedPaths) == 0 {
 		// nothing to do
-		cr.log.CDebugf(ctx, "No updates to resolve")
+		cr.log.CDebugf(ctx, "No updates to resolve, so finishing")
+		lbc := make(localBcache)
+		newFileBlocks := make(fileBlockMap)
+		err = cr.completeResolution(ctx, lState, unmergedChains, mergedChains,
+			unmergedPaths, mergedPaths, lbc, newFileBlocks, unmergedMDs)
 		return
 	}
 

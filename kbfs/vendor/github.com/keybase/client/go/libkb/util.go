@@ -15,6 +15,7 @@ import (
 	"math"
 	"math/big"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -285,30 +286,6 @@ func IsArmored(buf []byte) bool {
 	return bytes.HasPrefix(bytes.TrimSpace(buf), []byte("-----"))
 }
 
-var clearStart = []byte("-----BEGIN PGP SIGNED MESSAGE-----")
-
-func IsClearsign(p *Peeker) bool {
-	// there should be a newline at the start, so add 1 to length.
-	// (but this will accept a message without the newline)
-	start := make([]byte, len(clearStart)+1)
-	_, err := p.Peek(start)
-	if err != nil {
-		return false
-	}
-	return bytes.HasPrefix(bytes.TrimSpace(start), clearStart)
-}
-
-func PGPDetect(p *Peeker) (armored, clearsign bool) {
-	start := make([]byte, len(clearStart)+1)
-	_, err := p.Peek(start)
-	if err != nil {
-		return
-	}
-	clearsign = bytes.HasPrefix(bytes.TrimSpace(start), clearStart)
-	armored = IsArmored(start)
-	return
-}
-
 func RandInt64() (int64, error) {
 	max := big.NewInt(math.MaxInt64)
 	x, err := rand.Int(rand.Reader, max)
@@ -434,4 +411,21 @@ func SplitByRunes(s string, separators []rune) []string {
 // SplitPath return string split by path separator: SplitPath("/a/b/c") => []string{"a", "b", "c"}
 func SplitPath(s string) []string {
 	return SplitByRunes(s, []rune{filepath.Separator})
+}
+
+// IsSystemAdminUser returns true if current user is root or admin (system user, not Keybase user).
+// WARNING: You shouldn't rely on this for security purposes.
+func IsSystemAdminUser() (isAdminUser bool, match string, err error) {
+	u, err := user.Current()
+	if err != nil {
+		return
+	}
+
+	if u.Uid == "0" {
+		match = "Uid: 0"
+		isAdminUser = true
+		return
+	}
+
+	return
 }

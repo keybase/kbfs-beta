@@ -14,7 +14,14 @@ import (
 )
 
 // Block just needs to be (de)serialized using msgpack
-type Block interface{}
+type Block interface {
+	// GetEncodedSize returns the encoded size of this block, but only
+	// if it has been previously set; otherwise it returns 0.
+	GetEncodedSize() uint32
+	// SetEncodedSize sets the encoded size of this block, locally
+	// caching it.  The encoded size is not serialized.
+	SetEncodedSize(size uint32)
+}
 
 // BlockContext is used by the server to help identify blocks
 type BlockContext interface {
@@ -93,21 +100,32 @@ type KBFSOps interface {
 	// GetFavorites returns the logged-in user's list of favorite
 	// top-level folders.  This is a remote-access operation.
 	GetFavorites(ctx context.Context) ([]*Favorite, error)
-	// GetOrCreateRootNodeByHandle returns the root node and root
-	// entry info associated with the given TlfHandle and branch,
-	// if the logged-in user has read permissions to the top-level
-	// folder.  It creates the folder if one doesn't exist yet (and
+	// GetOrCreateRootNode returns the root node and root entry
+	// info associated with the given name, public flag, and
+	// branch, if the name is the canonical name, and the
+	// logged-in user has read permissions to the top-level
+	// folder. It creates the folder if one doesn't exist yet (and
 	// branch == MasterBranch), and the logged-in user has write
-	// permissions to the top-level folder.  This is a remote-access
-	// operation.
-	GetOrCreateRootNodeForHandle(ctx context.Context, handle *TlfHandle,
-		branch BranchName) (Node, EntryInfo, error)
-	// GetRootNode returns the root node, root entry info, and
-	// handle associated with the given TlfID and branch, if the
-	// logged-in user has read permissions to the top-level folder.
-	// This is a remote-access operation.
-	GetRootNode(ctx context.Context, folderBranch FolderBranch) (
-		Node, EntryInfo, *TlfHandle, error)
+	// permissions to the top-level folder.  This is a
+	// remote-access operation.
+	//
+	// Some errors that may be returned and can be specially
+	// handled:
+	//
+	// TlfNameNotCanonical: Returned when the given name is not
+	// canonical -- another name to try (which itself may not be
+	// canonical) is in the error. Usually, you want to treat this
+	// as a symlink to the name to try.
+	//
+	// NoSuchNameError: Returned when public is set and the given
+	// folder has no public folder.
+	//
+	// WriteAccessError: Returned when the folder doesn't exist
+	// yet but the logged-in user doesn't have write permissions
+	// to create it.
+	GetOrCreateRootNode(
+		ctx context.Context, name string, public bool,
+		branch BranchName) (node Node, ei EntryInfo, err error)
 	// GetDirChildren returns a map of children in the directory,
 	// mapped to their EntryInfo, if the logged-in user has read
 	// permission for the top-level folder.  This is a remote-access
@@ -215,15 +233,22 @@ type KBFSOps interface {
 	// folder-branch. TODO: remove this once we have automatic
 	// conflict resolution.
 	UnstageForTesting(ctx context.Context, folderBranch FolderBranch) error
-	// RekeyForTesting rekeys this folder. TODO: remove this once we
-	// have automatic rekeying.
-	RekeyForTesting(ctx context.Context, folderBranch FolderBranch) error
+	// Rekey rekeys this folder.
+	Rekey(ctx context.Context, id TlfID) error
 	// SyncFromServer blocks until the local client has contacted the
 	// server and guaranteed that all known updates for the given
 	// top-level folder have been applied locally (and notifications
 	// sent out to any observers).  It returns an error if this
 	// folder-branch is currently unmerged or dirty locally.
 	SyncFromServer(ctx context.Context, folderBranch FolderBranch) error
+	// GetUpdateHistory returns a complete history of all the merged
+	// updates of the given folder, in a data structure that's
+	// suitable for encoding directly into JSON.  This is an expensive
+	// operation, and should only be used for ocassional debugging.
+	// Note that the history does not include any unmerged changes or
+	// outstanding writes from the local device.
+	GetUpdateHistory(ctx context.Context, folderBranch FolderBranch) (
+		history TLFUpdateHistory, err error)
 	// Shutdown is called to clean up any resources associated with
 	// this KBFSOps instance.
 	Shutdown() error
@@ -232,10 +257,16 @@ type KBFSOps interface {
 // KeybaseDaemon is an interface for communicating with the local
 // Keybase daemon.
 type KeybaseDaemon interface {
+	// Resolve, given an assertion, resolves it to a UID. The
+	// authenticity of the given UID shouldn't be trusted, except
+	// to compare it with the current UID.
+	Resolve(ctx context.Context, assertion string) (keybase1.UID, error)
+
 	// Identify, given an assertion, returns a UserInfo struct
 	// with the user that matches that assertion, or an error
-	// otherwise.
-	Identify(ctx context.Context, assertion string) (UserInfo, error)
+	// otherwise. The reason string is displayed on any tracker
+	// popups spawned.
+	Identify(ctx context.Context, assertion, reason string) (UserInfo, error)
 
 	// LoadUserPlusKeys returns a UserInfo struct for a
 	// user with the specified UID.
@@ -282,9 +313,17 @@ type KBPKI interface {
 	// currently-active device.
 	GetCurrentVerifyingKey(ctx context.Context) (VerifyingKey, error)
 
-	// ResolveAssertion loads a user by assertion (could also be a
-	// username).
-	ResolveAssertion(ctx context.Context, input string) (keybase1.UID, error)
+	// Resolve resolves an assertion (which could also be a
+	// username) to a UID.  The authenticity of the given UID
+	// shouldn't be trusted, except to compare it with the current
+	// UID.
+	Resolve(ctx context.Context, assertion string) (keybase1.UID, error)
+
+	// Identify resolves an assertion (which could also be a
+	// username) to a UserInfo struct, spawning tracker popups if
+	// necessary.  The reason string is displayed on any tracker
+	// popups spawned.
+	Identify(ctx context.Context, assertion, reason string) (UserInfo, error)
 	// GetNormalizedUsername returns the normalized username
 	// corresponding to the given UID.
 	GetNormalizedUsername(ctx context.Context, uid keybase1.UID) (libkb.NormalizedUsername, error)
@@ -645,6 +684,12 @@ type KeyOps interface {
 	// set of users and devices.
 	PutTLFCryptKeyServerHalves(ctx context.Context,
 		serverKeyHalves map[keybase1.UID]map[keybase1.KID]TLFCryptKeyServerHalf) error
+
+	// DeleteTLFCryptKeyServerHalf deletes a server-side key half for a
+	// device given the key half ID.
+	DeleteTLFCryptKeyServerHalf(ctx context.Context,
+		uid keybase1.UID, kid keybase1.KID,
+		serverHalfID TLFCryptKeyServerHalfID) error
 }
 
 // BlockOps gets and puts data blocks to a BlockServer. It performs
@@ -676,16 +721,22 @@ type BlockOps interface {
 	// with the given ID and context.
 	Delete(ctx context.Context, md *RootMetadata, id BlockID,
 		context BlockContext) error
+
+	// Archive instructs the server to mark the given block references
+	// as "archived"; that is, they are not being used in the current
+	// view of the folder, and shouldn't be served to anyone other
+	// than folder writers.
+	Archive(ctx context.Context, md *RootMetadata, ptrs []BlockPointer) error
 }
 
 // MDServer gets and puts metadata for each top-level directory.  The
-// instantiation should be able to fetch session/user details via
-// KBPKI.  On a put, the server is responsible for 1) ensuring the
-// user has write permissions; 2) ensuring the writer appears as
-// LastWriter; 3) ensuring the LastWriter matches the current session;
-// and 4) detecting conflicting writes based on the previous root
-// block ID (i.e., when it supports strict consistency).  On a get, it
-// verifies the logged-in user has read permissions.
+// instantiation should be able to fetch session/user details via KBPKI.  On a
+// put, the server is responsible for 1) ensuring the user has appropriate
+// permissions for whatever modifications were made; 2) ensuring that
+// LastModifyingWriter and LastModifyingUser are updated appropriately; and 3)
+// detecting conflicting writes based on the previous root block ID (i.e., when
+// it supports strict consistency).  On a get, it verifies the logged-in user
+// has read permissions.
 //
 // TODO: Add interface for searching by time
 type MDServer interface {
@@ -731,6 +782,10 @@ type MDServer interface {
 	RegisterForUpdate(ctx context.Context, id TlfID,
 		currHead MetadataRevision) (<-chan error, error)
 
+	// DisableRekeyUpdatesForTesting disables processing rekey updates
+	// received from the mdserver while testing.
+	DisableRekeyUpdatesForTesting()
+
 	// Shutdown is called to shutdown an MDServer connection.
 	Shutdown()
 }
@@ -745,7 +800,7 @@ type BlockServer interface {
 	// the block, and fills in the provided block object with its
 	// contents, if the logged-in user has read permission for that
 	// block.
-	Get(ctx context.Context, id BlockID, context BlockContext) (
+	Get(ctx context.Context, id BlockID, tlfID TlfID, context BlockContext) (
 		[]byte, BlockCryptKeyServerHalf, error)
 	// Put stores the (encrypted) block data under the given ID and
 	// context on the server, along with the server half of the block
@@ -771,6 +826,13 @@ type BlockServer interface {
 	// the count has already been removed, the call is a no-op.
 	RemoveBlockReference(ctx context.Context, id BlockID, tlfID TlfID,
 		context BlockContext) error
+
+	// ArchiveBlockReferences marks the given block references as
+	// "archived"; that is, they are not being used in the current
+	// view of the folder, and shouldn't be served to anyone other
+	// than folder writers.
+	ArchiveBlockReferences(ctx context.Context, tlfID TlfID,
+		contexts map[BlockID]BlockContext) error
 
 	// Shutdown is called to shutdown an BlockServer connection.
 	Shutdown()
@@ -809,6 +871,12 @@ type KeyServer interface {
 	// set of users and devices.
 	PutTLFCryptKeyServerHalves(ctx context.Context,
 		serverKeyHalves map[keybase1.UID]map[keybase1.KID]TLFCryptKeyServerHalf) error
+
+	// DeleteTLFCryptKeyServerHalf deletes a server-side key half for a
+	// device given the key half ID.
+	DeleteTLFCryptKeyServerHalf(ctx context.Context,
+		uid keybase1.UID, kid keybase1.KID,
+		serverHalfID TLFCryptKeyServerHalfID) error
 
 	// Shutdown is called to free any KeyServer resources.
 	Shutdown()
@@ -908,9 +976,20 @@ type Config interface {
 	ConflictRenamer() ConflictRenamer
 	SetConflictRenamer(ConflictRenamer)
 	DataVersion() DataVer
+	RekeyQueue() RekeyQueue
+	SetRekeyQueue(RekeyQueue)
 	// ReqsBufSize indicates the number of read or write operations
 	// that can be buffered per folder
 	ReqsBufSize() int
+	// MaxFileBytes indicates the maximum supported plaintext size of
+	// a file in bytes.
+	MaxFileBytes() uint64
+	// MaxNameBytes indicates the maximum supported size of a
+	// directory entry name in bytes.
+	MaxNameBytes() uint32
+	// MaxDirBytes indicates the maximum supported plaintext size of a
+	// directory in bytes.
+	MaxDirBytes() uint64
 	// DoBackgroundFlushes says whether we should periodically try to
 	// flush dirty files, even without a sync from the user.  Should
 	// be true except for during some testing.
@@ -1027,4 +1106,17 @@ type crAction interface {
 	// String returns a string representation for this crAction, used
 	// for debugging.
 	String() string
+}
+
+// RekeyQueue is a managed queue of folders needing some rekey action taken upon them
+// by the current client.
+type RekeyQueue interface {
+	// Enqueue enqueues a folder for rekey action.
+	Enqueue(TlfID) <-chan error
+	// IsRekeyPending returns true if the given folder is in the rekey queue.
+	IsRekeyPending(TlfID) bool
+	// GetRekeyChannel will return any rekey completion channel (if pending.)
+	GetRekeyChannel(id TlfID) <-chan error
+	// Clear cancels all pending rekey actions and clears the queue.
+	Clear()
 }

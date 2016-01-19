@@ -18,19 +18,20 @@ package libkb
 
 import (
 	"fmt"
+	"github.com/jonboulle/clockwork"
+	"github.com/keybase/client/go/logger"
+	keybase1 "github.com/keybase/client/go/protocol"
 	"io"
 	"os"
 	"runtime"
 	"sync"
-
-	"github.com/keybase/client/go/logger"
-	keybase1 "github.com/keybase/client/go/protocol"
 )
 
 type ShutdownHook func() error
 
 type GlobalContext struct {
 	Log               logger.Logger  // Handles all logging
+	VDL               *VDebugLog     // verbose debug log
 	Env               *Env           // Env variables, cmdline args & config
 	Keyrings          *Keyrings      // Gpg Keychains holding keys
 	API               API            // How to make a REST call to the server
@@ -63,12 +64,16 @@ type GlobalContext struct {
 	ProofCheckerFactory ProofCheckerFactory // Makes new ProofCheckers
 	ExitCode            keybase1.ExitCode   // Value to return to OS on Exit()
 	RateLimits          *RateLimits         // tracks the last time certain actions were taken
+	Clock               clockwork.Clock     // RealClock unless we're testing
 }
 
 func NewGlobalContext() *GlobalContext {
+	log := logger.New("keybase", ErrorWriter())
 	return &GlobalContext{
-		Log:                 logger.New("keybase", ErrorWriter()),
+		Log:                 log,
+		VDL:                 NewVDebugLog(log),
 		ProofCheckerFactory: defaultProofCheckerFactory,
+		Clock:               clockwork.NewRealClock(),
 	}
 }
 
@@ -122,6 +127,11 @@ func (g *GlobalContext) LoginState() *LoginState {
 	return g.loginState
 }
 
+// ResetLoginState is mainly used for testing...
+func (g *GlobalContext) ResetLoginState() {
+	g.createLoginStateLocked()
+}
+
 func (g *GlobalContext) Logout() error {
 	g.loginStateMu.Lock()
 	defer g.loginStateMu.Unlock()
@@ -148,6 +158,7 @@ func (g *GlobalContext) ConfigureLogging() error {
 	g.Log.Configure(g.Env.GetLogFormat(), g.Env.GetDebug(),
 		g.Env.GetLogFile())
 	g.Output = os.Stdout
+	g.VDL.Configure(g.Env.GetVDebugSetting())
 	return nil
 }
 
@@ -235,7 +246,7 @@ func (g *GlobalContext) Shutdown() error {
 	// Wrap in a Once.Do so that we don't inadvertedly
 	// run this code twice.
 	g.shutdownOnce.Do(func() {
-		G.Log.Debug("Calling shutdown first time through")
+		g.Log.Debug("Calling shutdown first time through")
 		didShutdown = true
 
 		epick := FirstErrorPicker{}
@@ -276,12 +287,14 @@ func (g *GlobalContext) Shutdown() error {
 		err = epick.Error()
 
 		g.Log.Debug("exiting shutdown code=%d; err=%v", g.ExitCode, err)
+
+		g.Log.Shutdown()
 	})
 
 	// Make a little bit of a statement if we wind up here a second time
 	// (which is a bug).
 	if !didShutdown {
-		G.Log.Debug("Skipped shutdown on second call")
+		g.Log.Debug("Skipped shutdown on second call")
 	}
 
 	return err
@@ -448,4 +461,11 @@ func (g *GlobalContext) GetRuntimeDir() string {
 
 func (g *GlobalContext) GetRunMode() RunMode {
 	return g.Env.GetRunMode()
+}
+
+func (g *GlobalContext) GetClock() clockwork.Clock {
+	if g.Clock == nil {
+		return clockwork.NewRealClock()
+	}
+	return g.Clock
 }

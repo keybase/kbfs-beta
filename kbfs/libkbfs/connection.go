@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff"
-	"github.com/keybase/client/go/client"
 	"github.com/keybase/client/go/libkb"
+	"github.com/keybase/client/go/logger"
 	keybase1 "github.com/keybase/client/go/protocol"
 	rpc "github.com/keybase/go-framed-msgpack-rpc"
 	"golang.org/x/net/context"
@@ -180,6 +180,7 @@ type Connection struct {
 	handler        ConnectionHandler
 	transport      ConnectionTransport
 	errorUnwrapper rpc.ErrorUnwrapper
+	log            logger.Logger
 
 	// protects everything below.
 	mutex             sync.Mutex
@@ -217,6 +218,7 @@ func newConnectionWithTransport(config Config,
 		handler:        handler,
 		transport:      transport,
 		errorUnwrapper: errorUnwrapper,
+		log:            config.MakeLogger(""),
 	}
 	if connectNow {
 		// start connecting now
@@ -227,9 +229,12 @@ func newConnectionWithTransport(config Config,
 
 // connect performs the actual connect() and rpc setup.
 func (c *Connection) connect(ctx context.Context) error {
+	c.log.Debug("Connection: dialing transport")
+
 	// connect
 	transport, err := c.transport.Dial(ctx)
 	if err != nil {
+		c.log.Warning("Connection: error dialing transport: %v", err)
 		return err
 	}
 
@@ -239,6 +244,7 @@ func (c *Connection) connect(ctx context.Context) error {
 	// call the connect handler
 	err = c.handler.OnConnect(ctx, c, client, server)
 	if err != nil {
+		c.log.Warning("Connection: error calling OnConnect handler: %v", err)
 		return err
 	}
 
@@ -251,6 +257,7 @@ func (c *Connection) connect(ctx context.Context) error {
 	c.server = server
 	c.transport.Finalize()
 
+	c.log.Debug("Connection: connected")
 	return nil
 }
 
@@ -322,17 +329,15 @@ func (c *Connection) waitForConnection(ctx context.Context) error {
 
 // Returns true if the error indicates we should retry the command.
 func (c *Connection) checkForRetry(err error) bool {
-	if err == nil {
-		return false
-	}
-	_, disconnected := err.(rpc.DisconnectedError)
-	eof := err == io.EOF
-	return disconnected || eof
+	return err == io.EOF
 }
 
-// IsConnected returns true if the connection is connected.
+// IsConnected returns true if the connection is connected.  The mutex
+// must not be held by the caller.
 func (c *Connection) IsConnected() bool {
-	return c.transport.IsConnected()
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.transport.IsConnected() && c.client != nil
 }
 
 // This will either kick-off a new reconnection attempt or wait for an
@@ -343,6 +348,7 @@ func (c *Connection) IsConnected() bool {
 func (c *Connection) getReconnectChan() (
 	reconnectChan chan struct{}, disconnectStatus DisconnectStatus,
 	reconnectErrPtr *error) {
+	c.log.Debug("Connection: getReconnectChan")
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	if c.reconnectChan == nil {
@@ -369,7 +375,7 @@ func (c *Connection) getReconnectChan() (
 func dontRetryOnConnect(err error) bool {
 	// InputCanceledError likely means the user canceled a login
 	// dialog.
-	_, inputCanceled := err.(client.InputCanceledError)
+	_, inputCanceled := err.(libkb.InputCanceledError)
 	return inputCanceled
 }
 
@@ -436,7 +442,6 @@ func (c *Connection) Shutdown() {
 		// close the connection
 		c.transport.Close()
 	}
-	c.handler = nil // drop the circular reference
 }
 
 type connectionClient struct {

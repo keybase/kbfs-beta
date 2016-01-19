@@ -48,6 +48,11 @@ func (cbo *CheckBlockOps) Delete(ctx context.Context, md *RootMetadata,
 	return cbo.delegate.Delete(ctx, md, id, context)
 }
 
+func (cbo *CheckBlockOps) Archive(ctx context.Context, md *RootMetadata,
+	ptrs []BlockPointer) error {
+	return cbo.delegate.Archive(ctx, md, ptrs)
+}
+
 var tCtxID = "kbfs-ops-test-id"
 
 func kbfsOpsInit(t *testing.T, changeMd bool) (mockCtrl *gomock.Controller,
@@ -88,6 +93,10 @@ func kbfsOpsInit(t *testing.T, changeMd bool) (mockCtrl *gomock.Controller,
 
 	// Ignore Notify calls for now
 	config.mockRep.EXPECT().Notify(gomock.Any(), gomock.Any()).AnyTimes()
+
+	// Ignore Archive calls for now
+	config.mockBops.EXPECT().Archive(gomock.Any(), gomock.Any(),
+		gomock.Any()).AnyTimes().Return(nil)
 
 	// make the context identifiable, to verify that it is passed
 	// correctly to the observer
@@ -161,7 +170,7 @@ func TestKBFSOpsGetFavoritesSuccess(t *testing.T) {
 	folders := []keybase1.Folder{handle1.ToKBFolder(ctx, config), handle2.ToKBFolder(ctx, config)}
 
 	config.mockKbpki.EXPECT().FavoriteList(ctx).Return(folders, nil)
-	config.mockKbpki.EXPECT().ResolveAssertion(gomock.Any(), gomock.Any()).AnyTimes().Return(keybase1.UID(""), nil)
+	config.mockKbpki.EXPECT().Identify(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().Return(UserInfo{}, nil)
 
 	handles2, err := config.KBFSOps().GetFavorites(ctx)
 	if err != nil {
@@ -207,7 +216,7 @@ func makeIDAndRMD(t *testing.T, config *ConfigMock) (
 	keybase1.UID, TlfID, *RootMetadata) {
 	uid, id, h := makeID(t, config, false)
 	rmd := NewRootMetadataForTest(h, id)
-	AddNewKeysOrBust(t, rmd, TLFKeyBundle{})
+	AddNewKeysOrBust(t, rmd, *NewTLFKeyBundle())
 
 	ops := getOps(config, id)
 	ops.head = rmd
@@ -226,12 +235,11 @@ func TestKBFSOpsGetRootNodeCacheSuccess(t *testing.T) {
 	rmd.data.Dir.BlockPointer.ID = fakeBlockID(1)
 	rmd.data.Dir.Type = Dir
 
-	n, ei, h, err := config.KBFSOps().
-		GetRootNode(ctx, FolderBranch{id, MasterBranch})
+	ops := getOps(config, id)
+	n, ei, h, err := ops.getRootNode(ctx)
 	if err != nil {
 		t.Errorf("Got error on root MD: %v", err)
 	}
-	ops := getOps(config, id)
 	p := ops.nodeCache.PathFromNode(n)
 
 	if p.Tlf != id {
@@ -288,7 +296,7 @@ func fillInNewMD(t *testing.T, config *ConfigMock, rmd *RootMetadata) (
 	if !rmd.ID.IsPublic() {
 		config.mockKeyman.EXPECT().Rekey(gomock.Any(), rmd).
 			Do(func(ctx context.Context, rmd *RootMetadata) {
-			AddNewKeysOrBust(t, rmd, TLFKeyBundle{})
+			AddNewKeysOrBust(t, rmd, *NewTLFKeyBundle())
 		}).Return(true, nil)
 	}
 	rootPtr = BlockPointer{
@@ -325,13 +333,12 @@ func testKBFSOpsGetRootNodeCreateNewSuccess(t *testing.T, public bool) {
 	config.mockMdops.EXPECT().Put(gomock.Any(), rmd).Return(nil)
 	config.mockMdcache.EXPECT().Put(rmd).Return(nil)
 
-	n, ei, h, err := config.KBFSOps().
-		GetRootNode(ctx, FolderBranch{id, MasterBranch})
+	ops := getOps(config, id)
+	n, ei, h, err := ops.getRootNode(ctx)
 
 	if err != nil {
 		t.Errorf("Got error on root MD: %v", err)
 	}
-	ops := getOps(config, id)
 	p := ops.nodeCache.PathFromNode(n)
 
 	if p.Tlf != id {
@@ -387,9 +394,8 @@ func TestKBFSOpsGetRootMDCreateNewFailNonWriter(t *testing.T) {
 	expectedErr := WriteAccessError{
 		fmt.Sprintf("user_%s", uid), h.ToString(ctx, config)}
 
-	if _, _, _, err :=
-		config.KBFSOps().
-			GetRootNode(ctx, FolderBranch{id, MasterBranch}); err == nil {
+	ops := getOps(config, id)
+	if _, _, _, err := ops.getRootNode(ctx); err == nil {
 		t.Errorf("Got no expected error on root MD")
 	} else if err.Error() != expectedErr.Error() {
 		t.Errorf("Got unexpected error on root MD: %v", err)
@@ -423,8 +429,9 @@ func TestKBFSOpsGetRootMDForHandleExisting(t *testing.T) {
 	ops := getOps(config, id)
 	ops.head = rmd
 
+	name := h.ToString(ctx, config)
 	n, ei, err :=
-		config.KBFSOps().GetOrCreateRootNodeForHandle(ctx, h, MasterBranch)
+		config.KBFSOps().GetOrCreateRootNode(ctx, name, false, MasterBranch)
 	if err != nil {
 		t.Errorf("Got error on root MD for handle: %v", err)
 	}
@@ -1265,6 +1272,88 @@ func TestCreateDirFailDupName(t *testing.T) {
 
 func TestCreateLinkFailDupName(t *testing.T) {
 	testCreateEntryFailDupName(t, false)
+}
+
+func testCreateEntryFailNameTooLong(t *testing.T, isDir bool) {
+	mockCtrl, config, ctx := kbfsOpsInit(t, false)
+	defer kbfsTestShutdown(mockCtrl, config)
+
+	u, id, rmd := makeIDAndRMD(t, config)
+
+	rootID := fakeBlockID(42)
+	rootBlock := NewDirBlock().(*DirBlock)
+	node := pathNode{makeBP(rootID, rmd, config, u), "p"}
+	p := path{FolderBranch{Tlf: id}, []pathNode{node}}
+	ops := getOps(config, id)
+	n := nodeFromPath(t, ops, p)
+
+	config.maxNameBytes = 2
+	name := "aaa"
+
+	testPutBlockInCache(config, node.BlockPointer, id, rootBlock)
+	expectedErr := NameTooLongError{name, config.maxNameBytes}
+
+	var err error
+	// dir and link have different checks for dup name
+	if isDir {
+		_, _, err = config.KBFSOps().CreateDir(ctx, n, name)
+	} else {
+		_, err = config.KBFSOps().CreateLink(ctx, n, name, "b")
+	}
+	if err == nil {
+		t.Errorf("Got no expected error on create")
+	} else if err != expectedErr {
+		t.Errorf("Got unexpected error on create: %v", err)
+	}
+}
+
+func TestCreateDirFailNameTooLong(t *testing.T) {
+	testCreateEntryFailNameTooLong(t, true)
+}
+
+func TestCreateLinkFailNameTooLong(t *testing.T) {
+	testCreateEntryFailNameTooLong(t, false)
+}
+
+func testCreateEntryFailDirTooBig(t *testing.T, isDir bool) {
+	mockCtrl, config, ctx := kbfsOpsInit(t, false)
+	defer kbfsTestShutdown(mockCtrl, config)
+
+	u, id, rmd := makeIDAndRMD(t, config)
+
+	rootID := fakeBlockID(42)
+	rootBlock := NewDirBlock().(*DirBlock)
+	node := pathNode{makeBP(rootID, rmd, config, u), "p"}
+	p := path{FolderBranch{Tlf: id}, []pathNode{node}}
+	ops := getOps(config, id)
+	n := nodeFromPath(t, ops, p)
+	rmd.data.Dir.Size = 10
+
+	config.maxDirBytes = 12
+	name := "aaa"
+
+	testPutBlockInCache(config, node.BlockPointer, id, rootBlock)
+
+	var err error
+	// dir and link have different checks for dup name
+	if isDir {
+		_, _, err = config.KBFSOps().CreateDir(ctx, n, name)
+	} else {
+		_, err = config.KBFSOps().CreateLink(ctx, n, name, "b")
+	}
+	if err == nil {
+		t.Errorf("Got no expected error on create")
+	} else if _, ok := err.(DirTooBigError); !ok {
+		t.Errorf("Got unexpected error on create: %v", err)
+	}
+}
+
+func TestCreateDirFailDirTooBig(t *testing.T) {
+	testCreateEntryFailDirTooBig(t, true)
+}
+
+func TestCreateLinkFailDirTooBig(t *testing.T) {
+	testCreateEntryFailDirTooBig(t, false)
 }
 
 func testCreateEntryFailKBFSPrefix(t *testing.T, et EntryType) {
@@ -2923,6 +3012,44 @@ func TestKBFSOpsWriteOverMultipleBlocks(t *testing.T) {
 		})
 }
 
+func TestKBFSOpsWriteFailTooBig(t *testing.T) {
+	mockCtrl, config, ctx := kbfsOpsInit(t, true)
+	defer kbfsTestShutdown(mockCtrl, config)
+
+	uid, id, rmd := makeIDAndRMD(t, config)
+
+	rootID := fakeBlockID(42)
+	fileID := fakeBlockID(43)
+	rootBlock := NewDirBlock().(*DirBlock)
+	rootBlock.Children["f"] = DirEntry{
+		BlockInfo: BlockInfo{
+			BlockPointer: makeBP(fileID, rmd, config, uid),
+			EncodedSize:  1,
+		},
+		EntryInfo: EntryInfo{
+			Type: File,
+			Size: 10,
+		},
+	}
+	fileBlock := NewFileBlock().(*FileBlock)
+	fileBlock.Contents = []byte{1, 2, 3, 4, 5}
+	node := pathNode{makeBP(rootID, rmd, config, uid), "p"}
+	fileNode := pathNode{makeBP(fileID, rmd, config, uid), "f"}
+	p := path{FolderBranch{Tlf: id}, []pathNode{node, fileNode}}
+	ops := getOps(config, id)
+	n := nodeFromPath(t, ops, p)
+	data := []byte{6, 7, 8}
+
+	config.maxFileBytes = 12
+
+	err := config.KBFSOps().Write(ctx, n, data, 10)
+	if err == nil {
+		t.Errorf("Got no expected error on Write")
+	} else if _, ok := err.(FileTooBigError); !ok {
+		t.Errorf("Got unexpected error on Write: %v", err)
+	}
+}
+
 // Read tests check the same error cases, so no need for similar write
 // error tests
 
@@ -4394,9 +4521,9 @@ func TestSyncDirtyWithBlockChangePointerSuccess(t *testing.T) {
 		t.Errorf("Got unexpected error on sync: %v", err)
 	}
 	newP := ops.nodeCache.PathFromNode(n)
-	if newRmd.data.Changes.Pointer.ID != changeBlockID {
+	if newRmd.data.cachedChanges.Info.ID != changeBlockID {
 		t.Errorf("Got unexpected changeBlocks pointer: %v vs %v",
-			newRmd.data.Changes.Pointer.ID, changeBlockID)
+			newRmd.data.cachedChanges.Info.ID, changeBlockID)
 	} else {
 		checkNewPath(t, ctx, config, newP, expectedPath, newRmd, blocks,
 			Exec, "", false)
@@ -4528,15 +4655,13 @@ func TestKBFSOpsBackgroundFlush(t *testing.T) {
 }
 
 func TestKBFSOpsWriteRenameStat(t *testing.T) {
-	config, uid, ctx := kbfsOpsInitNoMocks(t, "test_user")
+	config, _, ctx := kbfsOpsInitNoMocks(t, "test_user")
 	defer config.Shutdown()
 
 	// create a file.
 	kbfsOps := config.KBFSOps()
-	h := NewTlfHandle()
-	h.Writers = append(h.Writers, uid)
 	rootNode, _, err :=
-		kbfsOps.GetOrCreateRootNodeForHandle(ctx, h, MasterBranch)
+		kbfsOps.GetOrCreateRootNode(ctx, "test_user", false, MasterBranch)
 	if err != nil {
 		t.Fatalf("Couldn't create folder: %v", err)
 	}
@@ -4578,15 +4703,13 @@ func TestKBFSOpsWriteRenameStat(t *testing.T) {
 }
 
 func TestKBFSOpsWriteRenameGetDirChildren(t *testing.T) {
-	config, uid, ctx := kbfsOpsInitNoMocks(t, "test_user")
+	config, _, ctx := kbfsOpsInitNoMocks(t, "test_user")
 	defer config.Shutdown()
 
 	// create a file.
 	kbfsOps := config.KBFSOps()
-	h := NewTlfHandle()
-	h.Writers = append(h.Writers, uid)
 	rootNode, _, err :=
-		kbfsOps.GetOrCreateRootNodeForHandle(ctx, h, MasterBranch)
+		kbfsOps.GetOrCreateRootNode(ctx, "test_user", false, MasterBranch)
 	if err != nil {
 		t.Fatalf("Couldn't create folder: %v", err)
 	}

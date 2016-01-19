@@ -35,7 +35,7 @@ func NewBlockServerMemory(config Config) (*BlockServerLocal, error) {
 }
 
 // Get implements the BlockServer interface for BlockServerLocal
-func (b *BlockServerLocal) Get(ctx context.Context, id BlockID,
+func (b *BlockServerLocal) Get(ctx context.Context, id BlockID, tlfID TlfID,
 	context BlockContext) ([]byte, BlockCryptKeyServerHalf, error) {
 	b.log.CDebugf(ctx, "BlockServerLocal.Get id=%s uid=%s",
 		id, context.GetWriter())
@@ -61,6 +61,7 @@ func (b *BlockServerLocal) Put(ctx context.Context, id BlockID, tlfID TlfID,
 		BlockData:     buf,
 		Refs:          make(map[BlockRefNonce]bool),
 		KeyServerHalf: serverHalf,
+		Tlf:           tlfID,
 	}
 	entry.Refs[zeroBlockRefNonce] = true
 	return b.s.put(id, entry)
@@ -86,6 +87,30 @@ func (b *BlockServerLocal) RemoveBlockReference(ctx context.Context, id BlockID,
 		id, context.GetWriter())
 
 	return b.s.removeReference(id, refNonce)
+}
+
+// ArchiveBlockReferences implements the BlockServer interface for
+// BlockServerLocal
+func (b *BlockServerLocal) ArchiveBlockReferences(ctx context.Context,
+	tlfID TlfID, contexts map[BlockID]BlockContext) error {
+	for id, context := range contexts {
+		refNonce := context.GetRefNonce()
+		b.log.CDebugf(ctx, "BlockServerLocal.ArchiveBlockReference id=%s "+
+			"refnonce=%s", id, refNonce)
+		err := b.s.archiveReference(id, refNonce)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// getAll returns all the known block references, and should only be
+// used during testing.
+func (b *BlockServerLocal) getAll(tlf TlfID) (
+	map[BlockID]map[BlockRefNonce]bool, error) {
+	return b.s.getAll(tlf)
 }
 
 // Shutdown implements the BlockServer interface for BlockServerLocal.

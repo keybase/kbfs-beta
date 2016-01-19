@@ -10,7 +10,6 @@ import (
 	"runtime/pprof"
 	"sync"
 
-	"github.com/keybase/client/go/client"
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/logger"
 )
@@ -89,7 +88,7 @@ func GetDefaultMDServer() string {
 // InitParams that will be filled in once the given FlagSet is parsed.
 func AddFlags(flags *flag.FlagSet) *InitParams {
 	var params InitParams
-	flags.BoolVar(&params.Debug, "debug", false, "Print debug messages")
+	flags.BoolVar(&params.Debug, "debug", BoolForString(os.Getenv("KBFS_DEBUG")), "Print debug messages")
 	flags.StringVar(&params.CPUProfile, "cpuprofile", "", "write cpu profile to file")
 	flags.StringVar(&params.MemProfile, "memprofile", "", "write memory profile to file")
 
@@ -174,10 +173,10 @@ func makeBlockServer(config Config, serverInMemory bool, serverRootDir, bserverA
 	return NewBlockServerRemote(config, bserverAddr), nil
 }
 
-func makeKeybaseDaemon(config Config, serverInMemory bool, serverRootDir string, localUser libkb.NormalizedUsername, codec Codec, log logger.Logger) (KeybaseDaemon, error) {
+func makeKeybaseDaemon(config Config, serverInMemory bool, serverRootDir string, localUser libkb.NormalizedUsername, codec Codec, log logger.Logger, debug bool) (KeybaseDaemon, error) {
 	if len(localUser) == 0 {
 		libkb.G.ConfigureSocketInfo()
-		return NewKeybaseDaemonRPC(config, libkb.G, log), nil
+		return NewKeybaseDaemonRPC(config, libkb.G, log, debug), nil
 	}
 
 	users := []libkb.NormalizedUsername{"strib", "max", "chris", "fred"}
@@ -252,8 +251,21 @@ func Init(params InitParams, onInterruptFn func(), log logger.Logger) (Config, e
 
 	config := NewConfigLocal()
 
-	// 64K blocks by default, block changes embedded max == 8K
-	bsplitter, err := NewBlockSplitterSimple(64*1024, 8*1024,
+	// 512K blocks by default, block changes embedded max == 8K.
+	// Block size was chosen somewhat arbitrarily by trying to
+	// minimize the overall size of the history written by a user when
+	// appending 1KB writes to a file, up to a 1GB total file.  Here
+	// is the output of a simple script that approximates that
+	// calculation:
+	//
+	// Total history size for 0065536-byte blocks: 1134341128192 bytes
+	// Total history size for 0131072-byte blocks: 618945052672 bytes
+	// Total history size for 0262144-byte blocks: 412786622464 bytes
+	// Total history size for 0524288-byte blocks: 412786622464 bytes
+	// Total history size for 1048576-byte blocks: 618945052672 bytes
+	// Total history size for 2097152-byte blocks: 1134341128192 bytes
+	// Total history size for 4194304-byte blocks: 2216672886784 bytes
+	bsplitter, err := NewBlockSplitterSimple(512*1024, 8*1024,
 		config.Codec())
 	if err != nil {
 		return nil, err
@@ -283,6 +295,9 @@ func Init(params InitParams, onInterruptFn func(), log logger.Logger) (Config, e
 		return lg
 	})
 
+	kbfsOps := NewKBFSOpsStandard(config)
+	config.SetKBFSOps(kbfsOps)
+	config.SetNotifier(kbfsOps)
 	config.SetKeyManager(NewKeyManagerStandard(config))
 
 	mdServer, err := makeMDServer(
@@ -305,13 +320,7 @@ func Init(params InitParams, onInterruptFn func(), log logger.Logger) (Config, e
 
 	config.SetKeyServer(keyServer)
 
-	client.InitUI()
-	if err := client.GlobUI.Configure(); err != nil {
-		log.Warning("problem configuring UI: %s", err)
-		log.Warning("ignoring for now...")
-	}
-
-	daemon, err := makeKeybaseDaemon(config, params.ServerInMemory, params.ServerRootDir, localUser, config.Codec(), config.MakeLogger(""))
+	daemon, err := makeKeybaseDaemon(config, params.ServerInMemory, params.ServerRootDir, localUser, config.Codec(), config.MakeLogger(""), params.Debug)
 	if err != nil {
 		return nil, fmt.Errorf("problem creating daemon: %s", err)
 	}

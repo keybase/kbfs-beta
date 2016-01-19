@@ -5,16 +5,10 @@ package saltpack
 
 import "fmt"
 
-type receiverKeysPlaintext struct {
-	_struct    bool   `codec:",toarray"`
-	Sender     []byte `codec:"sender"`
-	SessionKey []byte `codec:"session_key"`
-}
-
-type receiverKeysCiphertexts struct {
-	_struct     bool   `codec:",toarray"`
-	ReceiverKID []byte `codec:"receiver_key_id"`
-	Keys        []byte `codec:"keys"`
+type receiverKeys struct {
+	_struct       bool   `codec:",toarray"`
+	ReceiverKID   []byte `codec:"receiver_key_id"`
+	PayloadKeyBox []byte `codec:"payloadkey"`
 }
 
 // Version is a major.minor pair that shows the version of the whole file
@@ -28,13 +22,14 @@ type Version struct {
 // It contains the encryptions of the session keys, and various
 // message metadata.
 type EncryptionHeader struct {
-	_struct    bool                      `codec:",toarray"`
-	FormatName string                    `codec:"format_name"`
-	Version    Version                   `codec:"vers"`
-	Type       MessageType               `codec:"type"`
-	Sender     []byte                    `codec:"sender"`
-	Receivers  []receiverKeysCiphertexts `codec:"rcvrs"`
-	seqno      PacketSeqno
+	_struct         bool           `codec:",toarray"`
+	FormatName      string         `codec:"format_name"`
+	Version         Version        `codec:"vers"`
+	Type            MessageType    `codec:"type"`
+	Ephemeral       []byte         `codec:"ephemeral"`
+	SenderSecretbox []byte         `codec:"sendersecretbox"`
+	Receivers       []receiverKeys `codec:"rcvrs"`
+	seqno           PacketSeqno
 }
 
 // EncryptionBlock contains a block of encrypted data. It contains
@@ -46,19 +41,12 @@ type EncryptionBlock struct {
 	seqno              PacketSeqno
 }
 
-func verifyRawKey(k []byte) error {
-	if len(k) != len(RawBoxKey{}) {
-		return ErrBadSenderKey
-	}
-	return nil
-}
-
 func (h *EncryptionHeader) validate() error {
 	if h.Type != MessageTypeEncryption {
 		return ErrWrongMessageType{MessageTypeEncryption, h.Type}
 	}
-	if h.Version.Major != SaltPackCurrentVersion.Major {
-		return ErrBadVersion{h.seqno, h.Version}
+	if h.Version.Major != SaltpackCurrentVersion.Major {
+		return ErrBadVersion{h.Version}
 	}
 	return nil
 }
@@ -71,8 +59,6 @@ type SignatureHeader struct {
 	Type         MessageType `codec:"type"`
 	SenderPublic []byte      `codec:"sender_public"`
 	Nonce        []byte      `codec:"nonce"`
-	Signature    []byte      `codec:"signature,omitempty"`
-	seqno        PacketSeqno
 }
 
 func newSignatureHeader(sender SigningPublicKey, msgType MessageType) (*SignatureHeader, error) {
@@ -85,8 +71,8 @@ func newSignatureHeader(sender SigningPublicKey, msgType MessageType) (*Signatur
 	}
 
 	header := &SignatureHeader{
-		FormatName:   SaltPackFormatName,
-		Version:      SaltPackCurrentVersion,
+		FormatName:   SaltpackFormatName,
+		Version:      SaltpackCurrentVersion,
 		Type:         msgType,
 		SenderPublic: sender.ToKID(),
 		Nonce:        nonce[:],
@@ -102,19 +88,11 @@ func (h *SignatureHeader) validate(msgType MessageType) error {
 			received: h.Type,
 		}
 	}
-	if h.Version.Major != SaltPackCurrentVersion.Major {
-		return ErrBadVersion{h.seqno, h.Version}
+	if h.Version.Major != SaltpackCurrentVersion.Major {
+		return ErrBadVersion{h.Version}
 	}
 
-	if msgType == MessageTypeAttachedSignature {
-		if len(h.Signature) != 0 {
-			return ErrDetachedSignaturePresent
-		}
-	} else if msgType == MessageTypeDetachedSignature {
-		if len(h.Signature) == 0 {
-			return ErrNoDetachedSignature
-		}
-	} else {
+	if msgType != MessageTypeAttachedSignature && msgType != MessageTypeDetachedSignature {
 		return ErrInvalidParameter{message: fmt.Sprintf("signature header must be MessageTypeAttachedSignature or MessageTypeDetachedSignature, not %d", msgType)}
 	}
 

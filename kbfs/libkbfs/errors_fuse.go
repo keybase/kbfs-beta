@@ -65,3 +65,31 @@ var _ fuse.ErrorNumber = MDServerErrorUnauthorized{}
 func (e MDServerErrorUnauthorized) Errno() fuse.Errno {
 	return fuse.Errno(syscall.EACCES)
 }
+
+var _ fuse.ErrorNumber = FileTooBigError{}
+
+// Errno implements the fuse.ErrorNumber interface for FileTooBigError.
+func (e FileTooBigError) Errno() fuse.Errno {
+	return fuse.Errno(syscall.EFBIG)
+}
+
+var _ fuse.ErrorNumber = NameTooLongError{}
+
+// Errno implements the fuse.ErrorNumber interface for NameTooLongError.
+func (e NameTooLongError) Errno() fuse.Errno {
+	return fuse.Errno(syscall.ENAMETOOLONG)
+}
+
+var _ fuse.ErrorNumber = DirTooBigError{}
+
+// Errno implements the fuse.ErrorNumber interface for DirTooBigError.
+func (e DirTooBigError) Errno() fuse.Errno {
+	return fuse.Errno(syscall.EFBIG)
+}
+
+var _ fuse.ErrorNumber = NoCurrentSessionError{}
+
+// Errno implements the fuse.ErrorNumber interface for NoCurrentSessionError.
+func (e NoCurrentSessionError) Errno() fuse.Errno {
+	return fuse.Errno(syscall.EACCES)
+}

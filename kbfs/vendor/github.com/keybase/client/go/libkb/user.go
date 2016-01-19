@@ -5,9 +5,10 @@ package libkb
 
 import (
 	"fmt"
+	"io"
+
 	keybase1 "github.com/keybase/client/go/protocol"
 	jsonw "github.com/keybase/go-jsonw"
-	"io"
 )
 
 type UserBasic interface {
@@ -51,7 +52,7 @@ func NewUser(g *GlobalContext, o *jsonw.Wrapper) (*User, error) {
 		return nil, fmt.Errorf("user object for %s lacks a name", uid)
 	}
 
-	kf, err := ParseKeyFamily(o.AtKey("public_keys"))
+	kf, err := ParseKeyFamily(g, o.AtKey("public_keys"))
 	if err != nil {
 		return nil, err
 	}
@@ -189,6 +190,13 @@ func (u *User) GetDeviceSubkey() (subkey GenericKey, err error) {
 		return
 	}
 	return ckf.GetEncryptionSubkeyForDevice(did)
+}
+
+func (u *User) HasEncryptionSubkey() bool {
+	if ckf := u.GetComputedKeyFamily(); ckf != nil {
+		return ckf.HasActiveEncryptionSubkey()
+	}
+	return false
 }
 
 func (u *User) CheckBasicsFreshness(server int64) (current bool, err error) {
@@ -408,7 +416,7 @@ func (u *User) VerifySelfSig() error {
 
 	u.G().Log.Debug("+ VerifySelfSig for user %s", u.name)
 
-	if u.IDTable().VerifySelfSig(u.name, u.id) {
+	if u.IDTable().VerifySelfSig(u.GetNormalizedName(), u.id) {
 		u.G().Log.Debug("- VerifySelfSig via SigChain")
 		return nil
 	}
@@ -656,6 +664,21 @@ func (u *User) IsSigIDActive(sigID keybase1.SigID) (bool, error) {
 		return false, fmt.Errorf("Signature ID '%s' is already revoked.", sigID)
 	}
 	return true, nil
+}
+
+func (u *User) SigIDSearch(query string) (keybase1.SigID, error) {
+	if u.sigChain() == nil {
+		return "", fmt.Errorf("User's sig chain is nil.")
+	}
+
+	link := u.sigChain().GetLinkFromSigIDQuery(query)
+	if link == nil {
+		return "", fmt.Errorf("Signature matching query %q does not exist.", query)
+	}
+	if link.revoked {
+		return "", fmt.Errorf("Signature ID '%s' is already revoked.", link.GetSigID())
+	}
+	return link.GetSigID(), nil
 }
 
 func (u *User) LinkFromSigID(sigID keybase1.SigID) *ChainLink {
