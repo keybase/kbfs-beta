@@ -1255,6 +1255,18 @@ func (_mr *_MockCryptoRecorder) DecryptTLFCryptKeyClientHalf(arg0, arg1, arg2 in
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "DecryptTLFCryptKeyClientHalf", arg0, arg1, arg2)
 }
 
+func (_m *MockCrypto) DecryptTLFCryptKeyClientHalfAny(ctx context.Context, keys []EncryptedTLFCryptKeyClientAndEphemeral) (TLFCryptKeyClientHalf, int, error) {
+	ret := _m.ctrl.Call(_m, "DecryptTLFCryptKeyClientHalfAny", ctx, keys)
+	ret0, _ := ret[0].(TLFCryptKeyClientHalf)
+	ret1, _ := ret[1].(int)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+func (_mr *_MockCryptoRecorder) DecryptTLFCryptKeyClientHalfAny(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "DecryptTLFCryptKeyClientHalfAny", arg0, arg1)
+}
+
 func (_m *MockCrypto) GetTLFCryptKeyServerHalfID(user protocol.UID, deviceKID protocol.KID, serverHalf TLFCryptKeyServerHalf) (TLFCryptKeyServerHalfID, error) {
 	ret := _m.ctrl.Call(_m, "GetTLFCryptKeyServerHalfID", user, deviceKID, serverHalf)
 	ret0, _ := ret[0].(TLFCryptKeyServerHalfID)
@@ -2432,6 +2444,16 @@ func (_m *MockConfig) SetConflictRenamer(_param0 ConflictRenamer) {
 
 func (_mr *_MockConfigRecorder) SetConflictRenamer(arg0 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "SetConflictRenamer", arg0)
+}
+
+func (_m *MockConfig) MetadataDataVersion() MetadataVer {
+	ret := _m.ctrl.Call(_m, "MetadataDataVersion")
+	ret0, _ := ret[0].(MetadataVer)
+	return ret0
+}
+
+func (_mr *_MockConfigRecorder) MetadataDataVersion() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "MetadataDataVersion")
 }
 
 func (_m *MockConfig) DataVersion() DataVer {

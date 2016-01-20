@@ -131,6 +131,17 @@ func (ech EncryptedTLFCryptKeyClientHalf) DeepCopy() (echCopy EncryptedTLFCryptK
 	return
 }
 
+// EncryptedTLFCryptKeyClientAndEphemeral has what's needed to
+// request a client half decryption.
+type EncryptedTLFCryptKeyClientAndEphemeral struct {
+	// PublicKey contains the wrapped Key ID of the public key
+	PubKey CryptPublicKey
+	// ClientHalf contains the encrypted client half of the TLF key
+	ClientHalf EncryptedTLFCryptKeyClientHalf
+	// EPubKey contains the ephemeral public key used to encrypt ClientHalf
+	EPubKey TLFEphemeralPublicKey
+}
+
 // KeyGen is the type of a key generation for a top-level folder.
 type KeyGen int
 
@@ -142,6 +153,17 @@ const (
 	// valid key generation. Note that the nil value is not
 	// considered valid.
 	FirstValidKeyGen = 1
+)
+
+// MetadataVer is the type of a version for marshalled KBFS metadata
+// structures.
+type MetadataVer int
+
+const (
+	// FirstValidMetadataVer is the first value that is considered a
+	// valid data version. For historical reasons 0 is considered
+	// valid.
+	FirstValidMetadataVer = 0
 )
 
 // DataVer is the type of a version for marshalled KBFS data

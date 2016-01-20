@@ -335,8 +335,8 @@ type KBPKI interface {
 	// check for revocation.
 	HasVerifyingKey(ctx context.Context, uid keybase1.UID,
 		verifyingKey VerifyingKey) error
-	// GetCryptPublicKeys gets all of a user's crypt public keys (one
-	// per device).
+	// GetCryptPublicKeys gets all of a user's crypt public keys (including
+	// paper keys).
 	GetCryptPublicKeys(ctx context.Context, uid keybase1.UID) (
 		[]CryptPublicKey, error)
 
@@ -571,6 +571,13 @@ type Crypto interface {
 		publicKey TLFEphemeralPublicKey,
 		encryptedClientHalf EncryptedTLFCryptKeyClientHalf) (
 		TLFCryptKeyClientHalf, error)
+
+	// DecryptTLFCryptKeyClientHalfAny decrypts one of the
+	// TLFCryptKeyClientHalf using the available private keys and the ephemeral
+	// public key.
+	DecryptTLFCryptKeyClientHalfAny(ctx context.Context,
+		keys []EncryptedTLFCryptKeyClientAndEphemeral) (
+		TLFCryptKeyClientHalf, int, error)
 
 	// GetTLFCryptKeyServerHalfID creates a unique ID for this particular
 	// TLFCryptKeyServerHalf.
@@ -975,6 +982,7 @@ type Config interface {
 	SetClock(Clock)
 	ConflictRenamer() ConflictRenamer
 	SetConflictRenamer(ConflictRenamer)
+	MetadataVersion() MetadataVer
 	DataVersion() DataVer
 	RekeyQueue() RekeyQueue
 	SetRekeyQueue(RekeyQueue)
