@@ -783,11 +783,12 @@ func (_mr *_MockKeyManagerRecorder) GetTLFCryptKeyForBlockDecryption(arg0, arg1,
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetTLFCryptKeyForBlockDecryption", arg0, arg1, arg2)
 }
 
-func (_m *MockKeyManager) Rekey(ctx context.Context, md *RootMetadata) (bool, error) {
+func (_m *MockKeyManager) Rekey(ctx context.Context, md *RootMetadata) (bool, *TLFCryptKey, error) {
 	ret := _m.ctrl.Call(_m, "Rekey", ctx, md)
 	ret0, _ := ret[0].(bool)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret1, _ := ret[1].(*TLFCryptKey)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
 }
 
 func (_mr *_MockKeyManagerRecorder) Rekey(arg0, arg1 interface{}) *gomock.Call {
@@ -1024,6 +1025,16 @@ func (_mr *_MockBlockCacheRecorder) DeleteDirty(arg0, arg1 interface{}) *gomock.
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "DeleteDirty", arg0, arg1)
 }
 
+func (_m *MockBlockCache) DeleteKnownPtr(tlf TlfID, block *FileBlock) error {
+	ret := _m.ctrl.Call(_m, "DeleteKnownPtr", tlf, block)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+func (_mr *_MockBlockCacheRecorder) DeleteKnownPtr(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "DeleteKnownPtr", arg0, arg1)
+}
+
 func (_m *MockBlockCache) IsDirty(ptr BlockPointer, branch BranchName) bool {
 	ret := _m.ctrl.Call(_m, "IsDirty", ptr, branch)
 	ret0, _ := ret[0].(bool)
@@ -1032,6 +1043,16 @@ func (_m *MockBlockCache) IsDirty(ptr BlockPointer, branch BranchName) bool {
 
 func (_mr *_MockBlockCacheRecorder) IsDirty(arg0, arg1 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "IsDirty", arg0, arg1)
+}
+
+func (_m *MockBlockCache) DirtyBytesEstimate() uint64 {
+	ret := _m.ctrl.Call(_m, "DirtyBytesEstimate")
+	ret0, _ := ret[0].(uint64)
+	return ret0
+}
+
+func (_mr *_MockBlockCacheRecorder) DirtyBytesEstimate() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "DirtyBytesEstimate")
 }
 
 // Mock of Crypto interface
@@ -1526,15 +1547,15 @@ func (_m *MockKeyOps) EXPECT() *_MockKeyOpsRecorder {
 	return _m.recorder
 }
 
-func (_m *MockKeyOps) GetTLFCryptKeyServerHalf(ctx context.Context, serverHalfID TLFCryptKeyServerHalfID) (TLFCryptKeyServerHalf, error) {
-	ret := _m.ctrl.Call(_m, "GetTLFCryptKeyServerHalf", ctx, serverHalfID)
+func (_m *MockKeyOps) GetTLFCryptKeyServerHalf(ctx context.Context, serverHalfID TLFCryptKeyServerHalfID, cryptPublicKey CryptPublicKey) (TLFCryptKeyServerHalf, error) {
+	ret := _m.ctrl.Call(_m, "GetTLFCryptKeyServerHalf", ctx, serverHalfID, cryptPublicKey)
 	ret0, _ := ret[0].(TLFCryptKeyServerHalf)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-func (_mr *_MockKeyOpsRecorder) GetTLFCryptKeyServerHalf(arg0, arg1 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetTLFCryptKeyServerHalf", arg0, arg1)
+func (_mr *_MockKeyOpsRecorder) GetTLFCryptKeyServerHalf(arg0, arg1, arg2 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetTLFCryptKeyServerHalf", arg0, arg1, arg2)
 }
 
 func (_m *MockKeyOps) PutTLFCryptKeyServerHalves(ctx context.Context, serverKeyHalves map[protocol.UID]map[protocol.KID]TLFCryptKeyServerHalf) error {
@@ -1886,15 +1907,15 @@ func (_m *MockKeyServer) EXPECT() *_MockKeyServerRecorder {
 	return _m.recorder
 }
 
-func (_m *MockKeyServer) GetTLFCryptKeyServerHalf(ctx context.Context, serverHalfID TLFCryptKeyServerHalfID) (TLFCryptKeyServerHalf, error) {
-	ret := _m.ctrl.Call(_m, "GetTLFCryptKeyServerHalf", ctx, serverHalfID)
+func (_m *MockKeyServer) GetTLFCryptKeyServerHalf(ctx context.Context, serverHalfID TLFCryptKeyServerHalfID, cryptPublicKey CryptPublicKey) (TLFCryptKeyServerHalf, error) {
+	ret := _m.ctrl.Call(_m, "GetTLFCryptKeyServerHalf", ctx, serverHalfID, cryptPublicKey)
 	ret0, _ := ret[0].(TLFCryptKeyServerHalf)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-func (_mr *_MockKeyServerRecorder) GetTLFCryptKeyServerHalf(arg0, arg1 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetTLFCryptKeyServerHalf", arg0, arg1)
+func (_mr *_MockKeyServerRecorder) GetTLFCryptKeyServerHalf(arg0, arg1, arg2 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetTLFCryptKeyServerHalf", arg0, arg1, arg2)
 }
 
 func (_m *MockKeyServer) PutTLFCryptKeyServerHalves(ctx context.Context, serverKeyHalves map[protocol.UID]map[protocol.KID]TLFCryptKeyServerHalf) error {
@@ -2446,14 +2467,14 @@ func (_mr *_MockConfigRecorder) SetConflictRenamer(arg0 interface{}) *gomock.Cal
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "SetConflictRenamer", arg0)
 }
 
-func (_m *MockConfig) MetadataDataVersion() MetadataVer {
-	ret := _m.ctrl.Call(_m, "MetadataDataVersion")
+func (_m *MockConfig) MetadataVersion() MetadataVer {
+	ret := _m.ctrl.Call(_m, "MetadataVersion")
 	ret0, _ := ret[0].(MetadataVer)
 	return ret0
 }
 
-func (_mr *_MockConfigRecorder) MetadataDataVersion() *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "MetadataDataVersion")
+func (_mr *_MockConfigRecorder) MetadataVersion() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "MetadataVersion")
 }
 
 func (_m *MockConfig) DataVersion() DataVer {

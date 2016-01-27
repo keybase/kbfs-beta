@@ -266,6 +266,22 @@ func (b *BlockCacheStandard) DeletePermanent(id BlockID) error {
 	return nil
 }
 
+// DeleteKnownPtr implements the BlockCache interface for BlockCacheStandard.
+func (b *BlockCacheStandard) DeleteKnownPtr(tlf TlfID, block *FileBlock) error {
+	if block.IsInd {
+		return NotDirectFileBlockError{}
+	}
+
+	if b.ids == nil {
+		return nil
+	}
+
+	_, hash := DoRawDefaultHash(block.Contents)
+	key := idCacheKey{tlf, hash}
+	b.ids.Remove(key)
+	return nil
+}
+
 // DeleteDirty implements the BlockCache interface for BlockCacheStandard.
 func (b *BlockCacheStandard) DeleteDirty(
 	ptr BlockPointer, branch BranchName) error {
@@ -294,4 +310,18 @@ func (b *BlockCacheStandard) IsDirty(
 	defer b.dirtyLock.RUnlock()
 	_, isDirty = b.dirty[dirtyID]
 	return
+}
+
+// DirtyBytesEstimate implements the BlockCache interface for
+// BlockCacheStandard.
+func (b *BlockCacheStandard) DirtyBytesEstimate() uint64 {
+	b.dirtyLock.RLock()
+	defer b.dirtyLock.RUnlock()
+	var size uint64
+	// Users of this cache can update dirty blocks at will, so it's
+	// not possible to cache the sizes of the dirty blocks.
+	for _, block := range b.dirty {
+		size += uint64(getCachedBlockSize(block))
+	}
+	return size
 }

@@ -2,6 +2,7 @@ package libkbfs
 
 import (
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -10,12 +11,19 @@ import (
 	"github.com/syndtr/goleveldb/leveldb"
 )
 
+type blockRefLocalStatus int
+
+const (
+	noBlockRef blockRefLocalStatus = iota
+	blockRef
+	archivedBlockRef
+)
+
 type blockEntry struct {
 	// These fields are only exported for serialization purposes.
 	BlockData     []byte
-	Refs          map[BlockRefNonce]bool
+	Refs          map[BlockRefNonce]blockRefLocalStatus
 	KeyServerHalf BlockCryptKeyServerHalf
-	Archived      bool
 	Tlf           TlfID
 }
 
@@ -51,7 +59,6 @@ func (s *bserverMemStorage) get(id BlockID) (blockEntry, error) {
 	if !ok {
 		return blockEntry{}, BServerErrorBlockNonExistent{}
 	}
-
 	return entry, nil
 }
 
@@ -87,12 +94,20 @@ func (s *bserverMemStorage) addReference(id BlockID, refNonce BlockRefNonce) err
 
 	entry, ok := s.m[id]
 	if !ok {
-		return IncrementMissingBlockError{id}
+		return BServerErrorBlockNonExistent{fmt.Sprintf("Block ID %s doesn't "+
+			"exist and cannot be referenced.", id)}
 	}
 
-	entry.Refs[refNonce] = true
-	s.m[id] = entry
-	return nil
+	// only add it if there's a non-archived reference
+	for _, status := range entry.Refs {
+		if status == blockRef {
+			entry.Refs[refNonce] = blockRef
+			s.m[id] = entry
+			return nil
+		}
+	}
+	return BServerErrorBlockArchived{fmt.Sprintf("Block ID %s has "+
+		"been archived and cannot be referenced.", id)}
 }
 
 func (s *bserverMemStorage) removeReference(id BlockID, refNonce BlockRefNonce) error {
@@ -120,10 +135,17 @@ func (s *bserverMemStorage) archiveReference(id BlockID, refNonce BlockRefNonce)
 
 	entry, ok := s.m[id]
 	if !ok {
-		return ArchiveMissingBlockError{id, refNonce}
+		return BServerErrorBlockNonExistent{fmt.Sprintf("Block ID %s doesn't "+
+			"exist and cannot be archived.", id)}
 	}
 
-	entry.Archived = true
+	_, ok = entry.Refs[refNonce]
+	if !ok {
+		return BServerErrorBlockNonExistent{fmt.Sprintf("Block ID %s (ref %s) "+
+			"doesn't exist and cannot be archived.", id, refNonce)}
+	}
+
+	entry.Refs[refNonce] = archivedBlockRef
 	s.m[id] = entry
 	return nil
 }
@@ -216,13 +238,22 @@ func (s *bserverFileStorage) addReference(id BlockID, refNonce BlockRefNonce) er
 	entry, err := s.getLocked(p)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return IncrementMissingBlockError{id}
+			return BServerErrorBlockNonExistent{fmt.Sprintf("Block ID %s "+
+				"doesn't exist and cannot be referenced.", id)}
 		}
 		return err
 	}
 
-	entry.Refs[refNonce] = true
-	return s.putLocked(p, entry)
+	// only add it if there's a non-archived reference
+	for _, status := range entry.Refs {
+		if status == blockRef {
+			entry.Refs[refNonce] = blockRef
+			return s.putLocked(p, entry)
+		}
+	}
+
+	return BServerErrorBlockArchived{fmt.Sprintf("Block ID %s has "+
+		"been archived and cannot be referenced.", id)}
 }
 
 func (s *bserverFileStorage) removeReference(id BlockID, refNonce BlockRefNonce) error {
@@ -254,12 +285,19 @@ func (s *bserverFileStorage) archiveReference(id BlockID, refNonce BlockRefNonce
 	entry, err := s.getLocked(p)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return ArchiveMissingBlockError{id, refNonce}
+			return BServerErrorBlockNonExistent{fmt.Sprintf("Block ID %s "+
+				"doesn't exist and cannot be archived.", id)}
 		}
 		return err
 	}
 
-	entry.Archived = true
+	_, ok := entry.Refs[refNonce]
+	if !ok {
+		return BServerErrorBlockNonExistent{fmt.Sprintf("Block ID %s (ref %s) "+
+			"doesn't exist and cannot be archived.", id, refNonce)}
+	}
+
+	entry.Refs[refNonce] = archivedBlockRef
 	return s.putLocked(p, entry)
 }
 
@@ -337,13 +375,21 @@ func (s *bserverLeveldbStorage) addReference(id BlockID, refNonce BlockRefNonce)
 	entry, err := s.getLocked(id)
 	if err != nil {
 		if err == leveldb.ErrNotFound {
-			return IncrementMissingBlockError{id}
+			return BServerErrorBlockNonExistent{fmt.Sprintf("Block ID %s "+
+				"doesn't exist and cannot be referenced.", id)}
 		}
 		return err
 	}
 
-	entry.Refs[refNonce] = true
-	return s.putLocked(id, entry)
+	for _, status := range entry.Refs {
+		if status == blockRef {
+			entry.Refs[refNonce] = blockRef
+			return s.putLocked(id, entry)
+		}
+	}
+
+	return BServerErrorBlockArchived{fmt.Sprintf("Block ID %s has "+
+		"been archived and cannot be referenced.", id)}
 }
 
 func (s *bserverLeveldbStorage) removeReference(id BlockID, refNonce BlockRefNonce) error {
@@ -373,12 +419,19 @@ func (s *bserverLeveldbStorage) archiveReference(id BlockID, refNonce BlockRefNo
 	entry, err := s.getLocked(id)
 	if err != nil {
 		if err == leveldb.ErrNotFound {
-			return ArchiveMissingBlockError{id, refNonce}
+			return BServerErrorBlockNonExistent{fmt.Sprintf("Block ID %s "+
+				"doesn't exist and cannot be archived.", id)}
 		}
 		return err
 	}
 
-	entry.Archived = true
+	_, ok := entry.Refs[refNonce]
+	if !ok {
+		return BServerErrorBlockNonExistent{fmt.Sprintf("Block ID %s (ref %s) "+
+			"doesn't exist and cannot be archived.", id, refNonce)}
+	}
+
+	entry.Refs[refNonce] = archivedBlockRef
 	return s.putLocked(id, entry)
 }
 

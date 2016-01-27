@@ -16,18 +16,15 @@ var _ KeyOps = (*KeyOpsStandard)(nil)
 
 // GetTLFCryptKeyServerHalf is an implementation of the KeyOps interface.
 func (k *KeyOpsStandard) GetTLFCryptKeyServerHalf(ctx context.Context,
-	serverHalfID TLFCryptKeyServerHalfID) (TLFCryptKeyServerHalf, error) {
+	serverHalfID TLFCryptKeyServerHalfID, key CryptPublicKey) (
+	TLFCryptKeyServerHalf, error) {
 	// get the key half from the server
-	serverHalf, err := k.config.KeyServer().GetTLFCryptKeyServerHalf(ctx, serverHalfID)
+	serverHalf, err := k.config.KeyServer().GetTLFCryptKeyServerHalf(ctx, serverHalfID, key)
 	if err != nil {
 		return TLFCryptKeyServerHalf{}, err
 	}
 	// get current uid and deviceKID
 	uid, err := k.config.KBPKI().GetCurrentUID(ctx)
-	if err != nil {
-		return TLFCryptKeyServerHalf{}, err
-	}
-	key, err := k.config.KBPKI().GetCurrentCryptPublicKey(ctx)
 	if err != nil {
 		return TLFCryptKeyServerHalf{}, err
 	}

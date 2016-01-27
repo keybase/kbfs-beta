@@ -2758,6 +2758,25 @@ func (cr *ConflictResolver) syncBlocks(ctx context.Context, lState *lockState,
 		}
 	}
 
+	// For all chains that were renamed only in the unmerged branch,
+	// make sure we update all the pointers to their most recent
+	// version.
+	for original := range unmergedChains.renamedOriginals {
+		mergedChain, ok := mergedChains.byOriginal[original]
+		if !ok {
+			continue
+		}
+		updates[original] = mergedChain.mostRecent
+	}
+
+	// Consolidate any chains of updates
+	for k, v := range updates {
+		if v2, ok := updates[v]; ok {
+			updates[k] = v2
+			delete(updates, v)
+		}
+	}
+
 	newOps, err := crFixOpPointers(oldOps[:len(oldOps)-1], updates,
 		unmergedChains)
 	if err != nil {
@@ -2813,10 +2832,6 @@ func (cr *ConflictResolver) syncBlocks(ctx context.Context, lState *lockState,
 	// Put all the blocks.
 	err = cr.fbo.doBlockPuts(ctx, md, *bps)
 	if err != nil {
-		// TODO: in theory we could recover from a
-		// IncrementMissingBlockError.  We would have to delete the
-		// offending block from our cache and re-doing ALL of the
-		// block ready calls.
 		return nil, nil, err
 	}
 

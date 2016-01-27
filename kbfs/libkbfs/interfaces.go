@@ -387,8 +387,12 @@ type KeyManager interface {
 	// devices.  If there are devices that have been removed, it
 	// creates a new epoch of keys for the TLF.  If no devices have
 	// changed, or if there was an error, it returns false.
-	// Otherwise, it returns true.
-	Rekey(ctx context.Context, md *RootMetadata) (bool, error)
+	// Otherwise, it returns true. If a new key generation is added
+	// the second return value points to this new key. This is to
+	// allow for caching of the TLF crypt key only after a successful
+	// merged write of the metadata. Otherwise we could prematurely
+	// pollute the key cache.
+	Rekey(ctx context.Context, md *RootMetadata) (bool, *TLFCryptKey, error)
 }
 
 // ReportingLevel indicate the severity of a reported event.
@@ -494,9 +498,17 @@ type BlockCache interface {
 	// block pointer and branch from the cache.  No error is returned
 	// if no block exists for the given ID.
 	DeleteDirty(ptr BlockPointer, branch BranchName) error
+	// DeleteKnownPtr removes the cached ID for the given file
+	// block. It does not remove the block itself.
+	DeleteKnownPtr(tlf TlfID, block *FileBlock) error
 	// IsDirty states whether or not the block associated with the
 	// given block pointer and branch name is dirty in this cache.
 	IsDirty(ptr BlockPointer, branch BranchName) bool
+	// DirtyBytesEstimate counts the number of outstanding bytes held
+	// in dirty blocks.  It's an estimate because callers can be
+	// modifying the size of the dirty blocks outside of the cache
+	// while this is being called.
+	DirtyBytesEstimate() uint64
 }
 
 // Crypto signs, verifies, encrypts, and decrypts stuff.
@@ -685,7 +697,8 @@ type KeyOps interface {
 	// GetTLFCryptKeyServerHalf gets a server-side key half for a
 	// device given the key half ID.
 	GetTLFCryptKeyServerHalf(ctx context.Context,
-		serverHalfID TLFCryptKeyServerHalfID) (TLFCryptKeyServerHalf, error)
+		serverHalfID TLFCryptKeyServerHalfID,
+		cryptPublicKey CryptPublicKey) (TLFCryptKeyServerHalf, error)
 
 	// PutTLFCryptKeyServerHalves stores a server-side key halves for a
 	// set of users and devices.
@@ -821,7 +834,7 @@ type BlockServer interface {
 	// defined by the given context (which should contain a non-zero
 	// BlockRefNonce).  (Contexts with a BlockRefNonce of zero should
 	// be used when putting the block for the first time via Put().)
-	// Returns an IncrementMissingBlockError if id is unknown within
+	// Returns a BServerErrorBlockNonExistent if id is unknown within
 	// this folder.  Calling more than once with the same context is a
 	// no-op.
 	AddBlockReference(ctx context.Context, id BlockID, tlfID TlfID,
@@ -872,7 +885,8 @@ type KeyServer interface {
 	// GetTLFCryptKeyServerHalf gets a server-side key half for a
 	// device given the key half ID.
 	GetTLFCryptKeyServerHalf(ctx context.Context,
-		serverHalfID TLFCryptKeyServerHalfID) (TLFCryptKeyServerHalf, error)
+		serverHalfID TLFCryptKeyServerHalfID,
+		cryptPublicKey CryptPublicKey) (TLFCryptKeyServerHalf, error)
 
 	// PutTLFCryptKeyServerHalves stores a server-side key halves for a
 	// set of users and devices.

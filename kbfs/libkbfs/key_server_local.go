@@ -51,33 +51,27 @@ func NewKeyServerMemory(config Config) (*KeyServerLocal, error) {
 	return newKeyServerLocalWithStorage(config, storage.NewMemStorage())
 }
 
-// GetTLFCryptKeyServerHalf implements the KeyOps interface for
+// GetTLFCryptKeyServerHalf implements the KeyServer interface for
 // KeyServerLocal.
 func (ks *KeyServerLocal) GetTLFCryptKeyServerHalf(ctx context.Context,
-	serverHalfID TLFCryptKeyServerHalfID) (TLFCryptKeyServerHalf, error) {
+	serverHalfID TLFCryptKeyServerHalfID, key CryptPublicKey) (serverHalf TLFCryptKeyServerHalf, err error) {
 	ks.shutdownLock.RLock()
 	defer ks.shutdownLock.RUnlock()
 	if *ks.shutdown {
-		return TLFCryptKeyServerHalf{},
-			errors.New("Key server already shut down")
+		err = errors.New("Key server already shut down")
 	}
 
 	buf, err := ks.db.Get(serverHalfID.ID.Bytes(), nil)
 	if err != nil {
-		return TLFCryptKeyServerHalf{}, err
+		return
 	}
 
-	var serverHalf TLFCryptKeyServerHalf
 	err = ks.config.Codec().Decode(buf, &serverHalf)
 	if err != nil {
 		return TLFCryptKeyServerHalf{}, err
 	}
 
 	uid, err := ks.config.KBPKI().GetCurrentUID(ctx)
-	if err != nil {
-		return TLFCryptKeyServerHalf{}, err
-	}
-	key, err := ks.config.KBPKI().GetCurrentCryptPublicKey(ctx)
 	if err != nil {
 		return TLFCryptKeyServerHalf{}, err
 	}

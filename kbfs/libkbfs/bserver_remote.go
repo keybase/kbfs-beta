@@ -44,11 +44,10 @@ var _ AuthTokenRefreshHandler = (*BlockServerRemote)(nil)
 func NewBlockServerRemote(config Config, blkSrvAddr string) *BlockServerRemote {
 	bs := &BlockServerRemote{
 		config:     config,
-		log:        config.MakeLogger(""),
+		log:        config.MakeLogger("BSR"),
 		blkSrvAddr: blkSrvAddr,
 	}
-	bs.log.Debug("BlockServerRemote new instance "+
-		"server addr %s", blkSrvAddr)
+	bs.log.Debug("new instance server addr %s", blkSrvAddr)
 	bs.authToken = NewAuthToken(config,
 		BServerTokenServer, BServerTokenExpireIn,
 		BServerClientName, BServerClientVersion, bs)
@@ -78,33 +77,43 @@ func (b *BlockServerRemote) RemoteAddress() string {
 // OnConnect implements the ConnectionHandler interface.
 func (b *BlockServerRemote) OnConnect(ctx context.Context,
 	conn *Connection, client keybase1.GenericClient, _ *rpc.Server) error {
-	// get a new signature
-	signature, err := b.authToken.Sign(ctx)
+	// request a challenge -- using b.client here would cause problematic recursion.
+	c := keybase1.BlockClient{Cli: cancelableClient{client}}
+	challenge, err := c.GetSessionChallenge(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Using b.client here would cause problematic recursion.
-	c := keybase1.BlockClient{Cli: cancelableClient{client}}
+	// get a new signature
+	signature, err := b.authToken.Sign(ctx, challenge)
+	if err != nil {
+		return err
+	}
+
 	return c.AuthenticateSession(ctx, signature)
 }
 
 // RefreshAuthToken implements the AuthTokenRefreshHandler interface.
 func (b *BlockServerRemote) RefreshAuthToken(ctx context.Context) {
-	// get a new signature
-	signature, err := b.authToken.Sign(ctx)
+	// get a new challenge
+	challenge, err := b.client.GetSessionChallenge(ctx)
 	if err != nil {
-		b.log.Debug("BlockServerRemote: error signing auth token: %v", err)
+		b.log.CDebugf(ctx, "error getting challenge: %v", err)
+	}
+	// get a new signature
+	signature, err := b.authToken.Sign(ctx, challenge)
+	if err != nil {
+		b.log.CDebugf(ctx, "error signing auth token: %v", err)
 	}
 	// update authentication
 	if err := b.client.AuthenticateSession(ctx, signature); err != nil {
-		b.log.Debug("BlockServerRemote: error refreshing auth token: %v", err)
+		b.log.CDebugf(ctx, "error refreshing auth token: %v", err)
 	}
 }
 
 // OnConnectError implements the ConnectionHandler interface.
 func (b *BlockServerRemote) OnConnectError(err error, wait time.Duration) {
-	b.log.Warning("BlockServerRemote: connection error: %v; retrying in %s",
+	b.log.Warning("connection error: %v; retrying in %s",
 		err, wait)
 	if b.authToken != nil {
 		b.authToken.Shutdown()
@@ -115,14 +124,14 @@ func (b *BlockServerRemote) OnConnectError(err error, wait time.Duration) {
 
 // OnDoCommandError implements the ConnectionHandler interface.
 func (b *BlockServerRemote) OnDoCommandError(err error, wait time.Duration) {
-	b.log.Warning("BlockServerRemote: DoCommand error: %q; retrying in %s",
+	b.log.Warning("DoCommand error: %v; retrying in %s",
 		err, wait)
 }
 
 // OnDisconnected implements the ConnectionHandler interface.
 func (b *BlockServerRemote) OnDisconnected(status DisconnectStatus) {
 	if status == StartingNonFirstConnection {
-		b.log.Warning("BlockServerRemote is disconnected")
+		b.log.Warning("disconnected")
 	}
 	if b.authToken != nil {
 		b.authToken.Shutdown()
@@ -144,7 +153,7 @@ func (b *BlockServerRemote) Get(ctx context.Context, id BlockID, tlfID TlfID,
 	var err error
 	size := -1
 	defer func() {
-		b.log.CDebugf(ctx, "BlockServerRemote.Get id=%s uid=%s sz=%d err=%v",
+		b.log.CDebugf(ctx, "Get id=%s uid=%s sz=%d err=%v",
 			id, context.GetWriter(), size, err)
 	}()
 
@@ -179,7 +188,7 @@ func (b *BlockServerRemote) Put(ctx context.Context, id BlockID, tlfID TlfID,
 	var err error
 	size := len(buf)
 	defer func() {
-		b.log.CDebugf(ctx, "BlockServerRemote.Put id=%s uid=%s sz=%d err=%v",
+		b.log.CDebugf(ctx, "Put id=%s uid=%s sz=%d err=%v",
 			id, context.GetWriter(), size, err)
 	}()
 
@@ -202,7 +211,7 @@ func (b *BlockServerRemote) AddBlockReference(ctx context.Context, id BlockID,
 	tlfID TlfID, context BlockContext) error {
 	var err error
 	defer func() {
-		b.log.CDebugf(ctx, "BlockServerRemote.AddBlockReference id=%s uid=%s err=%v",
+		b.log.CDebugf(ctx, "AddBlockReference id=%s uid=%s err=%v",
 			id, context.GetWriter(), err)
 	}()
 
@@ -212,9 +221,8 @@ func (b *BlockServerRemote) AddBlockReference(ctx context.Context, id BlockID,
 			BlockHash: id.String(),
 		},
 		ChargedTo: context.GetWriter(), //the actual writer to decrement quota from
+		Nonce:     keybase1.BlockRefNonce(context.GetRefNonce()),
 	}
-	nonce := context.GetRefNonce()
-	copy(ref.Nonce[:], nonce[:])
 
 	err = b.client.AddReference(ctx, keybase1.AddReferenceArg{
 		Ref:    ref,
@@ -229,7 +237,7 @@ func (b *BlockServerRemote) RemoveBlockReference(ctx context.Context, id BlockID
 	tlfID TlfID, context BlockContext) error {
 	var err error
 	defer func() {
-		b.log.CDebugf(ctx, "BlockServerRemote.RemoveBlockReference id=%s uid=%s err=%v",
+		b.log.CDebugf(ctx, "RemoveBlockReference id=%s uid=%s err=%v",
 			id, context.GetWriter(), err)
 	}()
 
@@ -239,9 +247,8 @@ func (b *BlockServerRemote) RemoveBlockReference(ctx context.Context, id BlockID
 			BlockHash: id.String(),
 		},
 		ChargedTo: context.GetWriter(), //the actual writer to decrement quota from
+		Nonce:     keybase1.BlockRefNonce(context.GetRefNonce()),
 	}
-	nonce := context.GetRefNonce()
-	copy(ref.Nonce[:], nonce[:])
 
 	err = b.client.DelReference(ctx, keybase1.DelReferenceArg{
 		Ref:    ref,
@@ -262,13 +269,13 @@ func (b *BlockServerRemote) archiveBlockReferences(ctx context.Context,
 			Refs:   notDone,
 			Folder: tlfID.String(),
 		})
-		b.log.CDebugf(ctx, "BlockServerRemote.ArchiveBlockReference request to archive %d refs actual archived %d\n",
+		b.log.CDebugf(ctx, "ArchiveBlockReference request to archive %d refs actual archived %d\n",
 			len(notDone), len(res))
 		if err != nil {
-			b.log.CWarningf(ctx, "BlockServerRemote.ArchiveBlockReference err=%v", err)
+			b.log.CWarningf(ctx, "ArchiveBlockReference err=%v", err)
 		}
 		if len(res) == 0 && !prevProgress {
-			b.log.CErrorf(ctx, "BlockServerRemote.ArchiveBlockReference failed to make progress err=%v", err)
+			b.log.CErrorf(ctx, "ArchiveBlockReference failed to make progress err=%v", err)
 			break
 		}
 		prevProgress = len(res) != 0
@@ -312,6 +319,7 @@ func (b *BlockServerRemote) ArchiveBlockReferences(ctx context.Context,
 				BlockHash: id.String(),
 			},
 			ChargedTo: context.GetWriter(),
+			Nonce:     keybase1.BlockRefNonce(context.GetRefNonce()),
 		})
 	}
 	return b.archiveBlockReferences(ctx, tlfID, refs)
