@@ -87,9 +87,11 @@ func (k *KeybaseDaemonRPC) fillClients(client keybase1.GenericClient) {
 	k.kbfsClient = keybase1.KbfsClient{Cli: client}
 }
 
-func (k *KeybaseDaemonRPC) filterKeys(ctx context.Context, uid keybase1.UID, keys []keybase1.PublicKey) ([]VerifyingKey, []CryptPublicKey, error) {
+func (k *KeybaseDaemonRPC) filterKeys(ctx context.Context, uid keybase1.UID,
+	keys []keybase1.PublicKey) ([]VerifyingKey, []CryptPublicKey, map[keybase1.KID]string, error) {
 	var verifyingKeys []VerifyingKey
 	var cryptPublicKeys []CryptPublicKey
+	var kidNames = map[keybase1.KID]string{}
 	for _, publicKey := range keys {
 		if len(publicKey.PGPFingerprint) > 0 {
 			continue
@@ -97,7 +99,7 @@ func (k *KeybaseDaemonRPC) filterKeys(ctx context.Context, uid keybase1.UID, key
 		// Import the KID to validate it.
 		key, err := libkb.ImportKeypairFromKID(publicKey.KID)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if publicKey.IsSibkey {
 			k.log.CDebugf(
@@ -112,8 +114,11 @@ func (k *KeybaseDaemonRPC) filterKeys(ctx context.Context, uid keybase1.UID, key
 			cryptPublicKeys = append(
 				cryptPublicKeys, MakeCryptPublicKey(key.GetKID()))
 		}
+		if publicKey.DeviceDescription != "" {
+			kidNames[publicKey.KID] = publicKey.DeviceDescription
+		}
 	}
-	return verifyingKeys, cryptPublicKeys, nil
+	return verifyingKeys, cryptPublicKeys, kidNames, nil
 }
 
 func (k *KeybaseDaemonRPC) getCachedCurrentSession() SessionInfo {
@@ -350,8 +355,12 @@ func (k *KeybaseDaemonRPC) ShouldThrottle(err error) bool {
 
 // Resolve implements the KeybaseDaemon interface for KeybaseDaemonRPC.
 func (k *KeybaseDaemonRPC) Resolve(ctx context.Context, assertion string) (
-	keybase1.UID, error) {
-	return k.identifyClient.Resolve(ctx, assertion)
+	libkb.NormalizedUsername, keybase1.UID, error) {
+	user, err := k.identifyClient.Resolve2(ctx, assertion)
+	if err != nil {
+		return libkb.NormalizedUsername(""), keybase1.UID(""), err
+	}
+	return libkb.NewNormalizedUsername(user.Username), user.Uid, nil
 }
 
 // Identify implements the KeybaseDaemon interface for KeybaseDaemonRPC.
@@ -392,7 +401,7 @@ func (k *KeybaseDaemonRPC) LoadUserPlusKeys(ctx context.Context, uid keybase1.UI
 
 func (k *KeybaseDaemonRPC) processUserPlusKeys(
 	ctx context.Context, upk keybase1.UserPlusKeys) (UserInfo, error) {
-	verifyingKeys, cryptPublicKeys, err := k.filterKeys(ctx, upk.Uid, upk.DeviceKeys)
+	verifyingKeys, cryptPublicKeys, kidNames, err := k.filterKeys(ctx, upk.Uid, upk.DeviceKeys)
 	if err != nil {
 		return UserInfo{}, err
 	}
@@ -402,6 +411,7 @@ func (k *KeybaseDaemonRPC) processUserPlusKeys(
 		UID:             upk.Uid,
 		VerifyingKeys:   verifyingKeys,
 		CryptPublicKeys: cryptPublicKeys,
+		KIDNames:        kidNames,
 	}
 
 	k.setCachedUserInfo(upk.Uid, u)
@@ -436,6 +446,7 @@ func (k *KeybaseDaemonRPC) CurrentSession(ctx context.Context, sessionID int) (
 	cryptPublicKey := MakeCryptPublicKey(deviceSubkey.GetKID())
 	verifyingKey := MakeVerifyingKey(deviceSibkey.GetKID())
 	s := SessionInfo{
+		Name:           libkb.NewNormalizedUsername(res.Username),
 		UID:            keybase1.UID(res.Uid),
 		Token:          res.Token,
 		CryptPublicKey: cryptPublicKey,
@@ -443,8 +454,8 @@ func (k *KeybaseDaemonRPC) CurrentSession(ctx context.Context, sessionID int) (
 	}
 
 	k.log.CDebugf(
-		ctx, "new session with uid %s, crypt public key %s, and verifying key %s",
-		s.UID, s.CryptPublicKey, s.VerifyingKey)
+		ctx, "new session with username %s, uid %s, crypt public key %s, and verifying key %s",
+		s.Name, s.UID, s.CryptPublicKey, s.VerifyingKey)
 
 	k.setCachedCurrentSession(s)
 

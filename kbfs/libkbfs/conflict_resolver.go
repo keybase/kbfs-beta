@@ -309,12 +309,12 @@ func (cr *ConflictResolver) updateCurrInput(ctx context.Context,
 func (cr *ConflictResolver) makeChains(ctx context.Context,
 	unmerged []*RootMetadata, merged []*RootMetadata) (
 	unmergedChains *crChains, mergedChains *crChains, err error) {
-	unmergedChains, err = newCRChains(ctx, cr.config.KBPKI(), unmerged)
+	unmergedChains, err = newCRChains(ctx, cr.config, unmerged)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	mergedChains, err = newCRChains(ctx, cr.config.KBPKI(), merged)
+	mergedChains, err = newCRChains(ctx, cr.config, merged)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -806,12 +806,14 @@ func (cr *ConflictResolver) resolveMergedPaths(ctx context.Context,
 	chainsToSearchFor := make(map[BlockPointer][]BlockPointer)
 	var ptrs []BlockPointer
 
-	// While we're at it, find any deleted unmerged chains containing
-	// operations, where the corresponding merged chain has changed.
-	// The unmerged ops will need to be re-applied in that case.
+	// While we're at it, find any deleted unmerged directory chains
+	// containing operations, where the corresponding merged chain has
+	// changed.  The unmerged ops will need to be re-applied in that
+	// case.
 	var newUnmergedPaths []path
 	for original, unmergedChain := range unmergedChains.byOriginal {
-		if !unmergedChains.isDeleted(original) || len(unmergedChain.ops) == 0 {
+		if !unmergedChains.isDeleted(original) || len(unmergedChain.ops) == 0 ||
+			unmergedChain.isFile() {
 			continue
 		}
 		mergedChain, ok := mergedChains.byOriginal[original]
@@ -1032,18 +1034,18 @@ func (cr *ConflictResolver) addRecreateOpsToUnmergedChains(ctx context.Context,
 
 	// we know all of these recreate ops were authored by the current user
 	kbpki := cr.config.KBPKI()
-	uid, err := kbpki.GetCurrentUID(ctx)
+	_, uid, err := kbpki.GetCurrentUserInfo(ctx)
 	if err != nil {
 		return nil, err
 	}
-	writerName, err := kbpki.GetNormalizedUsername(ctx, uid)
+	winfo, err := newWriterInfo(ctx, cr.config, uid, unmergedChains.mostRecentMD.writerKID())
 	if err != nil {
 		return nil, err
 	}
 
 	var newUnmergedPaths []path
 	for _, rop := range recreateOps {
-		rop.setWriterName(writerName)
+		rop.setWriterInfo(winfo)
 
 		// If rop.Dir.Unref is a merged most recent pointer, look up the
 		// original.  Otherwise rop.Dir.Unref is the original.  Use the
@@ -1562,13 +1564,13 @@ func (cr *ConflictResolver) addMergedRecreates(ctx context.Context,
 					co := newCreateOp(name, chain.original, t)
 					co.Dir.Ref = chain.original
 					co.AddRefBlock(c.mostRecent)
-					writerName, err :=
-						cr.config.KBPKI().GetNormalizedUsername(
-							ctx, mergedChains.mostRecentMD.LastModifyingWriter)
+					winfo, err := newWriterInfo(ctx, cr.config,
+						mergedChains.mostRecentMD.LastModifyingWriter,
+						mergedChains.mostRecentMD.writerKID())
 					if err != nil {
 						return err
 					}
-					co.setWriterName(writerName)
+					co.setWriterInfo(winfo)
 					chain.ops = append([]op{co}, chain.ops...)
 					cr.log.CDebugf(ctx, "Re-created rm'd merge-modified node "+
 						"%v with operation %s in parent %v", unrefOriginal, co,
@@ -1731,7 +1733,7 @@ func (cr *ConflictResolver) makeFileBlockDeepCopy(ctx context.Context,
 	}
 	fblock = fblock.DeepCopy()
 	newPtr := ptr
-	uid, err := cr.config.KBPKI().GetCurrentUID(ctx)
+	_, uid, err := cr.config.KBPKI().GetCurrentUserInfo(ctx)
 	if err != nil {
 		return BlockPointer{}, err
 	}
@@ -2146,7 +2148,7 @@ func (cr *ConflictResolver) createResolvedMD(ctx context.Context,
 	}
 
 	// Add a final dummy operation to collect all of the block updates.
-	newMD.AddOp(newGCOp())
+	newMD.AddOp(newResolutionOp())
 
 	return &newMD, nil
 }
@@ -2181,7 +2183,7 @@ func crFixOpPointers(oldOps []op, updates map[BlockPointer]BlockPointer,
 				realOp.RefBlocks[i] = mostRecent
 				ptrsToFix = append(ptrsToFix, &realOp.RefBlocks[i])
 			}
-			// The leading gcOp will take care of the updates.
+			// The leading resolutionOp will take care of the updates.
 			realOp.Updates = nil
 		case *rmOp:
 			updatesToFix = append(updatesToFix, &realOp.Dir)
@@ -2197,7 +2199,7 @@ func crFixOpPointers(oldOps []op, updates map[BlockPointer]BlockPointer,
 				}
 				realOp.UnrefBlocks[i] = original
 			}
-			// The leading gcOp will take care of the updates.
+			// The leading resolutionOp will take care of the updates.
 			realOp.Updates = nil
 		case *renameOp:
 			updatesToFix = append(updatesToFix, &realOp.OldDir, &realOp.NewDir)
@@ -2215,7 +2217,7 @@ func crFixOpPointers(oldOps []op, updates map[BlockPointer]BlockPointer,
 		case *setAttrOp:
 			updatesToFix = append(updatesToFix, &realOp.Dir)
 			ptrsToFix = append(ptrsToFix, &realOp.File)
-			// The leading gcOp will take care of the updates.
+			// The leading resolutionOp will take care of the updates.
 			realOp.Updates = nil
 		}
 
@@ -2345,7 +2347,7 @@ func (cr *ConflictResolver) resolveOnePath(ctx context.Context,
 func (cr *ConflictResolver) makePostResolutionPaths(ctx context.Context,
 	md *RootMetadata, unmergedChains *crChains, mergedChains *crChains,
 	mergedPaths map[BlockPointer]path) (map[BlockPointer]path, error) {
-	resolvedChains, err := newCRChains(ctx, cr.config.KBPKI(),
+	resolvedChains, err := newCRChains(ctx, cr.config,
 		[]*RootMetadata{md})
 	if err != nil {
 		return nil, err
@@ -2692,7 +2694,7 @@ func (cr *ConflictResolver) syncBlocks(ctx context.Context, lState *lockState,
 		return updates, newBlockPutState(0), nil
 	}
 
-	uid, err := cr.config.KBPKI().GetCurrentUID(ctx)
+	_, uid, err := cr.config.KBPKI().GetCurrentUserInfo(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2706,14 +2708,14 @@ func (cr *ConflictResolver) syncBlocks(ctx context.Context, lState *lockState,
 	}
 
 	oldOps := md.data.Changes.Ops
-	gcOp, ok := oldOps[len(oldOps)-1].(*gcOp)
+	resOp, ok := oldOps[len(oldOps)-1].(*resolutionOp)
 	if !ok {
 		return nil, nil, fmt.Errorf("dummy op is not gc: %s",
 			oldOps[len(oldOps)-1])
 	}
 
 	// Create an update map, and fix up the gc ops.
-	for i, update := range gcOp.Updates {
+	for i, update := range resOp.Updates {
 		// The unref should represent the most recent merged pointer
 		// for the block.  However, the other ops will be using the
 		// original pointer as the unref, so use that as the key.
@@ -2736,11 +2738,11 @@ func (cr *ConflictResolver) syncBlocks(ctx context.Context, lState *lockState,
 			if err != nil {
 				return nil, nil, err
 			}
-			cr.log.CDebugf(ctx, "Fixing gcOp update from unmerged most "+
+			cr.log.CDebugf(ctx, "Fixing resOp update from unmerged most "+
 				"recent %v to merged most recent %v",
 				update.Unref, mergedMostRecent)
 			update.Unref = mergedMostRecent
-			gcOp.Updates[i] = update
+			resOp.Updates[i] = update
 			updates[update.Unref] = update.Ref
 		}
 	}
@@ -2786,7 +2788,7 @@ func (cr *ConflictResolver) syncBlocks(ctx context.Context, lState *lockState,
 	// Clean up any gc updates that don't refer to blocks that exist
 	// in the merged branch.
 	var newUpdates []blockUpdate
-	for _, update := range gcOp.Updates {
+	for _, update := range resOp.Updates {
 		// Ignore it if it doesn't descend from an original block
 		// pointer or one created in the merged branch.
 		if _, ok := unmergedChains.originals[update.Unref]; !ok &&
@@ -2794,14 +2796,14 @@ func (cr *ConflictResolver) syncBlocks(ctx context.Context, lState *lockState,
 			mergedChains.byMostRecent[update.Unref] == nil {
 			cr.log.CDebugf(ctx, "Turning update from %v into just a ref for %v",
 				update.Unref, update.Ref)
-			gcOp.AddRefBlock(update.Ref)
+			resOp.AddRefBlock(update.Ref)
 			continue
 		}
 		newUpdates = append(newUpdates, update)
 	}
-	gcOp.Updates = newUpdates
+	resOp.Updates = newUpdates
 
-	newOps[0] = gcOp // move the dummy ops to the front
+	newOps[0] = resOp // move the dummy ops to the front
 	md.data.Changes.Ops = newOps
 
 	// TODO: only perform this loop if debugging is enabled.
@@ -2829,8 +2831,8 @@ func (cr *ConflictResolver) syncBlocks(ctx context.Context, lState *lockState,
 		}
 	}
 
-	// Put all the blocks.
-	err = cr.fbo.doBlockPuts(ctx, md, *bps)
+	// Put all the blocks.  TODO: deal with recoverable block errors?
+	_, err = cr.fbo.doBlockPuts(ctx, md, *bps)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2845,7 +2847,7 @@ func (cr *ConflictResolver) getOpsForLocalNotification(ctx context.Context,
 	lState *lockState, md *RootMetadata, unmergedChains *crChains,
 	mergedChains *crChains, updates map[BlockPointer]BlockPointer) (
 	[]op, error) {
-	dummyOp := newGCOp()
+	dummyOp := newResolutionOp()
 	newPtrs := make(map[BlockPointer]bool)
 	for original, newMostRecent := range updates {
 		chain, ok := unmergedChains.byOriginal[original]

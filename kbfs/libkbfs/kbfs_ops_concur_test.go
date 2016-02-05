@@ -46,27 +46,51 @@ func kbfsOpsConcurInit(t *testing.T, users ...libkb.NormalizedUsername) (
 // fetching the MD from the server.  The second one should wait, and
 // then get it from the MD cache.
 func TestKBFSOpsConcurDoubleMDGet(t *testing.T) {
-	config, uid, ctx := kbfsOpsConcurInit(t, "test_user")
+	config, _, ctx := kbfsOpsConcurInit(t, "test_user")
 	defer CheckConfigAndShutdown(t, config)
-	m := NewMDOpsConcurTest(uid)
-	config.SetMDOps(m)
+
+	onGetStalledCh := make(chan struct{}, 1)
+	getUnstallCh := make(chan struct{})
+
+	stallKey := "requestName"
+	getValue := "get"
+
+	config.SetMDOps(&stallingMDOps{
+		stallOpName: "GetForTLF",
+		stallKey:    stallKey,
+		stallMap: map[interface{}]staller{
+			getValue: staller{
+				stalled: onGetStalledCh,
+				unstall: getUnstallCh,
+			},
+		},
+		delegate: config.MDOps(),
+	})
+
+	// Initialize the MD using a different config
+	c2 := ConfigAsUser(config.(*ConfigLocal), "test_user")
+	defer CheckConfigAndShutdown(t, c2)
+	rootNode, _, err :=
+		c2.KBFSOps().GetOrCreateRootNode(ctx, "test_user", false, MasterBranch)
+	if err != nil {
+		t.Fatalf("Couldn't create dir: %v", err)
+	}
 
 	n := 10
 	c := make(chan error, n)
-	dir := FakeTlfID(0, false)
 	cl := &CounterLock{}
-
-	ops := getOps(config, dir)
+	ops := getOps(config, rootNode.GetFolderBranch().Tlf)
 	ops.mdWriterLock.locker = cl
+	getCtx := context.WithValue(ctx, stallKey, getValue)
 	for i := 0; i < n; i++ {
 		go func() {
-			_, _, _, err := ops.getRootNode(ctx)
+			_, _, _, err := ops.getRootNode(getCtx)
 			c <- err
 		}()
 	}
-	// wait until at least the first one started
-	m.enter <- struct{}{}
-	close(m.enter)
+
+	// wait until the first one starts the get
+	<-onGetStalledCh
 	// make sure that the second goroutine has also started its write
 	// call, and thus must be queued behind the first one (since we
 	// are guaranteed the first one is currently running, and they
@@ -76,8 +100,7 @@ func TestKBFSOpsConcurDoubleMDGet(t *testing.T) {
 	}
 	// Now let the first one complete.  The second one should find the
 	// MD in the cache, and thus never call MDOps.Get().
-	m.start <- struct{}{}
-	close(m.start)
+	close(getUnstallCh)
 	for i := 0; i < n; i++ {
 		err := <-c
 		if err != nil {
@@ -86,10 +109,36 @@ func TestKBFSOpsConcurDoubleMDGet(t *testing.T) {
 	}
 }
 
+func setStallingMDOpsForPut(ctx context.Context, config Config) (
+	<-chan struct{}, chan<- struct{}, context.Context) {
+	onPutStalledCh := make(chan struct{}, 1)
+	putUnstallCh := make(chan struct{})
+
+	stallKey := "requestName"
+	putValue := "put"
+
+	config.SetMDOps(&stallingMDOps{
+		stallOpName: "Put",
+		stallKey:    stallKey,
+		stallMap: map[interface{}]staller{
+			putValue: staller{
+				stalled: onPutStalledCh,
+				unstall: putUnstallCh,
+			},
+		},
+		delegate: config.MDOps(),
+	})
+
+	putCtx := context.WithValue(ctx, stallKey, putValue)
+	return onPutStalledCh, putUnstallCh, putCtx
+}
+
 // Test that a read can happen concurrently with a sync
 func TestKBFSOpsConcurReadDuringSync(t *testing.T) {
-	config, uid, ctx := kbfsOpsConcurInit(t, "test_user")
+	config, _, ctx := kbfsOpsConcurInit(t, "test_user")
 	defer CheckConfigAndShutdown(t, config)
+
+	onPutStalledCh, putUnstallCh, putCtx := setStallingMDOpsForPut(ctx, config)
 
 	// create and write to a file
 	kbfsOps := config.KBFSOps()
@@ -108,18 +157,14 @@ func TestKBFSOpsConcurReadDuringSync(t *testing.T) {
 		t.Fatalf("Couldn't write file: %v", err)
 	}
 
-	// now make an MDOps that will pause during Put()
-	m := NewMDOpsConcurTest(uid)
-	config.SetMDOps(m)
-
 	// start the sync
 	errChan := make(chan error)
 	go func() {
-		errChan <- kbfsOps.Sync(ctx, fileNode)
+		errChan <- kbfsOps.Sync(putCtx, fileNode)
 	}()
 
 	// wait until Sync gets stuck at MDOps.Put()
-	m.start <- struct{}{}
+	<-onPutStalledCh
 
 	// now make sure we can read the file and see the byte we wrote
 	buf := make([]byte, 1)
@@ -132,7 +177,7 @@ func TestKBFSOpsConcurReadDuringSync(t *testing.T) {
 	}
 
 	// now unblock Sync and make sure there was no error
-	m.enter <- struct{}{}
+	close(putUnstallCh)
 	err = <-errChan
 	if err != nil {
 		t.Errorf("Sync got an error: %v", err)
@@ -142,8 +187,10 @@ func TestKBFSOpsConcurReadDuringSync(t *testing.T) {
 // Test that writes can happen concurrently with a sync
 func testKBFSOpsConcurWritesDuringSync(t *testing.T,
 	initialWriteBytes int, nOneByteWrites int) {
-	config, uid, ctx := kbfsOpsConcurInit(t, "test_user")
+	config, _, ctx := kbfsOpsConcurInit(t, "test_user")
 	defer CheckConfigAndShutdown(t, config)
+
+	onPutStalledCh, putUnstallCh, putCtx := setStallingMDOpsForPut(ctx, config)
 
 	// Use the smallest possible block size.
 	bsplitter, err := NewBlockSplitterSimple(20, 8*1024, config.Codec())
@@ -172,18 +219,14 @@ func testKBFSOpsConcurWritesDuringSync(t *testing.T,
 		t.Errorf("Couldn't write file: %v", err)
 	}
 
-	// now make an MDOps that will pause during Put()
-	m := NewMDOpsConcurTest(uid)
-	config.SetMDOps(m)
-
 	// start the sync
 	errChan := make(chan error)
 	go func() {
-		errChan <- kbfsOps.Sync(ctx, fileNode)
+		errChan <- kbfsOps.Sync(putCtx, fileNode)
 	}()
 
 	// wait until Sync gets stuck at MDOps.Put()
-	m.start <- struct{}{}
+	<-onPutStalledCh
 
 	expectedData := make([]byte, len(data))
 	copy(expectedData, data)
@@ -209,7 +252,7 @@ func testKBFSOpsConcurWritesDuringSync(t *testing.T,
 	}
 
 	// now unblock Sync and make sure there was no error
-	m.enter <- struct{}{}
+	close(putUnstallCh)
 	err = <-errChan
 	if err != nil {
 		t.Errorf("Sync got an error: %v", err)
@@ -242,13 +285,7 @@ func testKBFSOpsConcurWritesDuringSync(t *testing.T,
 		t.Errorf("Unexpected number of cached clean blocks: %d vs %d (%d vs %d)\n", g, e, totalSize, bsplitter.maxSize)
 	}
 
-	// Final sync
-	go func() {
-		errChan <- kbfsOps.Sync(ctx, fileNode)
-	}()
-	m.start <- struct{}{}
-	m.enter <- struct{}{}
-	err = <-errChan
+	err = kbfsOps.Sync(ctx, fileNode)
 	if err != nil {
 		t.Fatalf("Final sync failed: %v", err)
 	}
@@ -286,8 +323,10 @@ func TestKBFSOpsConcurMultipleIndirectWritesDuringSync(t *testing.T) {
 // Test that writes that happen concurrently with a sync, which write
 // to the same block, work correctly.
 func TestKBFSOpsConcurDeferredDoubleWritesDuringSync(t *testing.T) {
-	config, uid, ctx := kbfsOpsConcurInit(t, "test_user")
+	config, _, ctx := kbfsOpsConcurInit(t, "test_user")
 	defer CheckConfigAndShutdown(t, config)
+
+	onPutStalledCh, putUnstallCh, putCtx := setStallingMDOpsForPut(ctx, config)
 
 	// Use the smallest possible block size.
 	bsplitter, err := NewBlockSplitterSimple(20, 8*1024, config.Codec())
@@ -317,18 +356,8 @@ func TestKBFSOpsConcurDeferredDoubleWritesDuringSync(t *testing.T) {
 		t.Errorf("Couldn't write file: %v", err)
 	}
 
-	// Make an MDOps that will pause during Put().
-	m := NewMDOpsConcurTest(uid)
-	config.SetMDOps(m)
-
 	// Sync the initial two data blocks
-	errChan := make(chan error)
-	go func() {
-		errChan <- kbfsOps.Sync(ctx, fileNode)
-	}()
-	m.start <- struct{}{}
-	m.enter <- struct{}{}
-	err = <-errChan
+	err = kbfsOps.Sync(ctx, fileNode)
 	if err != nil {
 		t.Fatalf("Initial sync failed: %v", err)
 	}
@@ -342,12 +371,13 @@ func TestKBFSOpsConcurDeferredDoubleWritesDuringSync(t *testing.T) {
 	}
 
 	// start the sync
+	errChan := make(chan error)
 	go func() {
-		errChan <- kbfsOps.Sync(ctx, fileNode)
+		errChan <- kbfsOps.Sync(putCtx, fileNode)
 	}()
 
 	// wait until Sync gets stuck at MDOps.Put()
-	m.start <- struct{}{}
+	<-onPutStalledCh
 
 	// Now dirty the second block, twice.
 	newData2 := make([]byte, 10)
@@ -362,7 +392,7 @@ func TestKBFSOpsConcurDeferredDoubleWritesDuringSync(t *testing.T) {
 	}
 
 	// now unblock Sync and make sure there was no error
-	m.enter <- struct{}{}
+	close(putUnstallCh)
 	err = <-errChan
 	if err != nil {
 		t.Errorf("Sync got an error: %v", err)
@@ -387,12 +417,7 @@ func TestKBFSOpsConcurDeferredDoubleWritesDuringSync(t *testing.T) {
 	}
 
 	// Final sync
-	go func() {
-		errChan <- kbfsOps.Sync(ctx, fileNode)
-	}()
-	m.start <- struct{}{}
-	m.enter <- struct{}{}
-	err = <-errChan
+	err = kbfsOps.Sync(ctx, fileNode)
 	if err != nil {
 		t.Fatalf("Final sync failed: %v", err)
 	}
@@ -415,79 +440,6 @@ func TestKBFSOpsConcurDeferredDoubleWritesDuringSync(t *testing.T) {
 	if numDirtyBlocks != 0 {
 		t.Errorf("%d dirty blocks left after final sync", numDirtyBlocks)
 	}
-}
-
-// staller is a pair of channels. Whenever something is to be
-// stalled, a value is sent on stalled (if not blocked), and then
-// unstall is waited on.
-type staller struct {
-	stalled chan<- struct{}
-	unstall <-chan struct{}
-}
-
-// stallingBlockOps is an implementation of BlockOps whose operations
-// sometimes stall. In particular, if the operation name matches
-// stallOpName, and ctx.Value(stallKey) is a key in the corresponding
-// staller is used to stall the operation.
-type stallingBlockOps struct {
-	stallOpName string
-	stallKey    interface{}
-	stallMap    map[interface{}]staller
-	delegate    BlockOps
-}
-
-var _ BlockOps = (*stallingBlockOps)(nil)
-
-func (f *stallingBlockOps) maybeStall(ctx context.Context, opName string) {
-	if opName != f.stallOpName {
-		return
-	}
-
-	v := ctx.Value(f.stallKey)
-	chans, ok := f.stallMap[v]
-	if !ok {
-		return
-	}
-
-	select {
-	case chans.stalled <- struct{}{}:
-	default:
-	}
-	<-chans.unstall
-}
-
-func (f *stallingBlockOps) Get(
-	ctx context.Context, md *RootMetadata, blockPtr BlockPointer,
-	block Block) error {
-	f.maybeStall(ctx, "get")
-	return f.delegate.Get(ctx, md, blockPtr, block)
-}
-
-func (f *stallingBlockOps) Ready(
-	ctx context.Context, md *RootMetadata, block Block) (
-	id BlockID, plainSize int, readyBlockData ReadyBlockData, err error) {
-	f.maybeStall(ctx, "ready")
-	return f.delegate.Ready(ctx, md, block)
-}
-
-func (f *stallingBlockOps) Put(
-	ctx context.Context, md *RootMetadata, blockPtr BlockPointer,
-	readyBlockData ReadyBlockData) error {
-	f.maybeStall(ctx, "put")
-	return f.delegate.Put(ctx, md, blockPtr, readyBlockData)
-}
-
-func (f *stallingBlockOps) Delete(
-	ctx context.Context, md *RootMetadata, id BlockID,
-	context BlockContext) error {
-	f.maybeStall(ctx, "delete")
-	return f.delegate.Delete(ctx, md, id, context)
-}
-
-func (f *stallingBlockOps) Archive(
-	ctx context.Context, md *RootMetadata, ptrs []BlockPointer) error {
-	f.maybeStall(ctx, "archive")
-	return f.delegate.Archive(ctx, md, ptrs)
 }
 
 // Test that a block write can happen concurrently with a block
@@ -523,7 +475,7 @@ func TestKBFSOpsConcurBlockReadWrite(t *testing.T) {
 	writeValue := "write"
 
 	config.SetBlockOps(&stallingBlockOps{
-		stallOpName: "get",
+		stallOpName: "Get",
 		stallKey:    stallKey,
 		stallMap: map[interface{}]staller{
 			readValue: staller{
@@ -672,7 +624,7 @@ func TestKBFSOpsConcurBlockSyncWrite(t *testing.T) {
 	syncValue := "sync"
 
 	config.SetBlockOps(&stallingBlockOps{
-		stallOpName: "get",
+		stallOpName: "Get",
 		stallKey:    stallKey,
 		stallMap: map[interface{}]staller{
 			syncValue: staller{
@@ -784,7 +736,7 @@ func TestKBFSOpsConcurBlockSyncTruncate(t *testing.T) {
 	syncValue := "sync"
 
 	config.SetBlockOps(&stallingBlockOps{
-		stallOpName: "get",
+		stallOpName: "Get",
 		stallKey:    stallKey,
 		stallMap: map[interface{}]staller{
 			syncValue: staller{
@@ -964,8 +916,10 @@ func TestKBFSOpsConcurWriteDuringFolderUpdate(t *testing.T) {
 // Test that a write can happen concurrently with a sync when there
 // are multiple blocks in the file.
 func TestKBFSOpsConcurWriteDuringSyncMultiBlocks(t *testing.T) {
-	config, uid, ctx := kbfsOpsConcurInit(t, "test_user")
+	config, _, ctx := kbfsOpsConcurInit(t, "test_user")
 	defer CheckConfigAndShutdown(t, config)
+
+	onPutStalledCh, putUnstallCh, putCtx := setStallingMDOpsForPut(ctx, config)
 
 	// make blocks small
 	config.BlockSplitter().(*BlockSplitterSimple).maxSize = 5
@@ -1010,18 +964,14 @@ func TestKBFSOpsConcurWriteDuringSyncMultiBlocks(t *testing.T) {
 		t.Errorf("Couldn't write 1st block of file: %v", err)
 	}
 
-	// now make an MDOps that will pause during Put()
-	m := NewMDOpsConcurTest(uid)
-	config.SetMDOps(m)
-
 	// start the sync
 	errChan := make(chan error)
 	go func() {
-		errChan <- kbfsOps.Sync(ctx, fileNode)
+		errChan <- kbfsOps.Sync(putCtx, fileNode)
 	}()
 
 	// wait until Sync gets stuck at MDOps.Put()
-	m.start <- struct{}{}
+	<-onPutStalledCh
 
 	// now make sure we can write the second block of the file and see
 	// the new bytes we wrote
@@ -1043,7 +993,7 @@ func TestKBFSOpsConcurWriteDuringSyncMultiBlocks(t *testing.T) {
 	}
 
 	// now unstall Sync and make sure there was no error
-	m.enter <- struct{}{}
+	close(putUnstallCh)
 	err = <-errChan
 	if err != nil {
 		t.Errorf("Sync got an error: %v", err)
@@ -1061,10 +1011,6 @@ func TestKBFSOpsConcurWriteDuringSyncMultiBlocks(t *testing.T) {
 	}
 
 	// Final sync to clean up
-	go func() {
-		m.start <- struct{}{}
-		m.enter <- struct{}{}
-	}()
 	if err := kbfsOps.Sync(ctx, fileNode); err != nil {
 		t.Errorf("Couldn't sync the final write")
 	}
@@ -1288,5 +1234,430 @@ func TestKBFSOpsConcurWriteParallelBlocksError(t *testing.T) {
 	config.BlockCache().DeletePermanent(errPtr.ID)
 	if _, err := config.BlockCache().Get(errPtr, MasterBranch); err == nil {
 		t.Errorf("Failed block put for %v left block in cache", errPtr)
+	}
+}
+
+// Test that writes that happen on a multi-block file concurrently
+// with a sync, which has to retry due to an archived block, works
+// correctly.  Regression test for KBFS-700.
+func TestKBFSOpsMultiBlockWriteDuringRetriedSync(t *testing.T) {
+	config, _, ctx := kbfsOpsConcurInit(t, "test_user")
+	defer CheckConfigAndShutdown(t, config)
+
+	// Use the smallest possible block size.
+	bsplitter, err := NewBlockSplitterSimple(20, 8*1024, config.Codec())
+	if err != nil {
+		t.Fatalf("Couldn't create block splitter: %v", err)
+	}
+	config.SetBlockSplitter(bsplitter)
+
+	// Stall on the first put
+	onSyncStalledCh := make(chan struct{}, 1)
+	syncUnstallCh := make(chan struct{})
+
+	stallKey := "requestName"
+	syncValue := "sync"
+
+	config.SetBlockOps(&stallingBlockOps{
+		stallOpName: "Put",
+		stallKey:    stallKey,
+		stallMap: map[interface{}]staller{
+			syncValue: staller{
+				stalled: onSyncStalledCh,
+				unstall: syncUnstallCh,
+			},
+		},
+		delegate: config.BlockOps(),
+	})
+
+	// create and write to a file
+	kbfsOps := config.KBFSOps()
+	rootNode, _, err :=
+		kbfsOps.GetOrCreateRootNode(ctx, "test_user", false, MasterBranch)
+	if err != nil {
+		t.Fatalf("Couldn't create folder: %v", err)
+	}
+	fileNode, _, err := kbfsOps.CreateFile(ctx, rootNode, "a", false)
+	if err != nil {
+		t.Fatalf("Couldn't create file: %v", err)
+	}
+	var data []byte
+	// Write 2 blocks worth of data
+	for i := 0; i < 30; i++ {
+		data = append(data, byte(i))
+	}
+	err = kbfsOps.Write(ctx, fileNode, data, 0)
+	if err != nil {
+		t.Errorf("Couldn't write file: %v", err)
+	}
+
+	err = kbfsOps.Sync(ctx, fileNode)
+	if err != nil {
+		t.Fatalf("First sync failed: %v", err)
+	}
+
+	// Remove that file, and wait for the archiving to complete
+	err = kbfsOps.RemoveEntry(ctx, rootNode, "a")
+	if err != nil {
+		t.Fatalf("Couldn't remove file: %v", err)
+	}
+
+	err = kbfsOps.SyncFromServer(ctx, rootNode.GetFolderBranch())
+	if err != nil {
+		t.Fatalf("Couldn't sync from server: %v", err)
+	}
+
+	fileNode2, _, err := kbfsOps.CreateFile(ctx, rootNode, "a", false)
+	if err != nil {
+		t.Fatalf("Couldn't create file: %v", err)
+	}
+
+	// Now write the identical first block and sync it.
+	err = kbfsOps.Write(ctx, fileNode2, data[:20], 0)
+	if err != nil {
+		t.Errorf("Couldn't write file: %v", err)
+	}
+
+	// Sync the initial two data blocks
+	errChan := make(chan error)
+	// start the sync
+	go func() {
+		syncCtx := context.WithValue(ctx, stallKey, syncValue)
+		errChan <- kbfsOps.Sync(syncCtx, fileNode2)
+	}()
+	<-onSyncStalledCh
+
+	// Now write the second block.
+	err = kbfsOps.Write(ctx, fileNode2, data[20:], 20)
+	if err != nil {
+		t.Errorf("Couldn't write file: %v", err)
+	}
+
+	// Unstall the sync.
+	close(syncUnstallCh)
+	err = <-errChan
+	if err != nil {
+		t.Errorf("Sync got an error: %v", err)
+	}
+
+	// Final sync
+	err = kbfsOps.Sync(ctx, fileNode2)
+	if err != nil {
+		t.Fatalf("Final sync failed: %v", err)
+	}
+
+	gotData := make([]byte, 30)
+	nr, err := kbfsOps.Read(ctx, fileNode2, gotData, 0)
+	if err != nil {
+		t.Errorf("Couldn't read data: %v", err)
+	}
+	if nr != int64(len(gotData)) {
+		t.Errorf("Only read %d bytes", nr)
+	}
+	if !bytes.Equal(data, gotData) {
+		t.Errorf("Read wrong data.  Expected %v, got %v", data, gotData)
+	}
+
+	// Make sure there are no dirty blocks left at the end of the test.
+	bcs := config.BlockCache().(*BlockCacheStandard)
+	numDirtyBlocks := len(bcs.dirty)
+	if numDirtyBlocks != 0 {
+		t.Errorf("%d dirty blocks left after final sync", numDirtyBlocks)
+	}
+}
+
+// Test that a Sync that is canceled during a successful MD put works.
+func TestKBFSOpsConcurCanceledSyncSucceeds(t *testing.T) {
+	config, _, ctx := kbfsOpsConcurInit(t, "test_user")
+	defer CheckConfigAndShutdown(t, config)
+
+	onPutStalledCh, putUnstallCh, putCtx := setStallingMDOpsForPut(ctx, config)
+
+	// Use the smallest possible block size.
+	bsplitter, err := NewBlockSplitterSimple(20, 8*1024, config.Codec())
+	if err != nil {
+		t.Fatalf("Couldn't create block splitter: %v", err)
+	}
+	config.SetBlockSplitter(bsplitter)
+
+	// create and write to a file
+	kbfsOps := config.KBFSOps()
+	rootNode, _, err :=
+		kbfsOps.GetOrCreateRootNode(ctx, "test_user", false, MasterBranch)
+	if err != nil {
+		t.Fatalf("Couldn't create folder: %v", err)
+	}
+	fileNode, _, err := kbfsOps.CreateFile(ctx, rootNode, "a", false)
+	if err != nil {
+		t.Fatalf("Couldn't create file: %v", err)
+	}
+	data := make([]byte, 30)
+	for i := 0; i < 30; i++ {
+		data[i] = 1
+	}
+	err = kbfsOps.Write(ctx, fileNode, data, 0)
+	if err != nil {
+		t.Errorf("Couldn't write file: %v", err)
+	}
+
+	// start the sync
+	errChan := make(chan error)
+	cancelCtx, cancel := context.WithCancel(putCtx)
+	go func() {
+		errChan <- kbfsOps.Sync(cancelCtx, fileNode)
+	}()
+
+	// wait until Sync gets stuck at MDOps.Put()
+	<-onPutStalledCh
+	cancel()
+	close(putUnstallCh)
+
+	// We expect a canceled error
+	err = <-errChan
+	if err != context.Canceled {
+		t.Fatalf("No expected canceled error: %v", err)
+	}
+
+	ops := getOps(config, rootNode.GetFolderBranch().Tlf)
+	// Know that the sync finished by grabbing the lock.
+	lState := makeFBOLockState()
+	ops.mdWriterLock.Lock(lState)
+	ops.mdWriterLock.Unlock(lState)
+	if len(ops.blocksToDeleteAfterError) == 0 {
+		t.Fatalf("No blocks to delete after error")
+	}
+
+	// Flush the file.  This will result in conflict resolution, and
+	// an extra copy of the file, but that's ok for now.
+	if err := kbfsOps.Sync(ctx, fileNode); err != nil {
+		t.Fatalf("Couldn't sync: %v", err)
+	}
+
+	// The first put actually succeeded, so SyncFromServer and make
+	// sure it worked.  This should also finish removing any blocks
+	// that would be removed.
+	err = kbfsOps.SyncFromServer(ctx, rootNode.GetFolderBranch())
+	if err != nil {
+		t.Fatalf("Couldn't sync from server: %v", err)
+	}
+
+	gotData := make([]byte, 30)
+	nr, err := kbfsOps.Read(ctx, fileNode, gotData, 0)
+	if err != nil {
+		t.Errorf("Couldn't read data: %v", err)
+	}
+	if nr != int64(len(gotData)) {
+		t.Errorf("Only read %d bytes", nr)
+	}
+	if !bytes.Equal(data, gotData) {
+		t.Errorf("Read wrong data.  Expected %v, got %v", data, gotData)
+	}
+
+	if len(ops.blocksToDeleteAfterError) > 0 {
+		t.Fatalf("Blocks left to delete after sync: %v",
+			ops.blocksToDeleteAfterError)
+	}
+}
+
+// Test that truncating a block to a zero-contents block, for which a
+// duplicate has previously been archived, works correctly after a
+// cancel.  Regression test for KBFS-727.
+func TestKBFSOpsTruncateWithDupBlockCanceled(t *testing.T) {
+	config, _, ctx := kbfsOpsConcurInit(t, "test_user")
+	defer CheckConfigAndShutdown(t, config)
+
+	// Cancel the first put
+	onSyncStalledCh := make(chan struct{}, 1)
+	syncUnstallCh := make(chan struct{})
+
+	stallKey := "requestName"
+	syncValue := "sync"
+
+	config.SetBlockOps(&stallingBlockOps{
+		stallOpName: "Put",
+		stallKey:    stallKey,
+		stallMap: map[interface{}]staller{
+			syncValue: staller{
+				stalled: onSyncStalledCh,
+				unstall: syncUnstallCh,
+			},
+		},
+		delegate: config.BlockOps(),
+	})
+
+	// create and write to a file
+	kbfsOps := config.KBFSOps()
+	rootNode, _, err :=
+		kbfsOps.GetOrCreateRootNode(ctx, "test_user", false, MasterBranch)
+	if err != nil {
+		t.Fatalf("Couldn't create folder: %v", err)
+	}
+	_, _, err = kbfsOps.CreateFile(ctx, rootNode, "a", false)
+	if err != nil {
+		t.Fatalf("Couldn't create file: %v", err)
+	}
+
+	// Remove that file, and wait for the archiving to complete
+	err = kbfsOps.RemoveEntry(ctx, rootNode, "a")
+	if err != nil {
+		t.Fatalf("Couldn't remove file: %v", err)
+	}
+
+	err = kbfsOps.SyncFromServer(ctx, rootNode.GetFolderBranch())
+	if err != nil {
+		t.Fatalf("Couldn't sync from server: %v", err)
+	}
+
+	fileNode2, _, err := kbfsOps.CreateFile(ctx, rootNode, "a", false)
+	if err != nil {
+		t.Fatalf("Couldn't create file: %v", err)
+	}
+
+	var data []byte
+	// Write some data
+	for i := 0; i < 30; i++ {
+		data = append(data, byte(i))
+	}
+	err = kbfsOps.Write(ctx, fileNode2, data, 0)
+	if err != nil {
+		t.Errorf("Couldn't write file: %v", err)
+	}
+
+	err = kbfsOps.Sync(ctx, fileNode2)
+	if err != nil {
+		t.Fatalf("First sync failed: %v", err)
+	}
+
+	// Now truncate and sync, canceling during the block puts
+	err = kbfsOps.Truncate(ctx, fileNode2, 0)
+	if err != nil {
+		t.Errorf("Couldn't truncate file: %v", err)
+	}
+
+	// Sync the initial two data blocks
+	errChan := make(chan error)
+	// start the sync
+	cancelCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		syncCtx := context.WithValue(cancelCtx, stallKey, syncValue)
+		errChan <- kbfsOps.Sync(syncCtx, fileNode2)
+	}()
+	<-onSyncStalledCh
+
+	cancel()
+	// Unstall the sync.
+	close(syncUnstallCh)
+	err = <-errChan
+	if err != context.Canceled {
+		t.Errorf("Sync got wrong error: %v", err)
+	}
+
+	// Final sync
+	err = kbfsOps.Sync(ctx, fileNode2)
+	if err != nil {
+		t.Fatalf("Final sync failed: %v", err)
+	}
+}
+
+type blockOpsOverQuota struct {
+	BlockOps
+}
+
+func (booq *blockOpsOverQuota) Put(ctx context.Context, md *RootMetadata,
+	blockPtr BlockPointer, readyBlockData ReadyBlockData) error {
+	return BServerErrorOverQuota{""}
+}
+
+// Test that a quota error causes deferred writes to error.
+// Regression test for KBFS-751.
+func TestKBFSOpsErrorOnBlockedWriteDuringSync(t *testing.T) {
+	config, _, ctx := kbfsOpsConcurInit(t, "test_user")
+	defer CheckConfigAndShutdown(t, config)
+
+	// Cancel the first put
+	onSyncStalledCh := make(chan struct{}, 1)
+	syncUnstallCh := make(chan struct{})
+
+	stallKey := "requestName"
+	syncValue := "sync"
+
+	realBlockOps := config.BlockOps()
+	staller := &stallingBlockOps{
+		stallOpName: "Put",
+		stallKey:    stallKey,
+		stallMap: map[interface{}]staller{
+			syncValue: staller{
+				stalled: onSyncStalledCh,
+				unstall: syncUnstallCh,
+			},
+		},
+		delegate: realBlockOps,
+	}
+
+	config.SetBlockOps(staller)
+
+	// create and write to a file
+	kbfsOps := config.KBFSOps()
+	rootNode, _, err :=
+		kbfsOps.GetOrCreateRootNode(ctx, "test_user", false, MasterBranch)
+	if err != nil {
+		t.Fatalf("Couldn't create folder: %v", err)
+	}
+	fileNode, _, err := kbfsOps.CreateFile(ctx, rootNode, "a", false)
+	if err != nil {
+		t.Fatalf("Couldn't create file: %v", err)
+	}
+
+	// Write over the dirty amount of data.  TODO: make this
+	// configurable for a speedier test.
+	data := make([]byte, dirtyBytesThreshold+1)
+	err = kbfsOps.Write(ctx, fileNode, data, 0)
+	if err != nil {
+		t.Errorf("Couldn't write file: %v", err)
+	}
+
+	booq := &blockOpsOverQuota{BlockOps: staller.delegate}
+	staller.delegate = booq
+
+	// Block the Sync
+	// Sync the initial two data blocks
+	syncErrCh := make(chan error)
+	go func() {
+		syncCtx := context.WithValue(ctx, stallKey, syncValue)
+		syncErrCh <- kbfsOps.Sync(syncCtx, fileNode)
+	}()
+	<-onSyncStalledCh
+
+	// Now write more data which should get blocked
+	newData := make([]byte, 1)
+	writeErrCh := make(chan error)
+	go func() {
+		writeErrCh <- kbfsOps.Write(ctx, fileNode, newData, int64(len(data)))
+	}()
+
+	// Wait until the write is blocked
+	ops := getOps(config, rootNode.GetFolderBranch().Tlf)
+	func() {
+		lState := makeFBOLockState()
+		ops.blockLock.Lock(lState)
+		defer ops.blockLock.Unlock(lState)
+		for len(ops.syncListeners) == 0 {
+			ops.blockLock.Unlock(lState)
+			runtime.Gosched()
+			ops.blockLock.Lock(lState)
+		}
+	}()
+
+	// Unblock the sync
+	syncUnstallCh <- struct{}{}
+
+	// Both errors should be an OverQuota error
+	syncErr := <-syncErrCh
+	writeErr := <-writeErrCh
+	if _, ok := syncErr.(BServerErrorOverQuota); !ok {
+		t.Fatalf("Unexpected sync err: %v", syncErr)
+	}
+	if writeErr != syncErr {
+		t.Fatalf("Unexpected write err: %v", writeErr)
 	}
 }

@@ -92,6 +92,11 @@
 			"revisionTime": "2015-09-05T19:33:21-07:00"
 		},
 		{
+			"path": "github.com/go-sql-driver/mysql",
+			"revision": "267b128680c46286b9ca13475c3cca5de8f79bd7",
+			"revisionTime": "2016-02-03T12:00:21+01:00"
+		},
+		{
 			"path": "github.com/goamz/goamz/aws",
 			"revision": "be371d06631a6ea076cccefc6654fa5c29be074d",
 			"revisionTime": "2015-10-22T11:50:32+02:00"
@@ -135,38 +140,38 @@
 		},
 		{
 			"path": "github.com/keybase/client/go/auth",
-			"revision": "f032f2f9b4af6081c47c7292a7cb7535f27e5ab4",
-			"revisionTime": "2016-01-25T10:28:44-08:00"
+			"revision": "ab3d7d9aa9bd0fc01ca1051470f172631cd89d5e",
+			"revisionTime": "2016-01-29T21:47:20-05:00"
 		},
 		{
 			"path": "github.com/keybase/client/go/encoding/basex",
-			"revision": "f032f2f9b4af6081c47c7292a7cb7535f27e5ab4",
-			"revisionTime": "2016-01-25T10:28:44-08:00"
+			"revision": "ab3d7d9aa9bd0fc01ca1051470f172631cd89d5e",
+			"revisionTime": "2016-01-29T21:47:20-05:00"
 		},
 		{
 			"path": "github.com/keybase/client/go/kex2",
-			"revision": "f032f2f9b4af6081c47c7292a7cb7535f27e5ab4",
-			"revisionTime": "2016-01-25T10:28:44-08:00"
+			"revision": "ab3d7d9aa9bd0fc01ca1051470f172631cd89d5e",
+			"revisionTime": "2016-01-29T21:47:20-05:00"
 		},
 		{
 			"path": "github.com/keybase/client/go/libkb",
-			"revision": "f032f2f9b4af6081c47c7292a7cb7535f27e5ab4",
-			"revisionTime": "2016-01-25T10:28:44-08:00"
+			"revision": "ab3d7d9aa9bd0fc01ca1051470f172631cd89d5e",
+			"revisionTime": "2016-01-29T21:47:20-05:00"
 		},
 		{
 			"path": "github.com/keybase/client/go/logger",
-			"revision": "f032f2f9b4af6081c47c7292a7cb7535f27e5ab4",
-			"revisionTime": "2016-01-25T10:28:44-08:00"
+			"revision": "ab3d7d9aa9bd0fc01ca1051470f172631cd89d5e",
+			"revisionTime": "2016-01-29T21:47:20-05:00"
 		},
 		{
 			"path": "github.com/keybase/client/go/protocol",
-			"revision": "f032f2f9b4af6081c47c7292a7cb7535f27e5ab4",
-			"revisionTime": "2016-01-25T10:28:44-08:00"
+			"revision": "ab3d7d9aa9bd0fc01ca1051470f172631cd89d5e",
+			"revisionTime": "2016-01-29T21:47:20-05:00"
 		},
 		{
 			"path": "github.com/keybase/client/go/saltpack",
-			"revision": "f032f2f9b4af6081c47c7292a7cb7535f27e5ab4",
-			"revisionTime": "2016-01-25T10:28:44-08:00"
+			"revision": "ab3d7d9aa9bd0fc01ca1051470f172631cd89d5e",
+			"revisionTime": "2016-01-29T21:47:20-05:00"
 		},
 		{
 			"origin": "github.com/keybase/client/go/vendor/github.com/keybase/go-crypto/openpgp",
@@ -213,8 +218,8 @@
 		{
 			"origin": "github.com/keybase/kbfs/vendor/github.com/keybase/go-framed-msgpack-rpc",
 			"path": "github.com/keybase/go-framed-msgpack-rpc",
-			"revision": "f64db09a78d815bfdb9d849e28f4e47e31068962",
-			"revisionTime": "2016-01-25T11:36:35-08:00"
+			"revision": "4b3f93d2c091ad2964a6bffa346cc29b1e88d944",
+			"revisionTime": "2016-02-03T22:31:06-08:00"
 		},
 		{
 			"origin": "github.com/keybase/client/go/vendor/github.com/keybase/go-jsonw",
@@ -271,6 +276,11 @@
 			"path": "github.com/rcrowley/go-metrics",
 			"revision": "7839c01b09d2b1d7068034e5fe6e423f6ac5be22",
 			"revisionTime": "2015-11-29T16:13:40-08:00"
+		},
+		{
+			"path": "github.com/rcrowley/go-metrics/stathat",
+			"revision": "51425a2415d21afadfd55cd93432c0bc69e9598d",
+			"revisionTime": "2016-01-13T15:50:30-08:00"
 		},
 		{
 			"path": "github.com/stathat/go",

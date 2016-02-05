@@ -393,7 +393,7 @@ func TestMultiUserWrite(t *testing.T) {
 		t.Fatalf("Couldn't lookup file: %v", err)
 	}
 
-	uid2, err := config2.KBPKI().GetCurrentUID(context.Background())
+	_, uid2, err := config2.KBPKI().GetCurrentUserInfo(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -602,10 +602,11 @@ func TestBasicCRFileConflict(t *testing.T) {
 		t.Fatalf("Couldn't sync from server: %v", err)
 	}
 
+	cre := WriterDeviceDateConflictRenamer{}
 	// Make sure they both see the same set of children
 	expectedChildren := []string{
 		"b",
-		"b.conflict.u2." + now.Format(time.RFC3339Nano),
+		cre.ConflictRenameHelper(now, "u2", "dev1", "b"),
 	}
 	children1, err := kbfsOps1.GetDirChildren(ctx, dirA1)
 	if err != nil {
@@ -645,7 +646,7 @@ func TestBasicCRFileConflictWithRekey(t *testing.T) {
 
 	config2 := ConfigAsUser(config1.(*ConfigLocal), userName2)
 	defer CheckConfigAndShutdown(t, config2)
-	uid2, err := config2.KBPKI().GetCurrentUID(context.Background())
+	_, uid2, err := config2.KBPKI().GetCurrentUserInfo(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -788,10 +789,11 @@ func TestBasicCRFileConflictWithRekey(t *testing.T) {
 		t.Fatalf("Couldn't lookup dir: %v", err)
 	}
 
+	cre := WriterDeviceDateConflictRenamer{}
 	// Make sure they all see the same set of children
 	expectedChildren := []string{
 		"b",
-		"b.conflict.u2." + now.Format(time.RFC3339Nano),
+		cre.ConflictRenameHelper(now, "u2", "dev1", "b"),
 	}
 	children1, err := kbfsOps1.GetDirChildren(ctx, dirA1)
 	if err != nil {

@@ -92,14 +92,16 @@ func (b *BlockServerLocal) RemoveBlockReference(ctx context.Context, id BlockID,
 // ArchiveBlockReferences implements the BlockServer interface for
 // BlockServerLocal
 func (b *BlockServerLocal) ArchiveBlockReferences(ctx context.Context,
-	tlfID TlfID, contexts map[BlockID]BlockContext) error {
-	for id, context := range contexts {
-		refNonce := context.GetRefNonce()
-		b.log.CDebugf(ctx, "BlockServerLocal.ArchiveBlockReference id=%s "+
-			"refnonce=%s", id, refNonce)
-		err := b.s.archiveReference(id, refNonce)
-		if err != nil {
-			return err
+	tlfID TlfID, contexts map[BlockID][]BlockContext) error {
+	for id, idContexts := range contexts {
+		for _, context := range idContexts {
+			refNonce := context.GetRefNonce()
+			b.log.CDebugf(ctx, "BlockServerLocal.ArchiveBlockReference id=%s "+
+				"refnonce=%s", id, refNonce)
+			err := b.s.archiveReference(id, refNonce)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -109,11 +111,17 @@ func (b *BlockServerLocal) ArchiveBlockReferences(ctx context.Context,
 // getAll returns all the known block references, and should only be
 // used during testing.
 func (b *BlockServerLocal) getAll(tlf TlfID) (
-	map[BlockID]map[BlockRefNonce]bool, error) {
+	map[BlockID]map[BlockRefNonce]blockRefLocalStatus, error) {
 	return b.s.getAll(tlf)
 }
 
 // Shutdown implements the BlockServer interface for BlockServerLocal.
 func (b *BlockServerLocal) Shutdown() {
 	b.s.shutdown()
+}
+
+// GetUserQuotaInfo implements the BlockServer interface for BlockServerLocal
+func (b *BlockServerLocal) GetUserQuotaInfo(ctx context.Context) (info *UserQuotaInfo, err error) {
+	// Return a dummy value here.
+	return &UserQuotaInfo{Limit: 0x7FFFFFFFFFFFFFFF}, nil
 }

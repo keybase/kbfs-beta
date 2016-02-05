@@ -135,8 +135,9 @@ func uniquifyName(block *DirBlock, name string) (string, error) {
 		return name, nil
 	}
 
+	base, ext := splitExtension(name)
 	for i := 1; i <= 100; i++ {
-		newName := fmt.Sprintf("%s_(%d)", name, i)
+		newName := fmt.Sprintf("%s (%d)%s", base, i, ext)
 		if _, ok := block.Children[newName]; !ok {
 			return newName, nil
 		}
@@ -485,6 +486,9 @@ func (rua *renameUnmergedAction) updateOps(unmergedMostRecent BlockPointer,
 			case *syncOp:
 				realOp.File.Unref = newMergedEntry.BlockPointer
 				realOp.File.Ref = newMergedEntry.BlockPointer
+				// Nuke the previously referenced blocks, they are no
+				// longer relevant.
+				realOp.RefBlocks = nil
 			case *setAttrOp:
 				realOp.File = newMergedEntry.BlockPointer
 			}

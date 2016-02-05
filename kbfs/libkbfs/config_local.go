@@ -5,6 +5,7 @@ import (
 	"github.com/keybase/client/go/logger"
 	keybase1 "github.com/keybase/client/go/protocol"
 	metrics "github.com/rcrowley/go-metrics"
+	"golang.org/x/net/context"
 )
 
 const (
@@ -49,6 +50,10 @@ type ConfigLocal struct {
 	maxNameBytes uint32
 	maxDirBytes  uint64
 	rekeyQueue   RekeyQueue
+
+	// allKnownConfigs is used for testing, and contains all created
+	// Config objects in this test.
+	allKnownConfigsForTesting *[]Config
 }
 
 var _ Config = (*ConfigLocal)(nil)
@@ -142,6 +147,9 @@ func MakeLocalUsers(users []libkb.NormalizedUsername) []LocalUser {
 				UID:             keybase1.MakeTestUID(uint32(i + 1)),
 				VerifyingKeys:   []VerifyingKey{verifyingKey},
 				CryptPublicKeys: []CryptPublicKey{cryptPublicKey},
+				KIDNames: map[keybase1.KID]string{
+					verifyingKey.KID(): "dev1",
+				},
 			},
 			CurrentCryptPublicKeyIndex: 0,
 			CurrentVerifyingKeyIndex:   0,
@@ -155,7 +163,7 @@ func NewConfigLocal() *ConfigLocal {
 	config := &ConfigLocal{}
 	config.SetClock(wallClock{})
 	config.SetReporter(NewReporterSimple(config.Clock(), 10))
-	config.SetConflictRenamer(TimeAndWriterConflictRenamer{config})
+	config.SetConflictRenamer(WriterDeviceDateConflictRenamer{config})
 	config.SetMDCache(NewMDCacheStandard(5000))
 	config.SetKeyCache(NewKeyCacheStandard(5000))
 	// Limit the block cache to 10K entries or 512 MB of bytes
@@ -460,6 +468,22 @@ func (c *ConfigLocal) SetMetricsRegistry(r metrics.Registry) {
 
 // Shutdown implements the Config interface for ConfigLocal.
 func (c *ConfigLocal) Shutdown() error {
+	if c.CheckStateOnShutdown() {
+		// Before we do anything, wait for all archiving to finish.
+		for _, config := range *c.allKnownConfigsForTesting {
+			kbfsOps, ok := config.KBFSOps().(*KBFSOpsStandard)
+			if !ok {
+				continue
+			}
+			for _, fbo := range kbfsOps.ops {
+				err := fbo.waitForArchives(context.Background())
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	err := c.KBFSOps().Shutdown()
 	// Continue with shutdown regardless of err.
 	c.RekeyQueue().Clear()
