@@ -41,15 +41,8 @@ type ConflictResolver struct {
 	inputChanLock sync.RWMutex
 	inputChan     chan conflictInput
 
-	// We use a mutex, int, and channel to track and synchronize on
-	// the number of outstanding resolves.  We can't use a
-	// sync.WaitGroup because it requires that the Add() and the
-	// Wait() are fully synchronized, which means holding a mutex
-	// during Wait(), which can lead to deadlocks for users of
-	// ConflictResolver.
-	resolveLock sync.Mutex
-	numResolves int
-	isIdleCh    chan struct{} // leave as nil when initializing
+	// resolveGroup tracks the outstanding resolves.
+	resolveGroup repeatedWaitGroup
 
 	inputLock sync.Mutex
 	currInput conflictInput
@@ -104,29 +97,11 @@ func (cr *ConflictResolver) stopProcessing() {
 	cr.inputChan = nil
 }
 
-func (cr *ConflictResolver) resolutionDone() {
-	cr.resolveLock.Lock()
-	defer cr.resolveLock.Unlock()
-	if cr.numResolves <= 0 {
-		panic(fmt.Sprintf("Bad number of resolves in resolutionDone: %d",
-			cr.numResolves))
-	}
-	cr.numResolves--
-	if cr.numResolves == 0 {
-		close(cr.isIdleCh)
-		cr.isIdleCh = nil
-	}
-}
-
 // processInput processes conflict resolution jobs from the given
 // channel until it is closed. This function uses a parameter for the
 // channel instead of accessing cr.inputChan directly so that it
 // doesn't have to hold inputChanLock.
 func (cr *ConflictResolver) processInput(inputChan <-chan conflictInput) {
-	logTags := make(logger.CtxLogTags)
-	logTags[CtxCRIDKey] = CtxCROpID
-	backgroundCtx := logger.NewContextWithLogTags(context.Background(), logTags)
-
 	var cancel func()
 	defer func() {
 		if cancel != nil {
@@ -134,13 +109,8 @@ func (cr *ConflictResolver) processInput(inputChan <-chan conflictInput) {
 		}
 	}()
 	for ci := range inputChan {
-		ctx := backgroundCtx
-		id, err := MakeRandomRequestID()
-		if err != nil {
-			cr.log.Warning("Couldn't generate a random request ID: %v", err)
-		} else {
-			ctx = context.WithValue(ctx, CtxCRIDKey, id)
-		}
+		ctx := ctxWithRandomID(context.Background(), CtxCRIDKey,
+			CtxCROpID, cr.log)
 
 		valid := func() bool {
 			cr.inputLock.Lock()
@@ -162,7 +132,7 @@ func (cr *ConflictResolver) processInput(inputChan <-chan conflictInput) {
 		}()
 		if !valid {
 			cr.log.CDebugf(ctx, "Ignoring uninteresting input: %v", ci)
-			cr.resolutionDone()
+			cr.resolveGroup.Done()
 			continue
 		}
 
@@ -181,14 +151,7 @@ func (cr *ConflictResolver) Resolve(unmerged MetadataRevision,
 		return
 	}
 
-	func() {
-		cr.resolveLock.Lock()
-		defer cr.resolveLock.Unlock()
-		if cr.numResolves == 0 {
-			cr.isIdleCh = make(chan struct{})
-		}
-		cr.numResolves++
-	}()
+	cr.resolveGroup.Add(1)
 	cr.inputChan <- conflictInput{unmerged, merged}
 }
 
@@ -196,22 +159,7 @@ func (cr *ConflictResolver) Resolve(unmerged MetadataRevision,
 // complete (though not necessarily successful), or until the given
 // context is canceled.
 func (cr *ConflictResolver) Wait(ctx context.Context) error {
-	idleCh := func() chan struct{} {
-		cr.resolveLock.Lock()
-		defer cr.resolveLock.Unlock()
-		return cr.isIdleCh
-	}()
-
-	if idleCh == nil {
-		return nil
-	}
-
-	select {
-	case <-idleCh:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return cr.resolveGroup.Wait(ctx)
 }
 
 // Shutdown cancels any ongoing resolutions and stops any background
@@ -866,15 +814,17 @@ func (cr *ConflictResolver) resolveMergedPaths(ctx context.Context,
 			recreateOps = append(recreateOps, op)
 		}
 
-		// Remember to fill in the corresponding mergedPath once we
-		// get mostRecent's full path.
-		chainsToSearchFor[mostRecent] =
-			append(chainsToSearchFor[mostRecent], p.tailPointer())
-
 		// At the end of this process, we are left with a merged path
 		// that begins just after mostRecent.  We will fill this in
 		// later with the searchFromNodes result.
 		mergedPaths[p.tailPointer()] = mergedPath
+
+		if mostRecent.IsInitialized() {
+			// Remember to fill in the corresponding mergedPath once we
+			// get mostRecent's full path.
+			chainsToSearchFor[mostRecent] =
+				append(chainsToSearchFor[mostRecent], p.tailPointer())
+		}
 	}
 
 	// Now we can search for all the merged paths that need to be
@@ -892,6 +842,11 @@ func (cr *ConflictResolver) resolveMergedPaths(ctx context.Context,
 	}
 	for ptr := range chainsToSearchFor {
 		ptrs = append(ptrs, ptr)
+	}
+
+	if len(ptrs) == 0 {
+		// Nothing to search for
+		return mergedPaths, recreateOps, newUnmergedPaths, nil
 	}
 
 	nodeMap, err := cr.fbo.searchForNodes(ctx, mergedNodeCache, ptrs, newPtrs,
@@ -2063,7 +2018,7 @@ func (cr *ConflictResolver) createResolvedMD(ctx context.Context,
 	lState *lockState, unmergedPaths []path, unmergedChains *crChains,
 	mergedChains *crChains) (*RootMetadata, error) {
 	currMD := mergedChains.mostRecentMD
-	newMD, err := currMD.MakeSuccessor(cr.config)
+	newMD, err := currMD.MakeSuccessor(cr.config, true)
 	if err != nil {
 		return nil, err
 	}
@@ -2996,7 +2951,7 @@ func (e CRWrapError) String() string {
 func (cr *ConflictResolver) doResolve(ctx context.Context, ci conflictInput) {
 	cr.log.CDebugf(ctx, "Starting conflict resolution with input %v", ci)
 	var err error
-	defer cr.resolutionDone()
+	defer cr.resolveGroup.Done()
 	defer func() {
 		cr.log.CDebugf(ctx, "Finished conflict resolution: %v", err)
 		if err != nil {

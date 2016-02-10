@@ -1,6 +1,8 @@
 package libkbfs
 
 import (
+	"time"
+
 	"github.com/golang/mock/gomock"
 	"github.com/keybase/client/go/logger"
 	"golang.org/x/net/context"
@@ -30,6 +32,7 @@ type ConfigMock struct {
 	// local references to the proper mock type
 	mockKbfs       *MockKBFSOps
 	mockKbpki      *MockKBPKI
+	mockKbd        *MockKeybaseDaemon
 	mockKeyman     *MockKeyManager
 	mockRep        *MockReporter
 	mockMdcache    *MockMDCache
@@ -55,6 +58,8 @@ func NewConfigMock(c *gomock.Controller, ctr *SafeTestReporter) *ConfigMock {
 	config := &ConfigMock{}
 	config.mockKbfs = NewMockKBFSOps(c)
 	config.SetKBFSOps(config.mockKbfs)
+	config.mockKbd = NewMockKeybaseDaemon(c)
+	config.SetKeybaseDaemon(config.mockKbd)
 	config.mockKbpki = NewMockKBPKI(c)
 	config.SetKBPKI(config.mockKbpki)
 	config.mockKeyman = NewMockKeyManager(c)
@@ -106,6 +111,10 @@ func NewConfigMock(c *gomock.Controller, ctr *SafeTestReporter) *ConfigMock {
 	config.maxFileBytes = maxFileBytesDefault
 	config.maxNameBytes = maxNameBytesDefault
 	config.maxDirBytes = maxDirBytesDefault
+	config.rwpWaitTime = rekeyWithPromptWaitTimeDefault
+
+	config.qrPeriod = 0 * time.Second // no auto reclamation
+	config.qrUnrefAge = qrUnrefAgeDefault
 
 	return config
 }

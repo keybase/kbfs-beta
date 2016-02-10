@@ -1,6 +1,8 @@
 package libkbfs
 
 import (
+	"time"
+
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/logger"
 	keybase1 "github.com/keybase/client/go/protocol"
@@ -18,6 +20,13 @@ const (
 	// increase this once we support levels of indirection for
 	// directories.
 	maxDirBytesDefault = 512 * 1024
+	// Default time after setting the rekey bit before prompting for a
+	// paper key.
+	rekeyWithPromptWaitTimeDefault = 10 * time.Minute
+	// How often do we check for stuff to reclaim?
+	qrPeriodDefault = 1 * time.Minute
+	// How long must something be unreferenced before we reclaim it?
+	qrUnrefAgeDefault = 1 * time.Minute
 )
 
 // ConfigLocal implements the Config interface using purely local
@@ -46,10 +55,14 @@ type ConfigLocal struct {
 	registry     metrics.Registry
 	loggerFn     func(prefix string) logger.Logger
 	noBGFlush    bool // logic opposite so the default value is the common setting
+	rwpWaitTime  time.Duration
 	maxFileBytes uint64
 	maxNameBytes uint32
 	maxDirBytes  uint64
 	rekeyQueue   RekeyQueue
+
+	qrPeriod   time.Duration
+	qrUnrefAge time.Duration
 
 	// allKnownConfigs is used for testing, and contains all created
 	// Config objects in this test.
@@ -177,6 +190,10 @@ func NewConfigLocal() *ConfigLocal {
 	config.maxFileBytes = maxFileBytesDefault
 	config.maxNameBytes = maxNameBytesDefault
 	config.maxDirBytes = maxDirBytesDefault
+	config.rwpWaitTime = rekeyWithPromptWaitTimeDefault
+
+	config.qrPeriod = qrPeriodDefault
+	config.qrUnrefAge = qrUnrefAgeDefault
 
 	// Don't bother creating the registry if UseNilMetrics is set.
 	if !metrics.UseNilMetrics {
@@ -402,6 +419,22 @@ func (c *ConfigLocal) DoBackgroundFlushes() bool {
 	return !c.noBGFlush
 }
 
+// RekeyWithPromptWaitTime implements the Config interface for
+// ConfigLocal.
+func (c *ConfigLocal) RekeyWithPromptWaitTime() time.Duration {
+	return c.rwpWaitTime
+}
+
+// QuotaReclamationPeriod implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) QuotaReclamationPeriod() time.Duration {
+	return c.qrPeriod
+}
+
+// QuotaReclamationMinUnrefAge implements the Config interface for ConfigLocal.
+func (c *ConfigLocal) QuotaReclamationMinUnrefAge() time.Duration {
+	return c.qrUnrefAge
+}
+
 // ReqsBufSize implements the Config interface for ConfigLocal.
 func (c *ConfigLocal) ReqsBufSize() int {
 	return 20
@@ -476,7 +509,7 @@ func (c *ConfigLocal) Shutdown() error {
 				continue
 			}
 			for _, fbo := range kbfsOps.ops {
-				err := fbo.waitForArchives(context.Background())
+				err := fbo.fbm.waitForArchives(context.Background())
 				if err != nil {
 					return err
 				}

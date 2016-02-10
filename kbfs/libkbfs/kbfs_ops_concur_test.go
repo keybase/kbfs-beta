@@ -579,6 +579,12 @@ func (km *mdRecordingKeyManager) Rekey(
 	return km.delegate.Rekey(ctx, md)
 }
 
+func (km *mdRecordingKeyManager) RekeyWithPrompt(
+	ctx context.Context, md *RootMetadata) (bool, *TLFCryptKey, error) {
+	km.setLastMD(md)
+	return km.delegate.RekeyWithPrompt(ctx, md)
+}
+
 // Test that a sync can happen concurrently with a write. This is a
 // regression test for KBFS-558.
 func TestKBFSOpsConcurBlockSyncWrite(t *testing.T) {
@@ -1423,7 +1429,7 @@ func TestKBFSOpsConcurCanceledSyncSucceeds(t *testing.T) {
 	lState := makeFBOLockState()
 	ops.mdWriterLock.Lock(lState)
 	ops.mdWriterLock.Unlock(lState)
-	if len(ops.blocksToDeleteAfterError) == 0 {
+	if len(ops.fbm.blocksToDeleteAfterError) == 0 {
 		t.Fatalf("No blocks to delete after error")
 	}
 
@@ -1453,9 +1459,9 @@ func TestKBFSOpsConcurCanceledSyncSucceeds(t *testing.T) {
 		t.Errorf("Read wrong data.  Expected %v, got %v", data, gotData)
 	}
 
-	if len(ops.blocksToDeleteAfterError) > 0 {
+	if len(ops.fbm.blocksToDeleteAfterError) > 0 {
 		t.Fatalf("Blocks left to delete after sync: %v",
-			ops.blocksToDeleteAfterError)
+			ops.fbm.blocksToDeleteAfterError)
 	}
 }
 

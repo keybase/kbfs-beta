@@ -102,9 +102,9 @@ func (md *MDServerLocal) checkPerms(ctx context.Context, id TlfID,
 	isWriter := rmds.MD.GetTlfHandle().IsWriter(user)
 	isReader := rmds.MD.GetTlfHandle().IsReader(user)
 	if checkWrite {
-		// is this a reader simply setting the rekey bit?
+		// if this is a reader, are they acting within their restrictions?
 		if !isWriter && isReader && newMd != nil {
-			return newMd.MD.IsValidRekeyRequest(md.config, rmds.MD), nil
+			return newMd.MD.IsValidRekeyRequest(md.config, rmds.MD, user), nil
 		}
 		return isWriter, nil
 	}
@@ -498,7 +498,10 @@ func (md *MDServerLocal) Put(ctx context.Context, rmds *RootMetadataSigned) erro
 		return MDServerError{err}
 	}
 
-	if mStatus == Merged {
+	if mStatus == Merged &&
+		// Don't send notifies if it's just a rekey (the real mdserver
+		// sends a "folder needs rekey" notification in this case).
+		!(rmds.MD.IsRekeySet() && rmds.MD.IsWriterMetadataCopiedSet()) {
 		md.sessionHeads[id] = md
 
 		// now fire all the observers that aren't from this session

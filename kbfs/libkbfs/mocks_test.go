@@ -562,6 +562,14 @@ func (_mr *_MockKeybaseDaemonRecorder) Notify(arg0, arg1 interface{}) *gomock.Ca
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "Notify", arg0, arg1)
 }
 
+func (_m *MockKeybaseDaemon) FlushUserFromLocalCache(ctx context.Context, uid protocol.UID) {
+	_m.ctrl.Call(_m, "FlushUserFromLocalCache", ctx, uid)
+}
+
+func (_mr *_MockKeybaseDaemonRecorder) FlushUserFromLocalCache(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "FlushUserFromLocalCache", arg0, arg1)
+}
+
 func (_m *MockKeybaseDaemon) Shutdown() {
 	_m.ctrl.Call(_m, "Shutdown")
 }
@@ -796,6 +804,18 @@ func (_m *MockKeyManager) Rekey(ctx context.Context, md *RootMetadata) (bool, *T
 
 func (_mr *_MockKeyManagerRecorder) Rekey(arg0, arg1 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "Rekey", arg0, arg1)
+}
+
+func (_m *MockKeyManager) RekeyWithPrompt(ctx context.Context, md *RootMetadata) (bool, *TLFCryptKey, error) {
+	ret := _m.ctrl.Call(_m, "RekeyWithPrompt", ctx, md)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(*TLFCryptKey)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+func (_mr *_MockKeyManagerRecorder) RekeyWithPrompt(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "RekeyWithPrompt", arg0, arg1)
 }
 
 // Mock of Reporter interface
@@ -1279,16 +1299,16 @@ func (_mr *_MockCryptoRecorder) DecryptTLFCryptKeyClientHalf(arg0, arg1, arg2 in
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "DecryptTLFCryptKeyClientHalf", arg0, arg1, arg2)
 }
 
-func (_m *MockCrypto) DecryptTLFCryptKeyClientHalfAny(ctx context.Context, keys []EncryptedTLFCryptKeyClientAndEphemeral) (TLFCryptKeyClientHalf, int, error) {
-	ret := _m.ctrl.Call(_m, "DecryptTLFCryptKeyClientHalfAny", ctx, keys)
+func (_m *MockCrypto) DecryptTLFCryptKeyClientHalfAny(ctx context.Context, keys []EncryptedTLFCryptKeyClientAndEphemeral, promptPaper bool) (TLFCryptKeyClientHalf, int, error) {
+	ret := _m.ctrl.Call(_m, "DecryptTLFCryptKeyClientHalfAny", ctx, keys, promptPaper)
 	ret0, _ := ret[0].(TLFCryptKeyClientHalf)
 	ret1, _ := ret[1].(int)
 	ret2, _ := ret[2].(error)
 	return ret0, ret1, ret2
 }
 
-func (_mr *_MockCryptoRecorder) DecryptTLFCryptKeyClientHalfAny(arg0, arg1 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "DecryptTLFCryptKeyClientHalfAny", arg0, arg1)
+func (_mr *_MockCryptoRecorder) DecryptTLFCryptKeyClientHalfAny(arg0, arg1, arg2 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "DecryptTLFCryptKeyClientHalfAny", arg0, arg1, arg2)
 }
 
 func (_m *MockCrypto) GetTLFCryptKeyServerHalfID(user protocol.UID, deviceKID protocol.KID, serverHalf TLFCryptKeyServerHalf) (TLFCryptKeyServerHalfID, error) {
@@ -1838,10 +1858,11 @@ func (_mr *_MockBlockServerRecorder) Shutdown() *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "Shutdown")
 }
 
-func (_m *MockBlockServer) GetUserQuotaInfo(ctx context.Context) (info *UserQuotaInfo, err error) {
-	_m.ctrl.Call(_m, "GetUserQuotaInfo", ctx)
-	// Return a dummy value here.
-	return &UserQuotaInfo{Limit: 0x7FFFFFFFFFFFFFFF}, nil
+func (_m *MockBlockServer) GetUserQuotaInfo(ctx context.Context) (*UserQuotaInfo, error) {
+	ret := _m.ctrl.Call(_m, "GetUserQuotaInfo", ctx)
+	ret0, _ := ret[0].(*UserQuotaInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 func (_mr *_MockBlockServerRecorder) GetUserQuotaInfo(arg0 interface{}) *gomock.Call {
@@ -2089,13 +2110,13 @@ func (_m *MockConflictRenamer) EXPECT() *_MockConflictRenamerRecorder {
 	return _m.recorder
 }
 
-func (_m *MockConflictRenamer) ConlictRename(op op, original string) string {
+func (_m *MockConflictRenamer) ConflictRename(op op, original string) string {
 	ret := _m.ctrl.Call(_m, "ConflictRename", op, original)
 	ret0, _ := ret[0].(string)
 	return ret0
 }
 
-func (_mr *_MockConflictRenamerRecorder) ConflictRename(arg0 interface{}, arg1 interface{}) *gomock.Call {
+func (_mr *_MockConflictRenamerRecorder) ConflictRename(arg0, arg1 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "ConflictRename", arg0, arg1)
 }
 
@@ -2566,6 +2587,36 @@ func (_m *MockConfig) DoBackgroundFlushes() bool {
 
 func (_mr *_MockConfigRecorder) DoBackgroundFlushes() *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "DoBackgroundFlushes")
+}
+
+func (_m *MockConfig) RekeyWithPromptWaitTime() time.Duration {
+	ret := _m.ctrl.Call(_m, "RekeyWithPromptWaitTime")
+	ret0, _ := ret[0].(time.Duration)
+	return ret0
+}
+
+func (_mr *_MockConfigRecorder) RekeyWithPromptWaitTime() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "RekeyWithPromptWaitTime")
+}
+
+func (_m *MockConfig) QuotaReclamationPeriod() time.Duration {
+	ret := _m.ctrl.Call(_m, "QuotaReclamationPeriod")
+	ret0, _ := ret[0].(time.Duration)
+	return ret0
+}
+
+func (_mr *_MockConfigRecorder) QuotaReclamationPeriod() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "QuotaReclamationPeriod")
+}
+
+func (_m *MockConfig) QuotaReclamationMinUnrefAge() time.Duration {
+	ret := _m.ctrl.Call(_m, "QuotaReclamationMinUnrefAge")
+	ret0, _ := ret[0].(time.Duration)
+	return ret0
+}
+
+func (_mr *_MockConfigRecorder) QuotaReclamationMinUnrefAge() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "QuotaReclamationMinUnrefAge")
 }
 
 func (_m *MockConfig) MakeLogger(module string) logger.Logger {

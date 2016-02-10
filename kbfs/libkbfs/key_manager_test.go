@@ -3,6 +3,7 @@ package libkbfs
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/keybase/client/go/libkb"
@@ -61,7 +62,7 @@ func expectUncachedGetTLFCryptKeyAnyDevice(config *ConfigMock, rmd *RootMetadata
 	config.mockKbpki.EXPECT().GetCryptPublicKeys(gomock.Any(), uid).
 		Return([]CryptPublicKey{subkey}, nil)
 	config.mockCrypto.EXPECT().DecryptTLFCryptKeyClientHalfAny(gomock.Any(),
-		gomock.Any()).Return(TLFCryptKeyClientHalf{}, 0, nil)
+		gomock.Any(), false).Return(TLFCryptKeyClientHalf{}, 0, nil)
 
 	// get the server-side half and retrieve the real secret key
 	config.mockKops.EXPECT().GetTLFCryptKeyServerHalf(gomock.Any(),
@@ -90,8 +91,10 @@ func expectRekey(config *ConfigMock, rmd *RootMetadata) {
 	config.mockKops.EXPECT().PutTLFCryptKeyServerHalves(gomock.Any(), gomock.Any()).Return(nil)
 	config.mockCrypto.EXPECT().GetTLFCryptKeyServerHalfID(gomock.Any(), gomock.Any(), gomock.Any()).Return(TLFCryptKeyServerHalfID{}, nil)
 
-	// Ignore Notify calls for now
+	// Ignore Notify and Flush calls for now
 	config.mockRep.EXPECT().Notify(gomock.Any(), gomock.Any()).AnyTimes()
+	config.mockKbd.EXPECT().FlushUserFromLocalCache(gomock.Any(),
+		gomock.Any()).AnyTimes()
 }
 
 func TestKeyManagerPublicTLFCryptKey(t *testing.T) {
@@ -655,6 +658,100 @@ func TestKeyManagerSelfRekeyAcrossDevices(t *testing.T) {
 	}
 }
 
+func TestKeyManagerReaderRekey(t *testing.T) {
+	var u1, u2 libkb.NormalizedUsername = "u1", "u2"
+	config1, _, ctx := kbfsOpsConcurInit(t, u1, u2)
+	defer CheckConfigAndShutdown(t, config1)
+	_, uid1, err := config1.KBPKI().GetCurrentUserInfo(context.Background())
+
+	config2 := ConfigAsUser(config1.(*ConfigLocal), u2)
+	defer CheckConfigAndShutdown(t, config2)
+	_, uid2, err := config2.KBPKI().GetCurrentUserInfo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Log("Create a shared folder")
+	name := u1.String() + ReaderSep + u2.String()
+
+	kbfsOps1 := config1.KBFSOps()
+	rootNode1, _, err :=
+		kbfsOps1.GetOrCreateRootNode(ctx, name, false, MasterBranch)
+	if err != nil {
+		t.Fatalf("Couldn't create folder: %v", err)
+	}
+
+	t.Log("User 1 creates a file")
+	_, _, err = kbfsOps1.CreateFile(ctx, rootNode1, "a", false)
+	if err != nil {
+		t.Fatalf("Couldn't create file: %v", err)
+	}
+
+	t.Log("User 1 adds a device")
+	// The configs don't share a Keybase Daemon so we have to do it in all
+	// places.
+	AddDeviceForLocalUserOrBust(t, config1, uid1)
+	devIndex := AddDeviceForLocalUserOrBust(t, config2, uid1)
+
+	config1Dev2 := ConfigAsUser(config2, u1)
+	defer CheckConfigAndShutdown(t, config1Dev2)
+	SwitchDeviceForLocalUserOrBust(t, config1Dev2, devIndex)
+
+	t.Log("User 2 adds a device")
+	// The configs don't share a Keybase Daemon so we have to do it in all
+	// places.
+	AddDeviceForLocalUserOrBust(t, config1, uid2)
+	AddDeviceForLocalUserOrBust(t, config1Dev2, uid2)
+	devIndex = AddDeviceForLocalUserOrBust(t, config2, uid2)
+
+	config2Dev2 := ConfigAsUser(config2, u2)
+	defer CheckConfigAndShutdown(t, config2Dev2)
+	SwitchDeviceForLocalUserOrBust(t, config2Dev2, devIndex)
+
+	t.Log("Check that user 2 device 2 is unable to read the file")
+	// user 2 device 2 should be unable to read the data now since its device
+	// wasn't registered when the folder was originally created.
+	kbfsOps2Dev2 := config2Dev2.KBFSOps()
+	_, _, err =
+		kbfsOps2Dev2.GetOrCreateRootNode(ctx, name, false, MasterBranch)
+	if _, ok := err.(ReadAccessError); !ok {
+		t.Fatalf("Got unexpected error when reading with new key: %v", err)
+	}
+
+	t.Log("User 2 rekeys from device 1")
+	kbfsOps2 := config2.KBFSOps()
+	root2dev1, _, err := kbfsOps2.GetOrCreateRootNode(ctx, name, false, MasterBranch)
+	if err != nil {
+		t.Fatalf("Couldn't obtain folder: %#v", err)
+	}
+
+	err = kbfsOps2.Rekey(ctx, root2dev1.GetFolderBranch().Tlf)
+	if err != nil {
+		t.Fatalf("Expected reader rekey to partially complete. Actual error: %#v", err)
+	}
+
+	t.Log("User 2 device 2 should be able to read now")
+	root2dev2, _, err :=
+		kbfsOps2Dev2.GetOrCreateRootNode(ctx, name, false, MasterBranch)
+	if err != nil {
+		t.Fatalf("Got unexpected error after rekey: %v", err)
+	}
+
+	t.Log("User 1 device 2 should still be unable to read")
+	kbfsOps1Dev2 := config1Dev2.KBFSOps()
+	_, _, err =
+		kbfsOps1Dev2.GetOrCreateRootNode(ctx, name, false, MasterBranch)
+	if _, ok := err.(ReadAccessError); !ok {
+		t.Fatalf("Got unexpected error when reading with new key: %v", err)
+	}
+
+	t.Log("User 2 device 2 reads user 1's file")
+	children2, err := kbfsOps2Dev2.GetDirChildren(ctx, root2dev2)
+	if _, ok := children2["a"]; !ok {
+		t.Fatalf("Device 2 couldn't see user 1's dir entry")
+	}
+}
+
 // This tests 2 variations of the situation where clients w/o the folder key set the rekey bit.
 // In one case the client is a writer and in the other a reader. They both blindly copy the existing
 // metadata and simply set the rekey bit. Then another participant rekeys the folder and they try to read.
@@ -902,11 +999,15 @@ func TestKeyManagerRekeyAddAndRevokeDeviceWithConflict(t *testing.T) {
 	RevokeDeviceForLocalUserOrBust(t, config1, uid2, 0)
 	RevokeDeviceForLocalUserOrBust(t, config2Dev2, uid2, 0)
 
-	// disable updates on user 1
-	c, err := DisableUpdatesForTesting(config1, rootNode1.GetFolderBranch())
-	if err != nil {
-		t.Fatalf("Couldn't disable updates: %v", err)
-	}
+	// Stall user 1's rekey, to ensure a conflict.
+	onPutStalledCh, putUnstallCh, putCtx := setStallingMDOpsForPut(ctx, config1)
+
+	// Have user 1 also try to rekey but fail due to conflict
+	errChan := make(chan error)
+	go func() {
+		errChan <- kbfsOps1.Rekey(putCtx, rootNode1.GetFolderBranch().Tlf)
+	}()
+	<-onPutStalledCh
 
 	// rekey again but with user 2 device 2
 	err = kbfsOps2Dev2.Rekey(ctx, root2Dev2.GetFolderBranch().Tlf)
@@ -914,17 +1015,11 @@ func TestKeyManagerRekeyAddAndRevokeDeviceWithConflict(t *testing.T) {
 		t.Fatalf("Couldn't rekey: %v", err)
 	}
 
-	// have user 1 also try to rekey but fail due to conflict
-	err = kbfsOps1.Rekey(ctx, rootNode1.GetFolderBranch().Tlf)
+	// Make sure user 1's rekey failed.
+	putUnstallCh <- struct{}{}
+	err = <-errChan
 	if _, isConflict := err.(MDServerErrorConflictRevision); !isConflict {
 		t.Fatalf("Expected failure due to conflict")
-	}
-
-	// device 1 re-enables updates
-	c <- struct{}{}
-	err = kbfsOps1.SyncFromServer(ctx, rootNode1.GetFolderBranch())
-	if err != nil {
-		t.Fatalf("Couldn't sync from server: %v", err)
 	}
 
 	err = kbfsOps2Dev2.SyncFromServer(ctx, root2Dev2.GetFolderBranch())
@@ -954,4 +1049,93 @@ func TestKeyManagerRekeyAddAndRevokeDeviceWithConflict(t *testing.T) {
 	if _, ok := children["b"]; !ok {
 		t.Fatalf("Device 1 couldn't see the new dir entry")
 	}
+}
+
+// cryptoLocalTrapAny traps every DecryptTLFCryptKeyClientHalfAny
+// call, and sends on the given channel whether each call had
+// promptPaper set or not.
+type cryptoLocalTrapAny struct {
+	Crypto
+	promptCh chan<- bool
+}
+
+func (clta *cryptoLocalTrapAny) DecryptTLFCryptKeyClientHalfAny(
+	ctx context.Context,
+	keys []EncryptedTLFCryptKeyClientAndEphemeral, promptPaper bool) (
+	TLFCryptKeyClientHalf, int, error) {
+	clta.promptCh <- promptPaper
+	return TLFCryptKeyClientHalf{}, 0, nil
+}
+
+func TestKeyManagerRekeyAddDeviceWithPrompt(t *testing.T) {
+	var u1, u2 libkb.NormalizedUsername = "u1", "u2"
+	config1, _, ctx := kbfsOpsConcurInit(t, u1, u2)
+	defer CheckConfigAndShutdown(t, config1)
+
+	config2 := ConfigAsUser(config1.(*ConfigLocal), u2)
+	defer CheckConfigAndShutdown(t, config2)
+	_, uid2, err := config2.KBPKI().GetCurrentUserInfo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a shared folder
+	name := u1.String() + "," + u2.String()
+
+	kbfsOps1 := config1.KBFSOps()
+	rootNode1, _, err :=
+		kbfsOps1.GetOrCreateRootNode(ctx, name, false, MasterBranch)
+	if err != nil {
+		t.Fatalf("Couldn't create folder: %v", err)
+	}
+
+	// user 1 creates a file
+	_, _, err = kbfsOps1.CreateFile(ctx, rootNode1, "a", false)
+	if err != nil {
+		t.Fatalf("Couldn't create file: %v", err)
+	}
+
+	config2Dev2 := ConfigAsUser(config1.(*ConfigLocal), u2)
+	defer CheckConfigAndShutdown(t, config2Dev2)
+
+	// Now give u2 a new device.  The configs don't share a Keybase
+	// Daemon so we have to do it in all places.
+	AddDeviceForLocalUserOrBust(t, config1, uid2)
+	AddDeviceForLocalUserOrBust(t, config2, uid2)
+	devIndex := AddDeviceForLocalUserOrBust(t, config2Dev2, uid2)
+	SwitchDeviceForLocalUserOrBust(t, config2Dev2, devIndex)
+
+	// The new device should be unable to rekey on its own, and will
+	// just set the rekey bit.
+	kbfsOps2Dev2 := config2Dev2.KBFSOps()
+	err = kbfsOps2Dev2.Rekey(ctx, rootNode1.GetFolderBranch().Tlf)
+	if err != nil {
+		t.Fatalf("First rekey failed %v", err)
+	}
+
+	// Make sure just the rekey bit is set
+	ops := getOps(config2Dev2, rootNode1.GetFolderBranch().Tlf)
+	if !ops.head.IsRekeySet() {
+		t.Fatalf("Couldn't set rekey bit")
+	}
+
+	c := make(chan bool)
+	clta := &cryptoLocalTrapAny{config2Dev2.Crypto(), c}
+	config2Dev2.SetCrypto(clta)
+
+	ops.rekeyWithPromptTimer.Reset(1 * time.Millisecond)
+	promptPaper := <-c
+	if !promptPaper {
+		t.Fatalf("Didn't prompt paper")
+	}
+
+	// Take the mdWriterLock to ensure that the rekeyWithPrompt finishes.
+	lState := makeFBOLockState()
+	ops.mdWriterLock.Lock(lState)
+	t.Logf("Got lock!")
+	ops.mdWriterLock.Unlock(lState)
+
+	// State checking won't work since we fakes out the key in clta,
+	// so shutdown the shared MDServer to avoid it.
+	config1.MDServer().Shutdown()
 }

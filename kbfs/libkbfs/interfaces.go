@@ -299,6 +299,13 @@ type KeybaseDaemon interface {
 	// Notify sends a filesystem notification.
 	Notify(ctx context.Context, notification *keybase1.FSNotification) error
 
+	// FlushUserFromLocalCache instructs this layer to clear any
+	// KBFS-side, locally-cached information about the given user.
+	// This does NOT involve communication with the daemon, this is
+	// just to force future calls loading this user to fall through to
+	// the daemon itself, rather than being served from the cache.
+	FlushUserFromLocalCache(ctx context.Context, uid keybase1.UID)
+
 	// TODO: Add CryptoClient methods, too.
 
 	// Shutdown frees any resources associated with this
@@ -407,7 +414,14 @@ type KeyManager interface {
 	// allow for caching of the TLF crypt key only after a successful
 	// merged write of the metadata. Otherwise we could prematurely
 	// pollute the key cache.
+	//
+	// Does not prompt the user for any unlocked paper keys.
 	Rekey(ctx context.Context, md *RootMetadata) (bool, *TLFCryptKey, error)
+
+	// Just like Rekey(), but also prompts for any unlocked paper
+	// keys.
+	RekeyWithPrompt(ctx context.Context, md *RootMetadata) (
+		bool, *TLFCryptKey, error)
 }
 
 // ReportingLevel indicate the severity of a reported event.
@@ -600,10 +614,11 @@ type Crypto interface {
 		TLFCryptKeyClientHalf, error)
 
 	// DecryptTLFCryptKeyClientHalfAny decrypts one of the
-	// TLFCryptKeyClientHalf using the available private keys and the ephemeral
-	// public key.
+	// TLFCryptKeyClientHalf using the available private keys and the
+	// ephemeral public key.  If promptPaper is true, the service will
+	// prompt the user for any unlocked paper keys.
 	DecryptTLFCryptKeyClientHalfAny(ctx context.Context,
-		keys []EncryptedTLFCryptKeyClientAndEphemeral) (
+		keys []EncryptedTLFCryptKeyClientAndEphemeral, promptPaper bool) (
 		TLFCryptKeyClientHalf, int, error)
 
 	// GetTLFCryptKeyServerHalfID creates a unique ID for this particular
@@ -1033,6 +1048,18 @@ type Config interface {
 	// flush dirty files, even without a sync from the user.  Should
 	// be true except for during some testing.
 	DoBackgroundFlushes() bool
+	// RekeyWithPromptWaitTime indicates how long to wait, after
+	// setting the rekey bit, before prompting for a paper key.
+	RekeyWithPromptWaitTime() time.Duration
+
+	// QuotaReclamationPeriod indicates how often should each TLF
+	// should check for quota to reclaim.  If the Duration.Seconds()
+	// == 0, quota reclamation should not run automatically.
+	QuotaReclamationPeriod() time.Duration
+	// QuotaReclamationMinUnrefAge indicates the minimum time a block
+	// must have been unreferenced before it can be reclaimed.
+	QuotaReclamationMinUnrefAge() time.Duration
+
 	MakeLogger(module string) logger.Logger
 	SetLoggerMaker(func(module string) logger.Logger)
 	// MetricsRegistry may be nil, which should be interpreted as
