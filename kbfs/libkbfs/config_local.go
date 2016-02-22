@@ -1,6 +1,7 @@
 package libkbfs
 
 import (
+	"sync"
 	"time"
 
 	"github.com/keybase/client/go/libkb"
@@ -32,18 +33,23 @@ const (
 // ConfigLocal implements the Config interface using purely local
 // server objects (no KBFS operations used RPCs).
 type ConfigLocal struct {
-	kbfs         KBFSOps
-	kbpki        KBPKI
-	keyman       KeyManager
-	rep          Reporter
-	mdcache      MDCache
-	kcache       KeyCache
-	bcache       BlockCache
-	crypto       Crypto
-	codec        Codec
-	mdops        MDOps
-	kops         KeyOps
-	bops         BlockOps
+	kbfs    KBFSOps
+	kbpki   KBPKI
+	keyman  KeyManager
+	rep     Reporter
+	mdcache MDCache
+	kcache  KeyCache
+	bcache  BlockCache
+	crypto  Crypto
+	codec   Codec
+	mdops   MDOps
+	kops    KeyOps
+
+	// TODO: We probably want to do the same thing for everything
+	// else.
+	bopsLock sync.RWMutex
+	bops     BlockOps
+
 	mdserv       MDServer
 	bserv        BlockServer
 	keyserv      KeyServer
@@ -192,7 +198,11 @@ func NewConfigLocal() *ConfigLocal {
 	config.maxDirBytes = maxDirBytesDefault
 	config.rwpWaitTime = rekeyWithPromptWaitTimeDefault
 
-	config.qrPeriod = qrPeriodDefault
+	// Until quota reclamation is ready, keep it turned off.  TODO:
+	// undo this.
+	config.qrPeriod = 0
+	// config.qrPeriod = qrPeriodDefault
+
 	config.qrUnrefAge = qrUnrefAgeDefault
 
 	// Don't bother creating the registry if UseNilMetrics is set.
@@ -316,11 +326,15 @@ func (c *ConfigLocal) SetKeyOps(k KeyOps) {
 
 // BlockOps implements the Config interface for ConfigLocal.
 func (c *ConfigLocal) BlockOps() BlockOps {
+	c.bopsLock.RLock()
+	defer c.bopsLock.RUnlock()
 	return c.bops
 }
 
 // SetBlockOps implements the Config interface for ConfigLocal.
 func (c *ConfigLocal) SetBlockOps(b BlockOps) {
+	c.bopsLock.Lock()
+	defer c.bopsLock.Unlock()
 	c.bops = b
 }
 

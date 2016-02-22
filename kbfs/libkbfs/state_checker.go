@@ -150,7 +150,7 @@ func (sc *StateChecker) CheckMergedState(ctx context.Context, tlf TlfID) error {
 			}
 			for _, update := range op.AllUpdates() {
 				delete(expectedLiveBlocks, update.Unref)
-				if update.Unref != zeroPtr {
+				if update.Unref != zeroPtr && update.Ref != update.Unref {
 					archivedBlocks[update.Unref] = true
 				}
 				if update.Ref != zeroPtr {
@@ -239,7 +239,7 @@ func (sc *StateChecker) CheckMergedState(ctx context.Context, tlf TlfID) error {
 		if _, ok := blockRefsByID[ptr.ID]; !ok {
 			blockRefsByID[ptr.ID] = make(map[BlockRefNonce]blockRefLocalStatus)
 		}
-		blockRefsByID[ptr.ID][ptr.RefNonce] = blockRef
+		blockRefsByID[ptr.ID][ptr.RefNonce] = liveBlockRef
 	}
 	for ptr := range archivedBlocks {
 		if _, ok := blockRefsByID[ptr.ID]; !ok {

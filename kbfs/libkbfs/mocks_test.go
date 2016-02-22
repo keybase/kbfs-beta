@@ -1028,6 +1028,16 @@ func (_mr *_MockBlockCacheRecorder) PutDirty(arg0, arg1, arg2 interface{}) *gomo
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "PutDirty", arg0, arg1, arg2)
 }
 
+func (_m *MockBlockCache) DeleteTransient(ptr BlockPointer, tlf TlfID) error {
+	ret := _m.ctrl.Call(_m, "DeleteTransient", ptr, tlf)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+func (_mr *_MockBlockCacheRecorder) DeleteTransient(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "DeleteTransient", arg0, arg1)
+}
+
 func (_m *MockBlockCache) DeletePermanent(id BlockID) error {
 	ret := _m.ctrl.Call(_m, "DeletePermanent", id)
 	ret0, _ := ret[0].(error)
@@ -1130,6 +1140,17 @@ func (_m *MockCrypto) MakeMdID(md *RootMetadata) (MdID, error) {
 
 func (_mr *_MockCryptoRecorder) MakeMdID(arg0 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "MakeMdID", arg0)
+}
+
+func (_m *MockCrypto) MakeMerkleHash(md *RootMetadataSigned) (MerkleHash, error) {
+	ret := _m.ctrl.Call(_m, "MakeMerkleHash", md)
+	ret0, _ := ret[0].(MerkleHash)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+func (_mr *_MockCryptoRecorder) MakeMerkleHash(arg0 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "MakeMerkleHash", arg0)
 }
 
 func (_m *MockCrypto) MakeTemporaryBlockID() (BlockID, error) {
@@ -1374,6 +1395,28 @@ func (_m *MockCrypto) DecryptBlock(encryptedBlock EncryptedBlock, key BlockCrypt
 
 func (_mr *_MockCryptoRecorder) DecryptBlock(arg0, arg1, arg2 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "DecryptBlock", arg0, arg1, arg2)
+}
+
+func (_m *MockCrypto) EncryptMerkleLeaf(leaf MerkleLeaf, pubKey TLFPublicKey, nonce *[24]byte, ePrivKey TLFEphemeralPrivateKey) (EncryptedMerkleLeaf, error) {
+	ret := _m.ctrl.Call(_m, "EncryptMerkleLeaf", leaf, pubKey, nonce, ePrivKey)
+	ret0, _ := ret[0].(EncryptedMerkleLeaf)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+func (_mr *_MockCryptoRecorder) EncryptMerkleLeaf(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "EncryptMerkleLeaf", arg0, arg1, arg2, arg3)
+}
+
+func (_m *MockCrypto) DecryptMerkleLeaf(encryptedLeaf EncryptedMerkleLeaf, privKey TLFPrivateKey, nonce *[24]byte, ePubKey TLFEphemeralPublicKey) (*MerkleLeaf, error) {
+	ret := _m.ctrl.Call(_m, "DecryptMerkleLeaf", encryptedLeaf, privKey, nonce, ePubKey)
+	ret0, _ := ret[0].(*MerkleLeaf)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+func (_mr *_MockCryptoRecorder) DecryptMerkleLeaf(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "DecryptMerkleLeaf", arg0, arg1, arg2, arg3)
 }
 
 func (_m *MockCrypto) Shutdown() {
@@ -1759,6 +1802,28 @@ func (_m *MockMDServer) RegisterForUpdate(ctx context.Context, id TlfID, currHea
 
 func (_mr *_MockMDServerRecorder) RegisterForUpdate(arg0, arg1, arg2 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "RegisterForUpdate", arg0, arg1, arg2)
+}
+
+func (_m *MockMDServer) TruncateLock(ctx context.Context, id TlfID) (bool, error) {
+	ret := _m.ctrl.Call(_m, "TruncateLock", ctx, id)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+func (_mr *_MockMDServerRecorder) TruncateLock(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "TruncateLock", arg0, arg1)
+}
+
+func (_m *MockMDServer) TruncateUnlock(ctx context.Context, id TlfID) (bool, error) {
+	ret := _m.ctrl.Call(_m, "TruncateUnlock", ctx, id)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+func (_mr *_MockMDServerRecorder) TruncateUnlock(arg0, arg1 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "TruncateUnlock", arg0, arg1)
 }
 
 func (_m *MockMDServer) DisableRekeyUpdatesForTesting() {
@@ -2707,8 +2772,8 @@ func (_mr *_MockNodeCacheRecorder) GetOrCreate(arg0, arg1, arg2 interface{}) *go
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetOrCreate", arg0, arg1, arg2)
 }
 
-func (_m *MockNodeCache) Get(ptr BlockPointer) Node {
-	ret := _m.ctrl.Call(_m, "Get", ptr)
+func (_m *MockNodeCache) Get(ref blockRef) Node {
+	ret := _m.ctrl.Call(_m, "Get", ref)
 	ret0, _ := ret[0].(Node)
 	return ret0
 }
@@ -2717,16 +2782,16 @@ func (_mr *_MockNodeCacheRecorder) Get(arg0 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "Get", arg0)
 }
 
-func (_m *MockNodeCache) UpdatePointer(oldPtr BlockPointer, newPtr BlockPointer) {
-	_m.ctrl.Call(_m, "UpdatePointer", oldPtr, newPtr)
+func (_m *MockNodeCache) UpdatePointer(oldRef blockRef, newPtr BlockPointer) {
+	_m.ctrl.Call(_m, "UpdatePointer", oldRef, newPtr)
 }
 
 func (_mr *_MockNodeCacheRecorder) UpdatePointer(arg0, arg1 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "UpdatePointer", arg0, arg1)
 }
 
-func (_m *MockNodeCache) Move(ptr BlockPointer, newParent Node, newName string) error {
-	ret := _m.ctrl.Call(_m, "Move", ptr, newParent, newName)
+func (_m *MockNodeCache) Move(ref blockRef, newParent Node, newName string) error {
+	ret := _m.ctrl.Call(_m, "Move", ref, newParent, newName)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
@@ -2735,8 +2800,8 @@ func (_mr *_MockNodeCacheRecorder) Move(arg0, arg1, arg2 interface{}) *gomock.Ca
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "Move", arg0, arg1, arg2)
 }
 
-func (_m *MockNodeCache) Unlink(ptr BlockPointer, oldPath path) {
-	_m.ctrl.Call(_m, "Unlink", ptr, oldPath)
+func (_m *MockNodeCache) Unlink(ref blockRef, oldPath path) {
+	_m.ctrl.Call(_m, "Unlink", ref, oldPath)
 }
 
 func (_mr *_MockNodeCacheRecorder) Unlink(arg0, arg1 interface{}) *gomock.Call {

@@ -519,6 +519,10 @@ type BlockCache interface {
 	// given block pointer and branch name. (The lifetime is
 	// implicitly permanent.)
 	PutDirty(ptr BlockPointer, branch BranchName, block Block) error
+	// DeleteTransient removes the transient entry for the given
+	// pointer from the cache, as well as any cached IDs so the block
+	// won't be reused.
+	DeleteTransient(ptr BlockPointer, tlf TlfID) error
 	// Delete removes the permanent entry for the non-dirty block
 	// associated with the given block ID from the cache.  No
 	// error is returned if no block exists for the given ID.
@@ -550,6 +554,10 @@ type Crypto interface {
 
 	// MakeMdID computes the MD ID of a RootMetadata object.
 	MakeMdID(md *RootMetadata) (MdID, error)
+
+	// MakeMerkleHash computes the hash of a RootMetadataSigned object
+	// for inclusion into the KBFS Merkle tree.
+	MakeMerkleHash(md *RootMetadataSigned) (MerkleHash, error)
 
 	// MakeTemporaryBlockID generates a temporary block ID using a
 	// CSPRNG. This is used for indirect blocks before they're
@@ -646,6 +654,14 @@ type Crypto interface {
 	// DecryptBlock() must guarantee that (size of the decrypted
 	// block) <= len(encryptedBlock).
 	DecryptBlock(encryptedBlock EncryptedBlock, key BlockCryptKey, block Block) error
+
+	// EncryptMerkleLeaf encrypts a Merkle leaf node with the TLFPublicKey.
+	EncryptMerkleLeaf(leaf MerkleLeaf, pubKey TLFPublicKey, nonce *[24]byte,
+		ePrivKey TLFEphemeralPrivateKey) (EncryptedMerkleLeaf, error)
+
+	// DecryptMerkleLeaf decrypts a Merkle leaf node with the TLFPrivateKey.
+	DecryptMerkleLeaf(encryptedLeaf EncryptedMerkleLeaf, privKey TLFPrivateKey,
+		nonce *[24]byte, ePubKey TLFEphemeralPublicKey) (*MerkleLeaf, error)
 
 	// Shutdown frees any resources associated with this instance.
 	Shutdown()
@@ -831,6 +847,15 @@ type MDServer interface {
 	// notifications.
 	RegisterForUpdate(ctx context.Context, id TlfID,
 		currHead MetadataRevision) (<-chan error, error)
+
+	// TruncateLock attempts to take the history truncation lock for
+	// this folder, for a TTL defined by the server.  Returns true if
+	// the lock was successfully taken.
+	TruncateLock(ctx context.Context, id TlfID) (bool, error)
+	// TruncateUnlock attempts to release the history truncation lock
+	// for this folder.  Returns true if the lock was successfully
+	// released.
+	TruncateUnlock(ctx context.Context, id TlfID) (bool, error)
 
 	// DisableRekeyUpdatesForTesting disables processing rekey updates
 	// received from the mdserver while testing.
@@ -1088,23 +1113,23 @@ type NodeCache interface {
 	GetOrCreate(ptr BlockPointer, name string, parent Node) (Node, error)
 	// Get returns the Node associated with the given ptr if one
 	// already exists.  Otherwise, it returns nil.
-	Get(ptr BlockPointer) Node
-	// UpdatePointer swaps the BlockPointer for the corresponding
-	// Node.  NodeCache ignores this call when oldPtr is not cached in
+	Get(ref blockRef) Node
+	// UpdatePointer updates the BlockPointer for the corresponding
+	// Node.  NodeCache ignores this call when oldRef is not cached in
 	// any Node.
-	UpdatePointer(oldPtr BlockPointer, newPtr BlockPointer)
+	UpdatePointer(oldRef blockRef, newPtr BlockPointer)
 	// Move swaps the parent node for the corresponding Node, and
 	// updates the node's name.  NodeCache ignores the call when ptr
 	// is not cached.  Returns an error if newParent cannot be found.
 	// If newParent is nil, it treats the ptr's corresponding node as
 	// being unlinked from the old parent completely.
-	Move(ptr BlockPointer, newParent Node, newName string) error
+	Move(ref blockRef, newParent Node, newName string) error
 	// Unlink set the corresponding node's parent to nil and caches
 	// the provided path in case the node is still open. NodeCache
 	// ignores the call when ptr is not cached.  The path is required
 	// because the caller may have made changes to the parent nodes
 	// already that shouldn't be reflected in the cached path.
-	Unlink(ptr BlockPointer, oldPath path)
+	Unlink(ref blockRef, oldPath path)
 	// PathFromNode creates the path up to a given Node.
 	PathFromNode(node Node) path
 }

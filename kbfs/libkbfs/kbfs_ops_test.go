@@ -467,7 +467,7 @@ func TestKBFSOpsGetRootMDForHandleExisting(t *testing.T) {
 	n, ei, err :=
 		config.KBFSOps().GetOrCreateRootNode(ctx, name, false, MasterBranch)
 	require.Nil(t, err)
-	assert.False(t, ops.identifyDone)
+	assert.True(t, ops.identifyDone)
 
 	p := ops.nodeCache.PathFromNode(n)
 	if p.Tlf != id {
@@ -2646,7 +2646,7 @@ func checkSyncOp(t *testing.T, so *syncOp, filePtr BlockPointer,
 func checkSyncOpInCache(t *testing.T, ops *folderBranchOps,
 	filePtr BlockPointer, writes []WriteRange) {
 	// check the in-progress syncOp
-	si, ok := ops.unrefCache[stripBP(filePtr)]
+	si, ok := ops.unrefCache[filePtr.ref()]
 	if !ok {
 		t.Error("No sync info for written file!")
 	}
@@ -2695,8 +2695,7 @@ func TestKBFSOpsWriteNewBlockSuccess(t *testing.T) {
 		p.Branch)
 	newRootBlock := getDirBlockFromCache(t, config, node.BlockPointer, p.Branch)
 	lState := makeFBOLockState()
-	newRootBlock = ops.updateDirBlock(
-		ctx, lState, path{FolderBranch{Tlf: id}, []pathNode{node}}, newRootBlock)
+	newRootBlock = ops.getUpdatedDirBlock(ctx, lState, newRootBlock)
 
 	if len(ops.nodeCache.PathFromNode(config.observer.localChange).path) !=
 		len(p.path) {
@@ -2903,8 +2902,7 @@ func TestKBFSOpsWriteCauseSplit(t *testing.T) {
 	b, _ := config.BlockCache().Get(node.BlockPointer, p.Branch)
 	newRootBlock := b.(*DirBlock)
 	lState := makeFBOLockState()
-	newRootBlock = ops.updateDirBlock(
-		ctx, lState, path{FolderBranch{Tlf: id}, []pathNode{node}}, newRootBlock)
+	newRootBlock = ops.getUpdatedDirBlock(ctx, lState, newRootBlock)
 
 	b, _ = config.BlockCache().Get(fileNode.BlockPointer, p.Branch)
 	pblock := b.(*FileBlock)
@@ -3125,8 +3123,7 @@ func TestKBFSOpsTruncateToZeroSuccess(t *testing.T) {
 		p.Branch)
 	newRootBlock := getDirBlockFromCache(t, config, node.BlockPointer, p.Branch)
 	lState := makeFBOLockState()
-	newRootBlock = ops.updateDirBlock(
-		ctx, lState, path{FolderBranch{Tlf: id}, []pathNode{node}}, newRootBlock)
+	newRootBlock = ops.getUpdatedDirBlock(ctx, lState, newRootBlock)
 
 	if len(ops.nodeCache.PathFromNode(config.observer.localChange).path) !=
 		len(p.path) {

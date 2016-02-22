@@ -1033,7 +1033,7 @@ func TestKBFSOpsConcurWriteParallelBlocksCanceled(t *testing.T) {
 
 	// give it a remote block server with a fake client
 	fc := NewFakeBServerClient(nil, nil, nil)
-	b := newBlockServerRemoteWithClient(ctx, config, cancelableClient{fc})
+	b := newBlockServerRemoteWithClient(ctx, config, fc)
 	config.SetBlockServer(b)
 
 	// make blocks small
@@ -1117,10 +1117,6 @@ func TestKBFSOpsConcurWriteParallelBlocksCanceled(t *testing.T) {
 	}
 
 	// Now clean up by letting the rest of the blocks through.
-	for i := 0; i < maxParallelBlockPuts; i++ {
-		goChan <- struct{}{}
-	}
-
 	for i := 0; i < maxParallelBlockPuts; i++ {
 		<-finishChan
 	}
@@ -1406,6 +1402,10 @@ func TestKBFSOpsConcurCanceledSyncSucceeds(t *testing.T) {
 		t.Errorf("Couldn't write file: %v", err)
 	}
 
+	ops := getOps(config, rootNode.GetFolderBranch().Tlf)
+	unpauseArchives := make(chan struct{})
+	ops.fbm.archivePauseChan <- unpauseArchives
+
 	// start the sync
 	errChan := make(chan error)
 	cancelCtx, cancel := context.WithCancel(putCtx)
@@ -1424,7 +1424,6 @@ func TestKBFSOpsConcurCanceledSyncSucceeds(t *testing.T) {
 		t.Fatalf("No expected canceled error: %v", err)
 	}
 
-	ops := getOps(config, rootNode.GetFolderBranch().Tlf)
 	// Know that the sync finished by grabbing the lock.
 	lState := makeFBOLockState()
 	ops.mdWriterLock.Lock(lState)
@@ -1438,6 +1437,8 @@ func TestKBFSOpsConcurCanceledSyncSucceeds(t *testing.T) {
 	if err := kbfsOps.Sync(ctx, fileNode); err != nil {
 		t.Fatalf("Couldn't sync: %v", err)
 	}
+
+	unpauseArchives <- struct{}{}
 
 	// The first put actually succeeded, so SyncFromServer and make
 	// sure it worked.  This should also finish removing any blocks
@@ -1655,7 +1656,7 @@ func TestKBFSOpsErrorOnBlockedWriteDuringSync(t *testing.T) {
 	}()
 
 	// Unblock the sync
-	syncUnstallCh <- struct{}{}
+	close(syncUnstallCh)
 
 	// Both errors should be an OverQuota error
 	syncErr := <-syncErrCh
