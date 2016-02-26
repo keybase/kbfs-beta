@@ -142,43 +142,94 @@ func (e ErrorFileAccessError) Error() string {
 // ReadAccessError indicates that the user tried to read from a
 // top-level folder without read permission.
 type ReadAccessError struct {
-	User libkb.NormalizedUsername
-	Dir  string
+	User   libkb.NormalizedUsername
+	Tlf    CanonicalTlfName
+	Public bool
 }
 
 // Error implements the error interface for ReadAccessError
 func (e ReadAccessError) Error() string {
 	return fmt.Sprintf("%s does not have read access to directory %s",
-		e.User, e.Dir)
+		e.User, buildCanonicalPath(e.Public, e.Tlf))
 }
 
 // WriteAccessError indicates that the user tried to read from a
 // top-level folder without read permission.
 type WriteAccessError struct {
-	User libkb.NormalizedUsername
-	Dir  string
+	User   libkb.NormalizedUsername
+	Tlf    CanonicalTlfName
+	Public bool
 }
 
 // Error implements the error interface for WriteAccessError
 func (e WriteAccessError) Error() string {
 	return fmt.Sprintf("%s does not have write access to directory %s",
-		e.User, e.Dir)
+		e.User, buildCanonicalPath(e.Public, e.Tlf))
 }
 
 // NewReadAccessError constructs a ReadAccessError for the given
 // directory and user.
-func NewReadAccessError(ctx context.Context, config Config, dir *TlfHandle,
+func NewReadAccessError(ctx context.Context, config Config, h *TlfHandle,
 	username libkb.NormalizedUsername) error {
-	dirname := dir.ToString(ctx, config)
-	return ReadAccessError{username, dirname}
+	tlfname := h.GetCanonicalName(ctx, config)
+	return ReadAccessError{username, tlfname, h.IsPublic()}
 }
 
 // NewWriteAccessError constructs a WriteAccessError for the given
 // directory and user.
-func NewWriteAccessError(ctx context.Context, config Config, dir *TlfHandle,
+func NewWriteAccessError(ctx context.Context, config Config, h *TlfHandle,
 	username libkb.NormalizedUsername) error {
-	dirname := dir.ToString(ctx, config)
-	return WriteAccessError{username, dirname}
+	tlfname := h.GetCanonicalName(ctx, config)
+	return WriteAccessError{username, tlfname, h.IsPublic()}
+}
+
+// NeedSelfRekeyError indicates that the folder in question needs to
+// be rekeyed for the local device, and can be done so by one of the
+// other user's devices.
+type NeedSelfRekeyError struct {
+	Tlf    CanonicalTlfName
+	Public bool
+}
+
+// Error implements the error interface for NeedSelfRekeyError
+func (e NeedSelfRekeyError) Error() string {
+	return fmt.Sprintf("This device does not yet have read access to "+
+		"directory %s, log into Keybase from one of your other "+
+		"devices to grant access", buildCanonicalPath(e.Public, e.Tlf))
+}
+
+// NeedOtherRekeyError indicates that the folder in question needs to
+// be rekeyed for the local device, and can only done so by one of the
+// other users.
+type NeedOtherRekeyError struct {
+	Tlf    CanonicalTlfName
+	Public bool
+}
+
+// Error implements the error interface for NeedOtherRekeyError
+func (e NeedOtherRekeyError) Error() string {
+	return fmt.Sprintf("This device does not yet have read access to "+
+		"directory %s, ask one of the other directory participants to "+
+		"log into Keybase to grant you access automatically",
+		buildCanonicalPath(e.Public, e.Tlf))
+}
+
+func makeRekeyReadError(ctx context.Context, config Config, md *RootMetadata,
+	keyGen KeyGen, uid keybase1.UID,
+	username libkb.NormalizedUsername) error {
+	// If the user is not a legitimate reader of the folder, this is a
+	// normal read access error.
+	handle := md.GetTlfHandle()
+	if !handle.IsReader(uid) {
+		return NewReadAccessError(ctx, config, handle, username)
+	}
+
+	// Otherwise, this folder needs to be rekeyed for this device.
+	tlfName := handle.GetCanonicalName(ctx, config)
+	if keys, _ := md.GetTLFCryptPublicKeys(keyGen, uid); len(keys) > 0 {
+		return NeedSelfRekeyError{tlfName, handle.IsPublic()}
+	}
+	return NeedOtherRekeyError{tlfName, handle.IsPublic()}
 }
 
 // NotFileBlockError indicates that a file block was expected but a
@@ -470,6 +521,22 @@ type KeyNotFoundError struct {
 // Error implements the error interface for KeyNotFoundError.
 func (e KeyNotFoundError) Error() string {
 	return fmt.Sprintf("Could not find key with kid=%s", e.kid)
+}
+
+// UnverifiableTlfUpdateError indicates that a MD update could not be
+// verified.
+type UnverifiableTlfUpdateError struct {
+	Tlf  string
+	User libkb.NormalizedUsername
+	Err  error
+}
+
+// Error implements the error interface for UnverifiableTlfUpdateError.
+func (e UnverifiableTlfUpdateError) Error() string {
+	return fmt.Sprintf("%s was last written by an unknown device claiming "+
+		"to belong to user %s.  The device has possibly been revoked by the "+
+		"user.  Use `keybase log send` to file an issue with the Keybase "+
+		"admins.", e.Tlf, e.User)
 }
 
 // KeyCacheMissError indicates that a key matching the given TlfID
@@ -816,8 +883,12 @@ type NoCurrentSessionError struct {
 
 // Error implements the error interface for NoCurrentSessionError.
 func (e NoCurrentSessionError) Error() string {
-	return "no current session"
+	return "You are not logged into Keybase.  Try `keybase login`."
 }
+
+// NoCurrentSessionExpectedError is the error text that will get
+// converted into a NoCurrentSessionError.
+var NoCurrentSessionExpectedError = "no current session"
 
 // RekeyPermissionError indicates that the user tried to rekey a
 // top-level folder in a manner inconsistent with their permissions.
@@ -865,4 +936,13 @@ type InvalidByte32DataError struct {
 
 func (e InvalidByte32DataError) Error() string {
 	return fmt.Sprintf("Invalid byte32 data %v", e.data)
+}
+
+// TimeoutError is just a replacement for context.DeadlineExceeded
+// with a more friendly error string.
+type TimeoutError struct {
+}
+
+func (e TimeoutError) Error() string {
+	return "Operation timed out"
 }

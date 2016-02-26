@@ -66,10 +66,9 @@ func Start(mounter Mounter, options StartOptions) *libfs.Error {
 
 	log.Debug("Creating filesystem")
 	fs := NewFS(config, c, options.KbfsParams.Debug)
-	ctx := context.WithValue(context.Background(), CtxAppIDKey, fs)
-	logTags := make(logger.CtxLogTags)
-	logTags[CtxIDKey] = CtxOpID
-	ctx = logger.NewContextWithLogTags(ctx, logTags)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = fs.WithContext(ctx)
 	log.Debug("Serving filesystem")
 	fs.Serve(ctx)
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/keybase/client/go/logger"
 	"golang.org/x/net/context"
@@ -86,6 +87,31 @@ func (sc *StateChecker) findAllBlocksInPath(ctx context.Context,
 	return nil
 }
 
+func (sc *StateChecker) getLastGCRevisionTime(ctx context.Context,
+	tlf TlfID) time.Time {
+	config, ok := sc.config.(*ConfigLocal)
+	if !ok {
+		return time.Time{}
+	}
+
+	var latestTime time.Time
+	for _, c := range *config.allKnownConfigsForTesting {
+		ops := c.KBFSOps().(*KBFSOpsStandard).getOps(
+			FolderBranch{tlf, MasterBranch})
+		rt := ops.fbm.getLastReclamationTime()
+		if rt.After(latestTime) {
+			latestTime = rt
+		}
+	}
+	if latestTime == (time.Time{}) {
+		return latestTime
+	}
+
+	sc.log.CDebugf(ctx, "Last reclamation time for TLF %s: %s",
+		tlf, latestTime)
+	return latestTime.Add(-sc.config.QuotaReclamationMinUnrefAge())
+}
+
 // CheckMergedState verifies that the state for the given tlf is
 // consistent.
 func (sc *StateChecker) CheckMergedState(ctx context.Context, tlf TlfID) error {
@@ -119,11 +145,33 @@ func (sc *StateChecker) CheckMergedState(ctx context.Context, tlf TlfID) error {
 		return err
 	}
 
+	lastGCRevisionTime := sc.getLastGCRevisionTime(ctx, tlf)
+
 	// Build the expected block list.
 	expectedLiveBlocks := make(map[BlockPointer]bool)
 	expectedRef := uint64(0)
 	archivedBlocks := make(map[BlockPointer]bool)
 	actualLiveBlocks := make(map[BlockPointer]uint32)
+
+	// See what the last GC op revision is.  All unref'd pointers from
+	// that revision or earlier should be deleted from the block
+	// server.
+	gcRevision := MetadataRevisionUninitialized
+	for _, rmd := range rmds {
+		// Don't process copies.
+		if rmd.IsWriterMetadataCopiedSet() {
+			continue
+		}
+
+		for _, op := range rmd.data.Changes.Ops {
+			gcOp, ok := op.(*gcOp)
+			if !ok {
+				continue
+			}
+			gcRevision = gcOp.LatestRev
+		}
+	}
+
 	for _, rmd := range rmds {
 		// Don't process copies.
 		if rmd.IsWriterMetadataCopiedSet() {
@@ -136,22 +184,36 @@ func (sc *StateChecker) CheckMergedState(ctx context.Context, tlf TlfID) error {
 			actualLiveBlocks[info.BlockPointer] = info.EncodedSize
 		}
 
+		var hasGCOp bool
 		for _, op := range rmd.data.Changes.Ops {
+			_, isGCOp := op.(*gcOp)
+			hasGCOp = hasGCOp || isGCOp
+
 			for _, ptr := range op.Refs() {
 				if ptr != zeroPtr {
 					expectedLiveBlocks[ptr] = true
 				}
 			}
-			for _, ptr := range op.Unrefs() {
-				delete(expectedLiveBlocks, ptr)
-				if ptr != zeroPtr {
-					archivedBlocks[ptr] = true
+			if _, ok := op.(*gcOp); !ok {
+				for _, ptr := range op.Unrefs() {
+					delete(expectedLiveBlocks, ptr)
+					if ptr != zeroPtr {
+						if rmd.Revision <= gcRevision {
+							delete(archivedBlocks, ptr)
+						} else {
+							archivedBlocks[ptr] = true
+						}
+					}
 				}
 			}
 			for _, update := range op.AllUpdates() {
 				delete(expectedLiveBlocks, update.Unref)
 				if update.Unref != zeroPtr && update.Ref != update.Unref {
-					archivedBlocks[update.Unref] = true
+					if rmd.Revision <= gcRevision {
+						delete(archivedBlocks, update.Unref)
+					} else {
+						archivedBlocks[update.Unref] = true
+					}
 				}
 				if update.Ref != zeroPtr {
 					expectedLiveBlocks[update.Ref] = true
@@ -160,6 +222,24 @@ func (sc *StateChecker) CheckMergedState(ctx context.Context, tlf TlfID) error {
 		}
 		expectedRef += rmd.RefBytes
 		expectedRef -= rmd.UnrefBytes
+
+		if len(rmd.data.Changes.Ops) == 1 && hasGCOp {
+			// Don't check GC status for GC revisions
+			continue
+		}
+
+		// Make sure that if this revision should be covered by a GC
+		// op, it is.  Note that this assumes that if QR is ever run,
+		// it will be run completely and not left partially done due
+		// to there being too many pointers to collect in one sweep.
+		mtime := time.Unix(0, rmd.data.Dir.Mtime)
+		if !lastGCRevisionTime.Before(mtime) {
+			if rmd.Revision > gcRevision {
+				return fmt.Errorf("Revision %d happened before the last "+
+					"gc time %s, but was not included in the latest gc op "+
+					"revision %d", rmd.Revision, lastGCRevisionTime, gcRevision)
+			}
+		}
 	}
 	sc.log.CDebugf(ctx, "Folder %v has %d expected live blocks, total %d bytes",
 		tlf, len(expectedLiveBlocks), expectedRef)

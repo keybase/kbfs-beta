@@ -428,8 +428,12 @@ func (k *KeybaseDaemonRPC) CurrentSession(ctx context.Context, sessionID int) (
 
 	res, err := k.sessionClient.CurrentSession(ctx, sessionID)
 	if err != nil {
-		if ncs := (NoCurrentSessionError{}); err.Error() == ncs.Error() {
-			// Use an error with a proper OS error code attached to it.
+		if ncs := (NoCurrentSessionError{}); err.Error() ==
+			NoCurrentSessionExpectedError {
+			// Use an error with a proper OS error code attached to
+			// it.  TODO: move ErrNoSession from client/go/service to
+			// client/go/libkb, so we can use types for the check
+			// above.
 			err = ncs
 		}
 		return SessionInfo{}, err

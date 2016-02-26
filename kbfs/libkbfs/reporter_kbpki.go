@@ -32,6 +32,36 @@ func NewReporterKBPKI(config Config, maxErrors, bufSize int) *ReporterKBPKI {
 	return r
 }
 
+// ReportErr implements the Reporter interface for ReporterKBPKI.
+func (r *ReporterKBPKI) ReportErr(ctx context.Context, err error) {
+	r.ReporterSimple.ReportErr(ctx, err)
+
+	// Fire off error popups
+	var n *keybase1.FSNotification
+	switch e := err.(type) {
+	case ReadAccessError:
+		n = readTlfErrorNotification(e.Tlf, e.Public, err)
+	case WriteAccessError:
+		n = writeTlfErrorNotification(e.Tlf, e.Public, err)
+	case UnverifiableTlfUpdateError:
+		n = genericErrorNotification(err)
+	case NoCurrentSessionError:
+		n = genericErrorNotification(err)
+	case NeedSelfRekeyError:
+		n = readTlfErrorNotification(e.Tlf, e.Public, err)
+	case NeedOtherRekeyError:
+		n = readTlfErrorNotification(e.Tlf, e.Public, err)
+	}
+
+	if n == nil && err == context.DeadlineExceeded {
+		n = genericErrorNotification(TimeoutError{})
+	}
+
+	if n != nil {
+		r.Notify(ctx, n)
+	}
+}
+
 // Notify implements the Reporter interface for ReporterKBPKI.
 //
 // TODO: might be useful to get the debug tags out of ctx and store
@@ -116,4 +146,58 @@ func baseNotification(file path, finish bool) *keybase1.FSNotification {
 		Filename:             file.String(),
 		StatusCode:           code,
 	}
+}
+
+// writeTlfErrorNotification creates FSNotifications for general KBFS
+// write error events to a TLF.
+func writeTlfErrorNotification(tlf CanonicalTlfName, public bool,
+	err error) *keybase1.FSNotification {
+	n := &keybase1.FSNotification{
+		PublicTopLevelFolder: public,
+		Filename:             buildCanonicalPath(public, tlf),
+		StatusCode:           keybase1.FSStatusCode_ERROR,
+		Status:               err.Error(),
+	}
+	if public {
+		n.NotificationType = keybase1.FSNotificationType_SIGNING
+	} else {
+		n.NotificationType = keybase1.FSNotificationType_ENCRYPTING
+	}
+	return n
+}
+
+// tlfReadErrorNotification creates FSNotifications for general KBFS
+// read error events to a TLF.
+func readTlfErrorNotification(tlf CanonicalTlfName, public bool,
+	err error) *keybase1.FSNotification {
+	n := &keybase1.FSNotification{
+		PublicTopLevelFolder: public,
+		Filename:             buildCanonicalPath(public, tlf),
+		StatusCode:           keybase1.FSStatusCode_ERROR,
+		Status:               err.Error(),
+	}
+	if public {
+		n.NotificationType = keybase1.FSNotificationType_VERIFYING
+	} else {
+		n.NotificationType = keybase1.FSNotificationType_DECRYPTING
+	}
+	return n
+}
+
+// genericErrorNotification creates FSNotifications for generic
+// errors, and makes it look like a read error.
+func genericErrorNotification(err error) *keybase1.FSNotification {
+	// The GUI parses this but doesn't use it if the status is filled
+	// in.
+	//
+	// TODO: plumb through at least the TLF name to wherever generates
+	// these errors, and require a path or tlf name here.
+	fakeFile := "/"
+	n := &keybase1.FSNotification{
+		Filename:   fakeFile,
+		StatusCode: keybase1.FSStatusCode_ERROR,
+		Status:     err.Error(),
+	}
+	n.NotificationType = keybase1.FSNotificationType_VERIFYING
+	return n
 }

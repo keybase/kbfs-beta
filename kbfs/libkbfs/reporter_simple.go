@@ -1,7 +1,6 @@
 package libkbfs
 
 import (
-	"fmt"
 	"runtime"
 	"sync"
 
@@ -37,31 +36,29 @@ func NewReporterSimple(clock Clock, maxErrors int) *ReporterSimple {
 	return rs
 }
 
-// Report implements the Reporter interface for ReporterSimple.
-func (r *ReporterSimple) Report(level ReportingLevel, message fmt.Stringer) {
+// ReportErr implements the Reporter interface for ReporterSimple.
+func (r *ReporterSimple) ReportErr(ctx context.Context, err error) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	if level >= RptE {
-		stack := make([]uintptr, 20)
-		n := runtime.Callers(2, stack)
-		re := ReportedError{
-			Level: level,
-			Time:  r.clock.Now(),
-			Error: message,
-			Stack: stack[:n],
-		}
-		r.currErrorIndex++
-		if r.maxErrors < 1 {
-			r.errors = append(r.errors, re)
-		} else {
-			if r.currErrorIndex == r.maxErrors {
-				r.currErrorIndex = 0
-				r.filledOnce = true
-			}
-			r.errors[r.currErrorIndex] = re
-		}
+	stack := make([]uintptr, 20)
+	n := runtime.Callers(2, stack)
+	re := ReportedError{
+		Time:  r.clock.Now(),
+		Error: err,
+		Stack: stack[:n],
 	}
+	r.currErrorIndex++
+	if r.maxErrors < 1 {
+		r.errors = append(r.errors, re)
+	} else {
+		if r.currErrorIndex == r.maxErrors {
+			r.currErrorIndex = 0
+			r.filledOnce = true
+		}
+		r.errors[r.currErrorIndex] = re
+	}
+
 }
 
 // AllKnownErrors implements the Reporter interface for ReporterSimple.

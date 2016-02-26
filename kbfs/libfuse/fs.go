@@ -2,7 +2,9 @@ package libfuse
 
 import (
 	"os"
+	"runtime"
 	"sync"
+	"time"
 
 	"bazil.org/fuse"
 	"bazil.org/fuse/fs"
@@ -119,11 +121,44 @@ func (f *FS) LaunchNotificationProcessor(ctx context.Context) {
 	go f.processNotifications(ctx)
 }
 
+// WithContext adds app- and request-specific values to the context.
+// It is called by FUSE for normal runs, but may be called explicitly
+// in other settings, such as tests.
+func (f *FS) WithContext(ctx context.Context) context.Context {
+	ctx = context.WithValue(ctx, CtxAppIDKey, f)
+	logTags := make(logger.CtxLogTags)
+	logTags[CtxIDKey] = CtxOpID
+	ctx = logger.NewContextWithLogTags(ctx, logTags)
+
+	// Add a unique ID to this context, identifying a particular
+	// request.
+	id, err := libkbfs.MakeRandomRequestID()
+	if err != nil {
+		f.log.Errorf("Couldn't make request ID: %v", err)
+	} else {
+		ctx = context.WithValue(ctx, CtxIDKey, id)
+	}
+
+	if runtime.GOOS == "darwin" {
+		// Timeout operations before they hit the osxfuse time limit,
+		// so we don't hose the entire mount (Fixed in OSXFUSE 3.2.0).
+		// The timeout is 60 seconds, but it looks like sometimes it
+		// tries multiple attempts within that 60 seconds, so let's go
+		// a little under 60/3 to be safe.
+		//
+		// It should be safe to ignore the CancelFunc here because our
+		// parent context will be canceled by the FUSE serve loop.
+		ctx, _ = context.WithTimeout(ctx, 19*time.Second)
+	}
+
+	return ctx
+}
+
 // Serve FS. Will block.
 func (f *FS) Serve(ctx context.Context) error {
 	srv := fs.New(f.conn, &fs.Config{
-		GetContext: func() context.Context {
-			return ctx
+		WithContext: func(ctx context.Context, _ fuse.Request) context.Context {
+			return f.WithContext(ctx)
 		},
 	})
 	f.fuse = srv
@@ -145,7 +180,7 @@ func (f *FS) reportErr(ctx context.Context, err error) {
 		return
 	}
 
-	f.config.Reporter().Report(libkbfs.RptE, libkbfs.WrapError{Err: err})
+	f.config.Reporter().ReportErr(ctx, err)
 	// We just log the error as debug, rather than error, because it
 	// might just indicate an expected error such as an ENOENT.
 	//
@@ -205,7 +240,6 @@ var _ fs.NodeRequestLookuper = (*Root)(nil)
 
 // Lookup implements the fs.NodeRequestLookuper interface for Root.
 func (r *Root) Lookup(ctx context.Context, req *fuse.LookupRequest, resp *fuse.LookupResponse) (node fs.Node, err error) {
-	ctx = NewContextWithOpID(ctx, r.private.fs.log)
 	r.private.fs.log.CDebugf(ctx, "FS Lookup %s", req.Name)
 	defer func() { r.private.fs.reportErr(ctx, err) }()
 
@@ -229,7 +263,6 @@ var _ fs.HandleReadDirAller = (*Root)(nil)
 
 // ReadDirAll implements the ReadDirAll interface for Root.
 func (r *Root) ReadDirAll(ctx context.Context) (res []fuse.Dirent, err error) {
-	ctx = NewContextWithOpID(ctx, r.private.fs.log)
 	r.private.fs.log.CDebugf(ctx, "FS ReadDirAll")
 	defer func() { r.private.fs.reportErr(ctx, err) }()
 	res = []fuse.Dirent{
