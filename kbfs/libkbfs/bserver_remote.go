@@ -76,9 +76,22 @@ func (b *BlockServerRemote) RemoteAddress() string {
 
 // OnConnect implements the ConnectionHandler interface.
 func (b *BlockServerRemote) OnConnect(ctx context.Context,
-	conn *Connection, client keybase1.GenericClient, _ *rpc.Server) error {
-	// request a challenge -- using b.client here would cause problematic recursion.
+	_ *Connection, client keybase1.GenericClient, _ *rpc.Server) error {
+	// reset auth -- using b.client here would cause problematic recursion.
 	c := keybase1.BlockClient{Cli: cancelableClient{client}}
+	return b.resetAuth(ctx, c)
+}
+
+// resetAuth is called to reset the authorization on a BlockServer
+// connection.
+func (b *BlockServerRemote) resetAuth(ctx context.Context, c keybase1.BlockInterface) error {
+	_, _, err := b.config.KBPKI().GetCurrentUserInfo(ctx)
+	if err != nil {
+		b.log.Debug("BServerRemote: User logged out, skipping resetAuth")
+		return nil
+	}
+
+	// request a challenge
 	challenge, err := c.GetSessionChallenge(ctx)
 	if err != nil {
 		return err
@@ -95,18 +108,7 @@ func (b *BlockServerRemote) OnConnect(ctx context.Context,
 
 // RefreshAuthToken implements the AuthTokenRefreshHandler interface.
 func (b *BlockServerRemote) RefreshAuthToken(ctx context.Context) {
-	// get a new challenge
-	challenge, err := b.client.GetSessionChallenge(ctx)
-	if err != nil {
-		b.log.CDebugf(ctx, "error getting challenge: %v", err)
-	}
-	// get a new signature
-	signature, err := b.authToken.Sign(ctx, challenge)
-	if err != nil {
-		b.log.CDebugf(ctx, "error signing auth token: %v", err)
-	}
-	// update authentication
-	if err := b.client.AuthenticateSession(ctx, signature); err != nil {
+	if err := b.resetAuth(ctx, b.client); err != nil {
 		b.log.CDebugf(ctx, "error refreshing auth token: %v", err)
 	}
 }

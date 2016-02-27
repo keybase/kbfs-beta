@@ -23,6 +23,8 @@ type KeybaseDaemonRPC struct {
 	kbfsClient     keybase1.KbfsInterface
 	log            logger.Logger
 
+	config Config
+
 	// Only used when there's a real connection (i.e., not in
 	// testing).
 	shutdownFn func()
@@ -52,6 +54,7 @@ var _ KeybaseDaemon = (*KeybaseDaemonRPC)(nil)
 // calls using the socket of the given Keybase context.
 func NewKeybaseDaemonRPC(config Config, kbCtx *libkb.GlobalContext, log logger.Logger, debug bool) *KeybaseDaemonRPC {
 	k := newKeybaseDaemonRPC(kbCtx, log)
+	k.config = config
 	conn := NewSharedKeybaseConnection(kbCtx, config, k)
 	k.fillClients(conn.GetClient())
 	k.shutdownFn = conn.Shutdown
@@ -161,6 +164,10 @@ func (k *KeybaseDaemonRPC) LoggedIn(ctx context.Context, name string) error {
 	k.log.CDebugf(ctx, "Current session logged in: %s", name)
 	// Since we don't have the whole session, just clear the cache.
 	k.setCachedCurrentSession(SessionInfo{})
+	if k.config != nil {
+		k.config.MDServer().RefreshAuthToken(ctx)
+		k.config.BlockServer().RefreshAuthToken(ctx)
+	}
 	return nil
 }
 
@@ -168,6 +175,10 @@ func (k *KeybaseDaemonRPC) LoggedIn(ctx context.Context, name string) error {
 func (k *KeybaseDaemonRPC) LoggedOut(ctx context.Context) error {
 	k.log.CDebugf(ctx, "Current session logged out")
 	k.setCachedCurrentSession(SessionInfo{})
+	if k.config != nil {
+		k.config.MDServer().RefreshAuthToken(ctx)
+		k.config.BlockServer().RefreshAuthToken(ctx)
+	}
 	return nil
 }
 
@@ -353,12 +364,23 @@ func (k *KeybaseDaemonRPC) ShouldThrottle(err error) bool {
 	return false
 }
 
+func convertIdentifyError(assertion string, err error) error {
+	switch err.(type) {
+	case libkb.AppStatusError:
+		return NoSuchUserError{assertion}
+	case libkb.ResolutionError:
+		return NoSuchUserError{assertion}
+	}
+	return err
+}
+
 // Resolve implements the KeybaseDaemon interface for KeybaseDaemonRPC.
 func (k *KeybaseDaemonRPC) Resolve(ctx context.Context, assertion string) (
 	libkb.NormalizedUsername, keybase1.UID, error) {
 	user, err := k.identifyClient.Resolve2(ctx, assertion)
 	if err != nil {
-		return libkb.NormalizedUsername(""), keybase1.UID(""), err
+		return libkb.NormalizedUsername(""), keybase1.UID(""),
+			convertIdentifyError(assertion, err)
 	}
 	return libkb.NewNormalizedUsername(user.Username), user.Uid, nil
 }
@@ -376,7 +398,7 @@ func (k *KeybaseDaemonRPC) Identify(ctx context.Context, assertion, reason strin
 	}
 	res, err := k.identifyClient.Identify2(ctx, arg)
 	if err != nil {
-		return UserInfo{}, err
+		return UserInfo{}, convertIdentifyError(assertion, err)
 	}
 
 	return k.processUserPlusKeys(ctx, res.Upk)

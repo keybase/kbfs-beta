@@ -93,12 +93,16 @@ func (fs *KBFSOpsStandard) getOpsByNode(node Node) *folderBranchOps {
 }
 
 func (fs *KBFSOpsStandard) getOpsByHandle(ctx context.Context, handle *TlfHandle, fb FolderBranch) (*folderBranchOps, error) {
+	kbpki := fs.config.KBPKI()
+	_, _, err := kbpki.GetCurrentUserInfo(ctx)
+	isLoggedIn := err == nil
+
 	fs.opsLock.RLock()
 	_, exists := fs.ops[fb]
 	fs.opsLock.RUnlock()
 
-	if !exists && fb.Branch == MasterBranch {
-		err := fs.config.KBPKI().FavoriteAdd(ctx, handle.ToKBFolder(ctx, fs.config))
+	if !exists && isLoggedIn && fb.Branch == MasterBranch {
+		err := kbpki.FavoriteAdd(ctx, handle.ToKBFolder(ctx, fs.config))
 		if err != nil {
 			return nil, err
 		}
@@ -114,7 +118,7 @@ func (fs *KBFSOpsStandard) GetOrCreateRootNode(
 	node Node, ei EntryInfo, err error) {
 	fs.log.CDebugf(ctx, "GetOrCreateRootNode(%s, %t, %v)",
 		name, public, branch)
-	defer func() { fs.log.CDebugf(ctx, "Done: %v", err) }()
+	defer func() { fs.log.CDebugf(ctx, "Done: %#v", err) }()
 
 	h, err := ParseTlfHandle(ctx, fs.config.KBPKI(), name, public)
 	if err != nil {

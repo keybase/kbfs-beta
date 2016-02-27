@@ -94,10 +94,18 @@ var _ fs.HandleReadDirAller = (*FolderList)(nil)
 // ReadDirAll implements the ReadDirAll interface.
 func (fl *FolderList) ReadDirAll(ctx context.Context) (res []fuse.Dirent, err error) {
 	fl.fs.log.CDebugf(ctx, "FL ReadDirAll")
-	defer func() { fl.fs.reportErr(ctx, err) }()
-	favs, err := fl.fs.config.KBFSOps().GetFavorites(ctx)
-	if err != nil {
-		return nil, err
+	defer func() {
+		fl.fs.reportErr(ctx, err)
+	}()
+	_, _, err = fl.fs.config.KBPKI().GetCurrentUserInfo(ctx)
+	isLoggedIn := err == nil
+
+	var favs []*libkbfs.Favorite
+	if isLoggedIn {
+		favs, err = fl.fs.config.KBFSOps().GetFavorites(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	res = make([]fuse.Dirent, 0, len(favs))

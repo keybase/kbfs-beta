@@ -88,30 +88,14 @@ func (md *MDServerRemote) OnConnect(ctx context.Context,
 
 	md.log.Debug("MDServerRemote: OnConnect called with a new connection")
 
-	// request a challenge -- using md.client here would cause problematic recursion.
+	// reset auth -- using md.client here would cause problematic recursion.
 	c := keybase1.MetadataClient{Cli: cancelableClient{client}}
-	challenge, err := c.GetChallenge(ctx)
+	pingIntervalSeconds, err := md.resetAuth(ctx, c)
 	if err != nil {
-		md.log.Warning("MDServerRemote: challenge request error: %v", err)
 		return err
+	} else if pingIntervalSeconds == -1 {
+		return nil
 	}
-	md.log.Debug("MDServerRemote: received challenge")
-
-	// get a new signature
-	signature, err := md.authToken.Sign(ctx, challenge)
-	if err != nil {
-		md.log.Warning("MDServerRemote: error signing authentication token: %v", err)
-		return err
-	}
-	md.log.Debug("MDServerRemote: authentication token signed")
-
-	// authenticate
-	pingIntervalSeconds, err := c.Authenticate(ctx, signature)
-	if err != nil {
-		md.log.Warning("MDServerRemote: authentication error: %v", err)
-		return err
-	}
-	md.log.Debug("MDServerRemote: authentication successful; ping interval: %ds", pingIntervalSeconds)
 
 	// we'll get replies asynchronously as to not block the connection
 	// for doing other active work for the user. they will be sent to
@@ -121,6 +105,7 @@ func (md *MDServerRemote) OnConnect(ctx context.Context,
 			return err
 		}
 	}
+
 	// request a list of folders needing rekey action
 	if err := md.getFoldersForRekey(ctx, c); err != nil {
 		md.log.Warning("MDServerRemote: getFoldersForRekey failed with %v", err)
@@ -132,20 +117,47 @@ func (md *MDServerRemote) OnConnect(ctx context.Context,
 	return nil
 }
 
-// RefreshAuthToken implements the AuthTokenRefreshHandler interface.
-func (md *MDServerRemote) RefreshAuthToken(ctx context.Context) {
-	// get a new challenge
-	challenge, err := md.client.GetChallenge(ctx)
+// resetAuth is called to reset the authorization on an MDServer
+// connection.
+func (md *MDServerRemote) resetAuth(ctx context.Context, c keybase1.MetadataClient) (int, error) {
+
+	md.log.Debug("MDServerRemote: resetAuth called with a new connection")
+
+	_, _, err := md.config.KBPKI().GetCurrentUserInfo(ctx)
 	if err != nil {
-		md.log.Debug("MDServerRemote: error getting challenge: %v", err)
+		md.log.Debug("MDServerRemote: User logged out, skipping resetAuth")
+		return -1, nil
 	}
+
+	challenge, err := c.GetChallenge(ctx)
+	if err != nil {
+		md.log.Warning("MDServerRemote: challenge request error: %v", err)
+		return 0, err
+	}
+	md.log.Debug("MDServerRemote: received challenge")
+
 	// get a new signature
 	signature, err := md.authToken.Sign(ctx, challenge)
 	if err != nil {
-		md.log.Debug("MDServerRemote: error signing auth token: %v", err)
+		md.log.Warning("MDServerRemote: error signing authentication token: %v", err)
+		return 0, err
 	}
-	// update authentication
-	if _, err := md.client.Authenticate(ctx, signature); err != nil {
+	md.log.Debug("MDServerRemote: authentication token signed")
+
+	// authenticate
+	pingIntervalSeconds, err := c.Authenticate(ctx, signature)
+	if err != nil {
+		md.log.Warning("MDServerRemote: authentication error: %v", err)
+		return 0, err
+	}
+	md.log.Debug("MDServerRemote: authentication successful; ping interval: %ds", pingIntervalSeconds)
+
+	return pingIntervalSeconds, nil
+}
+
+// RefreshAuthToken implements the AuthTokenRefreshHandler interface.
+func (md *MDServerRemote) RefreshAuthToken(ctx context.Context) {
+	if _, err := md.resetAuth(ctx, md.client); err != nil {
 		md.log.Debug("MDServerRemote: error refreshing auth token: %v", err)
 	}
 }
