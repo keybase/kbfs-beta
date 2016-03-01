@@ -265,13 +265,9 @@ func TestRemoveAlias(t *testing.T) {
 	defer cancelFn()
 
 	p := path.Join(mnt.Dir, PrivateName, "jdoe,jdoe")
-	switch err := os.Remove(p); err := err.(type) {
-	case *os.PathError:
-		if g, e := err.Err, syscall.EPERM; g != e {
-			t.Fatalf("wrong error: %v != %v", g, e)
-		}
-	default:
-		t.Fatalf("expected a PathError, got %T: %v", err, err)
+	err := os.Remove(p)
+	if err != nil {
+		t.Fatalf("Removing alias failed: %v", err)
 	}
 }
 
@@ -327,6 +323,36 @@ func TestReaddirPrivate(t *testing.T) {
 
 	checkDir(t, path.Join(mnt.Dir, PrivateName), map[string]fileInfoCheck{
 		"jdoe": mustBeDir,
+	})
+}
+
+func TestReaddirPrivateDeleteFavorite(t *testing.T) {
+	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
+	defer libkbfs.CheckConfigAndShutdown(t, config)
+	mnt, _, cancelFn := makeFS(t, config)
+	defer mnt.Close()
+	defer cancelFn()
+
+	{
+		// Force FakeMDServer to have some TlfIDs it can present to us
+		// as favorites. Don't go through VFS to avoid caching causing
+		// false positives.
+		if _, _, err := config.KBFSOps().GetOrCreateRootNode(
+			context.Background(), "jdoe", false, libkbfs.MasterBranch); err != nil {
+			t.Fatalf("cannot set up a favorite: %v", err)
+		}
+		if _, _, err := config.KBFSOps().GetOrCreateRootNode(
+			context.Background(), "jdoe", true, libkbfs.MasterBranch); err != nil {
+			t.Fatalf("cannot set up a favorite: %v", err)
+		}
+	}
+
+	err := os.Remove(path.Join(mnt.Dir, PrivateName, "jdoe"))
+	if err != nil {
+		t.Fatalf("Removing favorite failed: %v", err)
+	}
+
+	checkDir(t, path.Join(mnt.Dir, PrivateName), map[string]fileInfoCheck{
 	})
 }
 

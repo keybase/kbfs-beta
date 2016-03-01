@@ -319,6 +319,7 @@ type folderBranchOps struct {
 	// Whether we've identified this TLF or not.
 	identifyLock sync.Mutex
 	identifyDone bool
+	identifyTime time.Time
 
 	// The current status summary for this folder
 	status *folderBranchStatusKeeper
@@ -404,6 +405,17 @@ func newFolderBranchOps(config Config, fb FolderBranch,
 		go fbo.backgroundFlusher(secondsBetweenBackgroundFlushes * time.Second)
 	}
 	return fbo
+}
+
+// markForReIdentifyIfNeeded checks whether this tlf is identified and mark
+// it for lazy reidentification if it exceeds time limits.
+func (fbo *folderBranchOps) markForReIdentifyIfNeeded(now time.Time, maxValid time.Duration) {
+	fbo.identifyLock.Lock()
+	defer fbo.identifyLock.Unlock()
+	if fbo.identifyDone && (now.Before(fbo.identifyTime) || fbo.identifyTime.Add(maxValid).Before(now)) {
+		fbo.log.CDebugf(nil, "Expiring identify from %v", fbo.identifyTime)
+		fbo.identifyDone = false
+	}
 }
 
 // Shutdown safely shuts down any background goroutines that may have
@@ -571,6 +583,7 @@ func (fbo *folderBranchOps) identifyOnce(
 
 	fbo.log.CDebugf(ctx, "Identify finished successfully")
 	fbo.identifyDone = true
+	fbo.identifyTime = fbo.config.Clock().Now()
 	return nil
 }
 
@@ -1868,8 +1881,9 @@ func (fbo *folderBranchOps) syncBlockAndCheckEmbed(ctx context.Context,
 
 func isRecoverableBlockError(err error) bool {
 	_, isArchiveError := err.(BServerErrorBlockArchived)
+	_, isDeleteError := err.(BServerErrorBlockDeleted)
 	_, isRefError := err.(BServerErrorBlockNonExistent)
-	return isArchiveError || isRefError
+	return isArchiveError || isDeleteError || isRefError
 }
 
 func isRetriableError(err error, retries int) bool {

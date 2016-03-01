@@ -7,6 +7,7 @@ import (
 
 	"bazil.org/fuse"
 	"bazil.org/fuse/fs"
+	keybase1 "github.com/keybase/client/go/protocol"
 	"github.com/keybase/kbfs/libkbfs"
 	"golang.org/x/net/context"
 )
@@ -125,5 +126,21 @@ var _ fs.NodeRemover = (*FolderList)(nil)
 
 // Remove implements the fs.NodeRemover interface for FolderList.
 func (fl *FolderList) Remove(ctx context.Context, req *fuse.RemoveRequest) (err error) {
-	return fuse.EPERM
+	fl.fs.log.CDebugf(ctx, "FolderList Remove %s", req.Name)
+	defer func() { fl.fs.reportErr(ctx, err) }()
+
+	// TODO trying to delete non-canonical folder handles
+	// could be skipped.
+	//
+	// TODO how to handle closing down the folderbranchops
+	// object? Open files may still exist long after removing
+	// the favorite.
+	fld := keybase1.Folder{Name: req.Name, Private: !fl.public}
+	err = fl.fs.config.KeybaseDaemon().FavoriteDelete(ctx, fld)
+	return err
+}
+
+func isTlfNameNotCanonical(err error) bool {
+	_, ok := err.(libkbfs.TlfNameNotCanonical)
+	return ok
 }
