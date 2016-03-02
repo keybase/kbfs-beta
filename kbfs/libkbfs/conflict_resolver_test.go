@@ -59,6 +59,7 @@ func TestCRInput(t *testing.T) {
 		Revision: unmergedHead,
 	}
 	// serve all the MDs from the cache
+	config.mockMdcache.EXPECT().Put(gomock.Any()).AnyTimes().Return(nil)
 	for i := unmergedHead; i >= branchPoint+1; i-- {
 		config.mockMdcache.EXPECT().Get(cr.fbo.id(), i, Unmerged).Return(
 			&RootMetadata{
@@ -83,7 +84,7 @@ func TestCRInput(t *testing.T) {
 		config.mockMdcache.EXPECT().Get(cr.fbo.id(), i, Merged).Return(
 			nil, NoSuchMDError{cr.fbo.id(), i, Merged})
 	}
-	config.mockMdops.EXPECT().GetRange(gomock.Any(), cr.fbo.id(),
+	config.mockMdops.EXPECT().GetRangeAllowUnverified(gomock.Any(), cr.fbo.id(),
 		mergedHead+1, gomock.Any()).Return(nil, nil)
 
 	// CR doesn't see any operations and so it does resolution early.
@@ -124,6 +125,7 @@ func TestCRInputFracturedRange(t *testing.T) {
 		Revision: unmergedHead,
 	}
 	// serve all the MDs from the cache
+	config.mockMdcache.EXPECT().Put(gomock.Any()).AnyTimes().Return(nil)
 	for i := unmergedHead; i >= branchPoint+1; i-- {
 		config.mockMdcache.EXPECT().Get(cr.fbo.id(), i, Unmerged).Return(
 			&RootMetadata{
@@ -152,14 +154,14 @@ func TestCRInputFracturedRange(t *testing.T) {
 				nil, NoSuchMDError{cr.fbo.id(), i, Merged})
 		}
 	}
-	config.mockMdops.EXPECT().GetRange(gomock.Any(), cr.fbo.id(),
+	config.mockMdops.EXPECT().GetRangeAllowUnverified(gomock.Any(), cr.fbo.id(),
 		skipCacheRevision, skipCacheRevision).Return(
 		[]*RootMetadata{{Revision: skipCacheRevision}}, nil)
 	for i := mergedHead + 1; i <= branchPoint+2*maxMDsAtATime; i++ {
 		config.mockMdcache.EXPECT().Get(cr.fbo.id(), i, Merged).Return(
 			nil, NoSuchMDError{cr.fbo.id(), i, Merged})
 	}
-	config.mockMdops.EXPECT().GetRange(gomock.Any(), cr.fbo.id(),
+	config.mockMdops.EXPECT().GetRangeAllowUnverified(gomock.Any(), cr.fbo.id(),
 		mergedHead+1, gomock.Any()).Return(nil, nil)
 
 	// CR doesn't see any operations and so it does resolution early.
