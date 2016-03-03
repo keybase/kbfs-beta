@@ -47,7 +47,7 @@ type ConnectionHandler interface {
 
 	// OnDisconnected is called whenever the connection notices it
 	// is disconnected.
-	OnDisconnected(status DisconnectStatus)
+	OnDisconnected(ctx context.Context, status DisconnectStatus)
 
 	// ShouldThrottle is called whenever an error is returned by
 	// an RPC function passed to Connection.DoCommand(), and
@@ -84,7 +84,9 @@ func (ct *ConnectionTransportTLS) Dial(ctx context.Context) (
 		// connect
 		config := tls.Config{RootCAs: certs}
 		var err error
-		conn, err = tls.Dial("tcp", ct.srvAddr, &config)
+		conn, err = tls.DialWithDialer(&net.Dialer{
+			KeepAlive: 10 * time.Second,
+		}, "tcp", ct.srvAddr, &config)
 		return err
 	})
 	if err != nil {
@@ -391,7 +393,7 @@ func dontRetryOnConnect(err error) bool {
 func (c *Connection) doReconnect(ctx context.Context, disconnectStatus DisconnectStatus,
 	reconnectChan chan struct{}, reconnectErrPtr *error) {
 	// inform the handler of our disconnected state
-	c.handler.OnDisconnected(disconnectStatus)
+	c.handler.OnDisconnected(ctx, disconnectStatus)
 	err := backoff.RetryNotify(func() error {
 		// try to connect
 		err := c.connect(ctx)

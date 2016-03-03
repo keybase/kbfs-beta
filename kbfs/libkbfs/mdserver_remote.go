@@ -25,6 +25,9 @@ const (
 	// waits between runs.  The timer gets reset to this period after
 	// every incoming FolderNeedsRekey RPC.
 	MdServerBackgroundRekeyPeriod = 1 * time.Hour
+	// MdServerDefaultPingIntervalSeconds is the default interval on which the
+	// client should contact the MD Server
+	MdServerDefaultPingIntervalSeconds = 10
 )
 
 // MDServerRemote is an implementation of the MDServer interface.
@@ -84,17 +87,27 @@ func NewMDServerRemote(config Config, srvAddr string) *MDServerRemote {
 // OnConnect implements the ConnectionHandler interface.
 func (md *MDServerRemote) OnConnect(ctx context.Context,
 	conn *Connection, client rpc.GenericClient,
-	server *rpc.Server) error {
+	server *rpc.Server) (err error) {
+
+	defer func() {
+		if err == nil {
+			md.config.Reporter().Notify(ctx,
+				connectionNotification(connectionStatusConnected))
+		}
+	}()
 
 	md.log.Debug("MDServerRemote: OnConnect called with a new connection")
 
 	// reset auth -- using md.client here would cause problematic recursion.
 	c := keybase1.MetadataClient{Cli: cancelableClient{client}}
 	pingIntervalSeconds, err := md.resetAuth(ctx, c)
-	if err != nil {
-		return err
-	} else if pingIntervalSeconds == -1 {
+	switch err.(type) {
+	case nil:
+	case NoCurrentSessionError:
+		md.resetPingTicker(pingIntervalSeconds)
 		return nil
+	default:
+		return err
 	}
 
 	// we'll get replies asynchronously as to not block the connection
@@ -126,7 +139,7 @@ func (md *MDServerRemote) resetAuth(ctx context.Context, c keybase1.MetadataClie
 	_, _, err := md.config.KBPKI().GetCurrentUserInfo(ctx)
 	if err != nil {
 		md.log.Debug("MDServerRemote: User logged out, skipping resetAuth")
-		return -1, nil
+		return MdServerDefaultPingIntervalSeconds, NoCurrentSessionError{}
 	}
 
 	challenge, err := c.GetChallenge(ctx)
@@ -157,7 +170,11 @@ func (md *MDServerRemote) resetAuth(ctx context.Context, c keybase1.MetadataClie
 
 // RefreshAuthToken implements the AuthTokenRefreshHandler interface.
 func (md *MDServerRemote) RefreshAuthToken(ctx context.Context) {
-	if _, err := md.resetAuth(ctx, md.client); err != nil {
+	_, err := md.resetAuth(ctx, md.client)
+	switch err.(type) {
+	case nil:
+	case NoCurrentSessionError:
+	default:
 		md.log.Debug("MDServerRemote: error refreshing auth token: %v", err)
 	}
 }
@@ -219,8 +236,10 @@ func (md *MDServerRemote) OnDoCommandError(err error, wait time.Duration) {
 }
 
 // OnDisconnected implements the ConnectionHandler interface.
-func (md *MDServerRemote) OnDisconnected(status DisconnectStatus) {
+func (md *MDServerRemote) OnDisconnected(ctx context.Context, status DisconnectStatus) {
 	md.log.Warning("MDServerRemote is disconnected: %v", status)
+	md.config.Reporter().Notify(ctx,
+		connectionNotification(connectionStatusDisconnected))
 	md.cancelObservers()
 	md.resetPingTicker(0)
 	if md.authToken != nil {
