@@ -10,6 +10,7 @@ import (
 	"bazil.org/fuse/fs"
 	"github.com/eapache/channels"
 	"github.com/keybase/client/go/logger"
+	"github.com/keybase/kbfs/libfs"
 	"github.com/keybase/kbfs/libkbfs"
 	"golang.org/x/net/context"
 )
@@ -254,6 +255,8 @@ func (r *Root) Lookup(ctx context.Context, req *fuse.LookupRequest, resp *fuse.L
 	}
 
 	switch req.Name {
+	case libfs.StatusFileName:
+		return NewStatusFile(r.private.fs, nil, resp), nil
 	case PrivateName:
 		return r.private, nil
 	case PublicName:
