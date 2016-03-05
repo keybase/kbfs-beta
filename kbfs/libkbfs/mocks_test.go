@@ -718,14 +718,14 @@ func (_mr *_MockKBPKIRecorder) GetNormalizedUsername(arg0, arg1 interface{}) *go
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetNormalizedUsername", arg0, arg1)
 }
 
-func (_m *MockKBPKI) HasVerifyingKey(ctx context.Context, uid protocol.UID, verifyingKey VerifyingKey) error {
-	ret := _m.ctrl.Call(_m, "HasVerifyingKey", ctx, uid, verifyingKey)
+func (_m *MockKBPKI) HasVerifyingKey(ctx context.Context, uid protocol.UID, verifyingKey VerifyingKey, atServerTime time.Time) error {
+	ret := _m.ctrl.Call(_m, "HasVerifyingKey", ctx, uid, verifyingKey, atServerTime)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-func (_mr *_MockKBPKIRecorder) HasVerifyingKey(arg0, arg1, arg2 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "HasVerifyingKey", arg0, arg1, arg2)
+func (_mr *_MockKBPKIRecorder) HasVerifyingKey(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "HasVerifyingKey", arg0, arg1, arg2, arg3)
 }
 
 func (_m *MockKBPKI) GetCryptPublicKeys(ctx context.Context, uid protocol.UID) ([]CryptPublicKey, error) {
@@ -1599,17 +1599,6 @@ func (_m *MockMDOps) GetRange(ctx context.Context, id TlfID, start MetadataRevis
 
 func (_mr *_MockMDOpsRecorder) GetRange(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetRange", arg0, arg1, arg2, arg3)
-}
-
-func (_m *MockMDOps) GetRangeAllowUnverified(ctx context.Context, id TlfID, start MetadataRevision, stop MetadataRevision) ([]*RootMetadata, error) {
-	ret := _m.ctrl.Call(_m, "GetRangeAllowUnverified", ctx, id, start, stop)
-	ret0, _ := ret[0].([]*RootMetadata)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-func (_mr *_MockMDOpsRecorder) GetRangeAllowUnverified(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "GetRangeAllowUnverified", arg0, arg1, arg2, arg3)
 }
 
 func (_m *MockMDOps) GetUnmergedRange(ctx context.Context, id TlfID, bid BranchID, start MetadataRevision, stop MetadataRevision) ([]*RootMetadata, error) {

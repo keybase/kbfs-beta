@@ -363,11 +363,8 @@ type KBPKI interface {
 
 	// HasVerifyingKey returns nil if the given user has the given
 	// VerifyingKey, and an error otherwise.
-	//
-	// TODO: Add a timestamp argument (or similar) so that we can
-	// check for revocation.
 	HasVerifyingKey(ctx context.Context, uid keybase1.UID,
-		verifyingKey VerifyingKey) error
+		verifyingKey VerifyingKey, atServerTime time.Time) error
 	// GetCryptPublicKeys gets all of a user's crypt public keys (including
 	// paper keys).
 	GetCryptPublicKeys(ctx context.Context, uid keybase1.UID) (
@@ -712,18 +709,6 @@ type MDOps interface {
 	// the passed revision numbers (inclusive).
 	GetRange(ctx context.Context, id TlfID, start, stop MetadataRevision) (
 		[]*RootMetadata, error)
-
-	// GetRangeAllowUnverified is the same as GetRange, except if some
-	// updates in the range were signed by a key that isn't associated
-	// with the writer of that MD (e.g., because the device has since
-	// been revoked), a debug message is printed but no error is
-	// returned.  Any unverified MDs have the `unverified` bool set to
-	// true.
-	//
-	// TODO: remove this once the client is able to consume and verify
-	// Merkle data from the servers.
-	GetRangeAllowUnverified(ctx context.Context, id TlfID,
-		start, stop MetadataRevision) ([]*RootMetadata, error)
 
 	// GetUnmergedRange is the same as the above but for unmerged
 	// metadata history (inclusive).
