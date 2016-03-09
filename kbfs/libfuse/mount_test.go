@@ -1376,7 +1376,7 @@ func TestChmodNonExec(t *testing.T) {
 	}
 }
 
-func TestChmodDir(t *testing.T) {
+func TestChownFileIgnored(t *testing.T) {
 	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
 	defer libkbfs.CheckConfigAndShutdown(t, config)
 	mnt, _, cancelFn := makeFS(t, config)
@@ -1384,17 +1384,80 @@ func TestChmodDir(t *testing.T) {
 	defer cancelFn()
 
 	p := path.Join(mnt.Dir, PrivateName, "jdoe", "myfile")
+	const input = "hello, world\n"
+	if err := ioutil.WriteFile(p, []byte(input), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	fi, err := os.Lstat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldOwner := int(fi.Sys().(*syscall.Stat_t).Uid)
+
+	if err := os.Chown(p, oldOwner+1, oldOwner+1); err != nil {
+		t.Fatalf("Expecting the file chown to get swallowed silently, "+
+			"but got: %v", err)
+	}
+
+	newFi, err := os.Lstat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newOwner := int(newFi.Sys().(*syscall.Stat_t).Uid)
+	if oldOwner != newOwner {
+		t.Fatalf("Owner changed unexpectedly to %d after a chown", newOwner)
+	}
+}
+
+func TestChmodDirIgnored(t *testing.T) {
+	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
+	defer libkbfs.CheckConfigAndShutdown(t, config)
+	mnt, _, cancelFn := makeFS(t, config)
+	defer mnt.Close()
+	defer cancelFn()
+
+	p := path.Join(mnt.Dir, PrivateName, "jdoe", "mydir")
 	if err := os.Mkdir(p, 0755); err != nil {
 		t.Fatal(err)
 	}
 
-	switch err := os.Chmod(p, 0655); err := err.(type) {
-	case *os.PathError:
-		if g, e := err.Err, syscall.EPERM; g != e {
-			t.Fatalf("wrong error: %v != %v", g, e)
-		}
-	default:
-		t.Fatalf("expected a PathError, got %T: %v", err, err)
+	if err := os.Chmod(p, 0655); err != nil {
+		t.Fatalf("Expecting the dir chmod to get swallowed silently, "+
+			"but got: %v", err)
+	}
+}
+
+func TestChownDirIgnored(t *testing.T) {
+	config := libkbfs.MakeTestConfigOrBust(t, "jdoe")
+	defer libkbfs.CheckConfigAndShutdown(t, config)
+	mnt, _, cancelFn := makeFS(t, config)
+	defer mnt.Close()
+	defer cancelFn()
+
+	p := path.Join(mnt.Dir, PrivateName, "jdoe", "mydir")
+	if err := os.Mkdir(p, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	fi, err := os.Lstat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldOwner := int(fi.Sys().(*syscall.Stat_t).Uid)
+
+	if err := os.Chown(p, 1, 1); err != nil {
+		t.Fatalf("Expecting the dir chown to get swallowed silently, "+
+			"but got: %v", err)
+	}
+
+	newFi, err := os.Lstat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newOwner := int(newFi.Sys().(*syscall.Stat_t).Uid)
+	if oldOwner != newOwner {
+		t.Fatalf("Owner changed unexpectedly to %d after a chown", newOwner)
 	}
 }
 
@@ -1848,10 +1911,10 @@ func TestReaddirOtherFolderAsAnyone(t *testing.T) {
 	}
 }
 
-func syncFolderToServer(t *testing.T, tlf string, fs *FS) {
+func syncFolderToServerHelper(t *testing.T, tlf string, public bool, fs *FS) {
 	ctx := context.Background()
 	root, _, err := fs.config.KBFSOps().GetOrCreateRootNode(
-		ctx, tlf, false, libkbfs.MasterBranch)
+		ctx, tlf, public, libkbfs.MasterBranch)
 	if err != nil {
 		t.Fatalf("cannot get root for %s: %v", tlf, err)
 	}
@@ -1863,8 +1926,12 @@ func syncFolderToServer(t *testing.T, tlf string, fs *FS) {
 	fs.NotificationGroupWait()
 }
 
+func syncFolderToServer(t *testing.T, tlf string, fs *FS) {
+	syncFolderToServerHelper(t, tlf, false, fs)
+}
+
 func syncPublicFolderToServer(t *testing.T, tlf string, fs *FS) {
-	syncFolderToServer(t, tlf+libkbfs.ReaderSep+libkbfs.PublicUIDName, fs)
+	syncFolderToServerHelper(t, tlf, true, fs)
 }
 
 func TestInvalidateDataOnWrite(t *testing.T) {

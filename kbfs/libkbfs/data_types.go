@@ -16,8 +16,9 @@ const (
 	// TLF name.
 	ReaderSep = "#"
 
-	// PublicUIDName is the name given to keybase1.PublicUID.
-	PublicUIDName = "public"
+	// PublicUIDName is the name given to keybase1.PublicUID.  This string
+	// should correspond to an illegal or reserved Keybase user name.
+	PublicUIDName = "_public"
 )
 
 // disallowedPrefixes must not be allowed at the beginning of any
@@ -355,11 +356,18 @@ type Favorite struct {
 // NewFavoriteFromFolder creates a Favorite from a
 // keybase1.Folder.
 func NewFavoriteFromFolder(folder keybase1.Folder) *Favorite {
-	const publicSuffix = ReaderSep + PublicUIDName
-	name := strings.TrimSuffix(folder.Name, publicSuffix)
+	name := folder.Name
+	if !folder.Private {
+		// Old versions of the client still use an outdated "#public"
+		// suffix for favorited public folders. TODO: remove this once
+		// those old versions of the client are retired.
+		const oldPublicSuffix = ReaderSep + "public"
+		name = strings.TrimSuffix(folder.Name, oldPublicSuffix)
+	}
+
 	return &Favorite{
 		Name:   name,
-		Public: len(name) != len(folder.Name),
+		Public: !folder.Private,
 	}
 }
 
@@ -883,3 +891,14 @@ type writerInfo struct {
 	kid        keybase1.KID
 	deviceName string
 }
+
+// ErrorModeType indicates what type of operation was being attempted
+// when an error was reported.
+type ErrorModeType int
+
+const (
+	// ReadMode indicates that an error happened while trying to read.
+	ReadMode ErrorModeType = iota
+	// WriteMode indicates that an error happened while trying to write.
+	WriteMode
+)

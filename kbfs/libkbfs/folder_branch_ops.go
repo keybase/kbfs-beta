@@ -474,6 +474,12 @@ func (fbo *folderBranchOps) getStaged(lState *lockState) bool {
 	return fbo.staged
 }
 
+func (fbo *folderBranchOps) getHead(lState *lockState) *RootMetadata {
+	fbo.headLock.RLock(lState)
+	defer fbo.headLock.RUnlock(lState)
+	return fbo.head
+}
+
 func (fbo *folderBranchOps) transitionState(newState state) {
 	fbo.stateLock.Lock()
 	defer fbo.stateLock.Unlock()
@@ -598,11 +604,7 @@ func (fbo *folderBranchOps) getMDLocked(
 		err = fbo.identifyOnce(ctx, md)
 	}()
 
-	md = func() *RootMetadata {
-		fbo.headLock.RLock(lState)
-		defer fbo.headLock.RUnlock(lState)
-		return fbo.head
-	}()
+	md = fbo.getHead(lState)
 	if md != nil {
 		return md, nil
 	}
@@ -974,7 +976,7 @@ func (fbo *folderBranchOps) getRootNode(ctx context.Context) (
 
 	handle = md.GetTlfHandle()
 	node, err = fbo.nodeCache.GetOrCreate(md.data.Dir.BlockPointer,
-		handle.ToString(ctx, fbo.config), nil)
+		string(handle.GetCanonicalName(ctx, fbo.config)), nil)
 	if err != nil {
 		return nil, EntryInfo{}, nil, err
 	}
@@ -5006,7 +5008,7 @@ func (fbo *folderBranchOps) undoUnmergedMDUpdatesLocked(
 	return unmergedPtrs, nil
 }
 
-func (fbo *folderBranchOps) unstageForTestingLocked(ctx context.Context,
+func (fbo *folderBranchOps) unstageLocked(ctx context.Context,
 	lState *lockState) error {
 	fbo.mdWriterLock.AssertLocked(lState)
 
@@ -5081,7 +5083,7 @@ func (fbo *folderBranchOps) UnstageForTesting(
 			lState := makeFBOLockState()
 			c <- fbo.doMDWriteWithRetry(ctx, lState,
 				func(lState *lockState) error {
-					return fbo.unstageForTestingLocked(freshCtx, lState)
+					return fbo.unstageLocked(freshCtx, lState)
 				})
 		}()
 
@@ -5103,11 +5105,7 @@ func (fbo *folderBranchOps) rekeyLocked(ctx context.Context,
 		return errors.New("Can't rekey while staged.")
 	}
 
-	head := func() *RootMetadata {
-		fbo.headLock.RLock(lState)
-		defer fbo.headLock.RUnlock(lState)
-		return fbo.head
-	}()
+	head := fbo.getHead(lState)
 	if head != nil {
 		// If we already have a cached revision, make sure we're
 		// up-to-date with the latest revision before inspecting the
@@ -5590,6 +5588,24 @@ func (fbo *folderBranchOps) finalizeResolution(ctx context.Context,
 		fbo.notifyOneOpLocked(ctx, lState, op, md)
 	}
 	return nil
+}
+
+func (fbo *folderBranchOps) unstageAfterFailedResolution(ctx context.Context,
+	lState *lockState) error {
+	// Take the writer lock.
+	fbo.mdWriterLock.Lock(lState)
+	defer fbo.mdWriterLock.Unlock(lState)
+
+	// Last chance to get pre-empted.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	fbo.log.CWarningf(ctx, "Unstaging branch %s after a resolution failure",
+		fbo.bid)
+	return fbo.unstageLocked(ctx, lState)
 }
 
 // GetUpdateHistory implements the KBFSOps interface for folderBranchOps

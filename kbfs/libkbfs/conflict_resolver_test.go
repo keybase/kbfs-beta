@@ -56,7 +56,8 @@ func TestCRInput(t *testing.T) {
 		WriterMetadata: WriterMetadata{
 			WFlags: MetadataFlagUnmerged,
 		},
-		Revision: unmergedHead,
+		Revision:        unmergedHead,
+		cachedTlfHandle: &TlfHandle{cachedName: "fake"},
 	}
 	// serve all the MDs from the cache
 	config.mockMdcache.EXPECT().Put(gomock.Any()).AnyTimes().Return(nil)
@@ -91,7 +92,8 @@ func TestCRInput(t *testing.T) {
 	// Just cause an error so it doesn't bother the mocks too much.
 	config.mockCrypto.EXPECT().MakeMdID(gomock.Any()).Return(MdID{},
 		errors.New("Stopping resolution process early"))
-	config.mockRep.EXPECT().ReportErr(gomock.Any(), gomock.Any())
+	config.mockRep.EXPECT().ReportErr(gomock.Any(), gomock.Any(),
+		gomock.Any(), gomock.Any(), gomock.Any())
 
 	// First try a completely unknown revision
 	cr.Resolve(unmergedHead, MetadataRevisionUninitialized)
@@ -122,7 +124,8 @@ func TestCRInputFracturedRange(t *testing.T) {
 		WriterMetadata: WriterMetadata{
 			WFlags: MetadataFlagUnmerged,
 		},
-		Revision: unmergedHead,
+		Revision:        unmergedHead,
+		cachedTlfHandle: &TlfHandle{cachedName: "fake"},
 	}
 	// serve all the MDs from the cache
 	config.mockMdcache.EXPECT().Put(gomock.Any()).AnyTimes().Return(nil)
@@ -168,7 +171,8 @@ func TestCRInputFracturedRange(t *testing.T) {
 	// Just cause an error so it doesn't bother the mocks too much.
 	config.mockCrypto.EXPECT().MakeMdID(gomock.Any()).Return(MdID{},
 		errors.New("Stopping resolution process early"))
-	config.mockRep.EXPECT().ReportErr(gomock.Any(), gomock.Any())
+	config.mockRep.EXPECT().ReportErr(gomock.Any(), gomock.Any(),
+		gomock.Any(), gomock.Any(), gomock.Any())
 
 	// Resolve the fractured revision list
 	cr.Resolve(unmergedHead, MetadataRevisionUninitialized)
@@ -240,7 +244,7 @@ func testCRCheckPathsAndActions(t *testing.T, cr *ConflictResolver,
 
 	// Step 1 -- check the chains and paths
 	unmergedChains, mergedChains, unmergedPaths, mergedPaths,
-		recreateOps, _, err := cr.buildChainsAndPaths(ctx, lState)
+		recreateOps, _, _, err := cr.buildChainsAndPaths(ctx, lState)
 	if err != nil {
 		t.Fatalf("Couldn't build chains and paths: %v", err)
 	}
@@ -1116,7 +1120,7 @@ func TestCRDoActionsSimple(t *testing.T) {
 
 	// Now run through conflict resolution manually for user2.
 	unmergedChains, mergedChains, unmergedPaths, mergedPaths,
-		recreateOps, _, err := cr2.buildChainsAndPaths(ctx, lState)
+		recreateOps, _, _, err := cr2.buildChainsAndPaths(ctx, lState)
 	if err != nil {
 		t.Fatalf("Couldn't build chains and paths: %v", err)
 	}
@@ -1232,7 +1236,7 @@ func TestCRDoActionsWriteConflict(t *testing.T) {
 
 	// Now run through conflict resolution manually for user2.
 	unmergedChains, mergedChains, unmergedPaths, mergedPaths,
-		recreateOps, _, err := cr2.buildChainsAndPaths(ctx, lState)
+		recreateOps, _, _, err := cr2.buildChainsAndPaths(ctx, lState)
 	if err != nil {
 		t.Fatalf("Couldn't build chains and paths: %v", err)
 	}

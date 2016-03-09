@@ -35,6 +35,9 @@ type MDServerRemote struct {
 	authToken    *AuthToken
 	squelchRekey bool
 
+	authenticatedMtx sync.Mutex
+	isAuthenticated  bool
+
 	observerMu sync.Mutex // protects observers
 	observers  map[TlfID]chan<- error
 
@@ -100,8 +103,6 @@ func (md *MDServerRemote) OnConnect(ctx context.Context,
 	switch err.(type) {
 	case nil:
 	case NoCurrentSessionError:
-		md.resetPingTicker(pingIntervalSeconds)
-		return nil
 	default:
 		return err
 	}
@@ -115,12 +116,6 @@ func (md *MDServerRemote) OnConnect(ctx context.Context,
 		}
 	}
 
-	// request a list of folders needing rekey action
-	if err := md.getFoldersForRekey(ctx, c); err != nil {
-		md.log.Warning("MDServerRemote: getFoldersForRekey failed with %v", err)
-	}
-	md.log.Debug("MDServerRemote: requested list of folders for rekey")
-
 	// start pinging
 	md.resetPingTicker(pingIntervalSeconds)
 	return nil
@@ -131,6 +126,13 @@ func (md *MDServerRemote) OnConnect(ctx context.Context,
 func (md *MDServerRemote) resetAuth(ctx context.Context, c keybase1.MetadataClient) (int, error) {
 
 	md.log.Debug("MDServerRemote: resetAuth called")
+
+	isAuthenticated := false
+	defer func() {
+		md.authenticatedMtx.Lock()
+		md.isAuthenticated = isAuthenticated
+		md.authenticatedMtx.Unlock()
+	}()
 
 	_, _, err := md.config.KBPKI().GetCurrentUserInfo(ctx)
 	if err != nil {
@@ -160,6 +162,22 @@ func (md *MDServerRemote) resetAuth(ctx context.Context, c keybase1.MetadataClie
 		return 0, err
 	}
 	md.log.Debug("MDServerRemote: authentication successful; ping interval: %ds", pingIntervalSeconds)
+
+	isAuthenticated = true
+
+	md.authenticatedMtx.Lock()
+	if !md.isAuthenticated {
+		defer func() {
+			// request a list of folders needing rekey action
+			if err := md.getFoldersForRekey(ctx, c); err != nil {
+				md.log.Warning("MDServerRemote: getFoldersForRekey failed with %v", err)
+			}
+			md.log.Debug("MDServerRemote: requested list of folders for rekey")
+		}()
+	}
+	// Need to ensure that any conflicting thread gets the updated value
+	md.isAuthenticated = true
+	md.authenticatedMtx.Unlock()
 
 	return pingIntervalSeconds, nil
 }
