@@ -104,7 +104,17 @@ type Node interface {
 type KBFSOps interface {
 	// GetFavorites returns the logged-in user's list of favorite
 	// top-level folders.  This is a remote-access operation.
-	GetFavorites(ctx context.Context) ([]*Favorite, error)
+	GetFavorites(ctx context.Context) ([]Favorite, error)
+	// RefreshCachedFavorites tells the instances to forget any cached
+	// favorites list and fetch a new list from the server.  The
+	// effects are asychronous; if there's an error refreshing the
+	// favorites, the cached favorites will become empty.
+	RefreshCachedFavorites(ctx context.Context)
+	// DeleteFavorite deletes the favorite from both the server and
+	// the local cache.  Idempotent, so it succeeds even if the folder
+	// isn't favorited.
+	DeleteFavorite(ctx context.Context, name string, public bool) error
+
 	// GetOrCreateRootNode returns the root node and root entry
 	// info associated with the given name, public flag, and
 	// branch, if the name is the canonical name, and the
@@ -246,12 +256,13 @@ type KBFSOps interface {
 	UnstageForTesting(ctx context.Context, folderBranch FolderBranch) error
 	// Rekey rekeys this folder.
 	Rekey(ctx context.Context, id TlfID) error
-	// SyncFromServer blocks until the local client has contacted the
-	// server and guaranteed that all known updates for the given
-	// top-level folder have been applied locally (and notifications
-	// sent out to any observers).  It returns an error if this
-	// folder-branch is currently unmerged or dirty locally.
-	SyncFromServer(ctx context.Context, folderBranch FolderBranch) error
+	// SyncFromServerForTesting blocks until the local client has
+	// contacted the server and guaranteed that all known updates
+	// for the given top-level folder have been applied locally
+	// (and notifications sent out to any observers).  It returns
+	// an error if this folder-branch is currently unmerged or
+	// dirty locally.
+	SyncFromServerForTesting(ctx context.Context, folderBranch FolderBranch) error
 	// GetUpdateHistory returns a complete history of all the merged
 	// updates of the given folder, in a data structure that's
 	// suitable for encoding directly into JSON.  This is an expensive

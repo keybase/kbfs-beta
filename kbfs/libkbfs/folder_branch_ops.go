@@ -393,7 +393,6 @@ func newFolderBranchOps(config Config, fb FolderBranch,
 			leveledRWMutex: blockLockMu,
 		},
 		nodeCache:       nodeCache,
-		state:           cleanState,
 		log:             log,
 		shutdownChan:    make(chan struct{}),
 		updatePauseChan: make(chan (<-chan struct{})),
@@ -431,7 +430,7 @@ func (fbo *folderBranchOps) Shutdown() error {
 			fbo.log.CDebugf(ctx, "Skipping state-checking due to being staged")
 		} else {
 			// Make sure we're up to date first
-			if err := fbo.SyncFromServer(ctx, fbo.folderBranch); err != nil {
+			if err := fbo.SyncFromServerForTesting(ctx, fbo.folderBranch); err != nil {
 				return err
 			}
 
@@ -457,14 +456,27 @@ func (fbo *folderBranchOps) branch() BranchName {
 	return fbo.folderBranch.Branch
 }
 
-func (fbo *folderBranchOps) GetFavorites(ctx context.Context) ([]*Favorite, error) {
+func (fbo *folderBranchOps) GetFavorites(ctx context.Context) (
+	[]Favorite, error) {
 	return nil, errors.New("GetFavorites is not supported by folderBranchOps")
 }
 
+func (fbo *folderBranchOps) RefreshCachedFavorites(ctx context.Context) {
+	// no-op
+}
+
+func (fbo *folderBranchOps) DeleteFavorite(ctx context.Context,
+	name string, public bool) error {
+	return errors.New("DeleteFavorite is not supported by folderBranchOps")
+}
+
 func (fbo *folderBranchOps) getState() state {
-	fbo.stateLock.Lock()
-	defer fbo.stateLock.Unlock()
-	return fbo.state
+	fbo.cacheLock.Lock()
+	defer fbo.cacheLock.Unlock()
+	if len(fbo.deCache) == 0 {
+		return cleanState
+	}
+	return dirtyState
 }
 
 // getStaged should not be called if mdWriterLock is already taken.
@@ -478,22 +490,6 @@ func (fbo *folderBranchOps) getHead(lState *lockState) *RootMetadata {
 	fbo.headLock.RLock(lState)
 	defer fbo.headLock.RUnlock(lState)
 	return fbo.head
-}
-
-func (fbo *folderBranchOps) transitionState(newState state) {
-	fbo.stateLock.Lock()
-	defer fbo.stateLock.Unlock()
-	switch newState {
-	case cleanState:
-		if len(fbo.deCache) > 0 {
-			// if we still have writes outstanding, don't allow the
-			// transition into the clean state
-			return
-		}
-	default:
-		// no specific checks needed
-	}
-	fbo.state = newState
 }
 
 func (fbo *folderBranchOps) setStagedLocked(
@@ -2101,7 +2097,6 @@ func (fbo *folderBranchOps) finalizeMDWriteLocked(ctx context.Context,
 		md.data.Changes.Ops[0].
 			AddRefBlock(md.data.cachedChanges.Info.BlockPointer)
 	}
-	fbo.transitionState(cleanState)
 
 	err = fbo.finalizeBlocks(bps)
 	if err != nil {
@@ -2144,7 +2139,6 @@ func (fbo *folderBranchOps) finalizeMDRekeyWriteLocked(ctx context.Context,
 	}
 
 	fbo.setStagedLocked(lState, false, NullBranchID)
-	fbo.transitionState(cleanState)
 
 	fbo.headLock.Lock(lState)
 	defer fbo.headLock.Unlock(lState)
@@ -2197,7 +2191,6 @@ func (fbo *folderBranchOps) finalizeGCOp(ctx context.Context, gco *gcOp) (
 	}
 
 	fbo.setStagedLocked(lState, false, NullBranchID)
-	fbo.transitionState(cleanState)
 
 	fbo.headLock.Lock(lState)
 	defer fbo.headLock.Unlock(lState)
@@ -3250,7 +3243,6 @@ func (fbo *folderBranchOps) writeDataLocked(
 	if doNotify {
 		fbo.notifyLocal(ctx, file, si.op)
 	}
-	fbo.transitionState(dirtyState)
 
 	if d := bcache.DirtyBytesEstimate(); d > dirtyBytesThreshold {
 		fbo.log.CDebugf(ctx, "Forcing a sync due to %d dirty bytes", d)
@@ -3506,7 +3498,6 @@ func (fbo *folderBranchOps) truncateLocked(
 	if doNotify {
 		fbo.notifyLocal(ctx, file, si.op)
 	}
-	fbo.transitionState(dirtyState)
 	return nil, nil
 }
 
@@ -3834,7 +3825,6 @@ func (fbo *folderBranchOps) syncLocked(ctx context.Context,
 		// handle to this file. TODO: Hook this in with the
 		// node cache GC logic to be perfectly accurate.
 		delete(fbo.deCache, file.tailPointer().ref())
-		fbo.transitionState(cleanState)
 		return true, nil
 	}
 
@@ -4218,10 +4208,6 @@ func (fbo *folderBranchOps) syncLocked(ctx context.Context,
 		fbo.cacheLock.Lock()
 		defer fbo.cacheLock.Unlock()
 		delete(fbo.deCache, file.tailPointer().ref())
-		// Need to explicitly state transition here, since
-		// finalizeMDWriteLocked wouldn't have been able to if we
-		// had an outstanding de cache entry.
-		fbo.transitionState(cleanState)
 	}()
 	for _, f := range writes {
 		// we can safely read head here because we hold mdWriterLock
@@ -5272,9 +5258,9 @@ func (fbo *folderBranchOps) Rekey(ctx context.Context, tlf TlfID) (err error) {
 		})
 }
 
-func (fbo *folderBranchOps) SyncFromServer(
+func (fbo *folderBranchOps) SyncFromServerForTesting(
 	ctx context.Context, folderBranch FolderBranch) (err error) {
-	fbo.log.CDebugf(ctx, "SyncFromServer")
+	fbo.log.CDebugf(ctx, "SyncFromServerForTesting")
 	defer func() { fbo.log.CDebugf(ctx, "Done: %v", err) }()
 
 	if folderBranch != fbo.folderBranch {

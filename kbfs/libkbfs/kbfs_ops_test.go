@@ -166,13 +166,21 @@ func TestKBFSOpsGetFavoritesSuccess(t *testing.T) {
 	defer kbfsTestShutdown(mockCtrl, config)
 
 	// expect one call to fetch favorites
-	_, handle1, _ := newDir(t, config, 1, true, false)
+	_, handle1, _ := newDir(t, config, 1, false, false)
 	_, handle2, _ := newDir(t, config, 2, true, true)
-	_, handle3, _ := newDir(t, config, 2, true, true) // dup for testing
+	_, handle3, _ := newDir(t, config, 3, true, true) // dup for testing
 	handles := []*TlfHandle{handle1, handle2, handle3}
-	folders := []keybase1.Folder{handle1.ToKBFolder(ctx, config), handle2.ToKBFolder(ctx, config)}
+	var folders []keybase1.Folder
+	for _, h := range handles {
+		folders = append(folders, h.ToFavorite(ctx, config).toKBFolder())
+	}
 
-	config.mockKbpki.EXPECT().FavoriteList(ctx).Return(folders, nil)
+	config.mockKbpki.EXPECT().FavoriteList(gomock.Any()).Return(folders, nil)
+
+	// The favorites list contains our own public dir by default, even
+	// if KBPKI doesn't return it.
+	_, handle4, _ := newDir(t, config, 4, false, true)
+	handles = append(handles, handle4)
 
 	handles2, err := config.KBFSOps().GetFavorites(ctx)
 	if err != nil {
@@ -189,7 +197,7 @@ func TestKBFSOpsGetFavoritesFail(t *testing.T) {
 
 	err := errors.New("Fake fail")
 	// expect one call to favorites, and fail it
-	config.mockKbpki.EXPECT().FavoriteList(ctx).Return(nil, err)
+	config.mockKbpki.EXPECT().FavoriteList(gomock.Any()).Return(nil, err)
 
 	if _, err2 := config.KBFSOps().GetFavorites(ctx); err2 != err {
 		t.Errorf("Got bad error on favorites: %v", err2)
@@ -4856,7 +4864,7 @@ func TestKBFSOpsCreateFileWithArchivedBlock(t *testing.T) {
 	}
 
 	// Wait for the archiving to finish
-	err = kbfsOps.SyncFromServer(ctx, rootNode.GetFolderBranch())
+	err = kbfsOps.SyncFromServerForTesting(ctx, rootNode.GetFolderBranch())
 	if err != nil {
 		t.Fatalf("Couldn't sync from server")
 	}
@@ -4915,7 +4923,7 @@ func TestKBFSOpsMultiBlockSyncWithArchivedBlock(t *testing.T) {
 	}
 
 	// Wait for the archiving to finish
-	err = kbfsOps.SyncFromServer(ctx, rootNode.GetFolderBranch())
+	err = kbfsOps.SyncFromServerForTesting(ctx, rootNode.GetFolderBranch())
 	if err != nil {
 		t.Fatalf("Couldn't sync from server")
 	}

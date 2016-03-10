@@ -1304,7 +1304,7 @@ func TestKBFSOpsMultiBlockWriteDuringRetriedSync(t *testing.T) {
 		t.Fatalf("Couldn't remove file: %v", err)
 	}
 
-	err = kbfsOps.SyncFromServer(ctx, rootNode.GetFolderBranch())
+	err = kbfsOps.SyncFromServerForTesting(ctx, rootNode.GetFolderBranch())
 	if err != nil {
 		t.Fatalf("Couldn't sync from server: %v", err)
 	}
@@ -1440,10 +1440,11 @@ func TestKBFSOpsConcurCanceledSyncSucceeds(t *testing.T) {
 
 	unpauseArchives <- struct{}{}
 
-	// The first put actually succeeded, so SyncFromServer and make
-	// sure it worked.  This should also finish removing any blocks
-	// that would be removed.
-	err = kbfsOps.SyncFromServer(ctx, rootNode.GetFolderBranch())
+	// The first put actually succeeded, so
+	// SyncFromServerForTesting and make sure it worked.  This
+	// should also finish removing any blocks that would be
+	// removed.
+	err = kbfsOps.SyncFromServerForTesting(ctx, rootNode.GetFolderBranch())
 	if err != nil {
 		t.Fatalf("Couldn't sync from server: %v", err)
 	}
@@ -1510,7 +1511,7 @@ func TestKBFSOpsTruncateWithDupBlockCanceled(t *testing.T) {
 		t.Fatalf("Couldn't remove file: %v", err)
 	}
 
-	err = kbfsOps.SyncFromServer(ctx, rootNode.GetFolderBranch())
+	err = kbfsOps.SyncFromServerForTesting(ctx, rootNode.GetFolderBranch())
 	if err != nil {
 		t.Fatalf("Couldn't sync from server: %v", err)
 	}
@@ -1666,5 +1667,25 @@ func TestKBFSOpsErrorOnBlockedWriteDuringSync(t *testing.T) {
 	}
 	if writeErr != syncErr {
 		t.Fatalf("Unexpected write err: %v", writeErr)
+	}
+}
+
+func TestKBFSOpsCancelGetFavorites(t *testing.T) {
+	config, _, ctx := kbfsOpsConcurInit(t, "test_user")
+	defer CheckConfigAndShutdown(t, config)
+
+	daemon, c := newKeybaseDaemonRPCWithFakeClient(t)
+	config.SetKeybaseDaemon(daemon)
+	ctx, cancel := context.WithCancel(ctx)
+	errChan := make(chan error)
+	go func() {
+		_, err := config.KBFSOps().GetFavorites(ctx)
+		errChan <- err
+	}()
+	<-c
+	cancel()
+	err := <-errChan
+	if err != context.Canceled {
+		t.Fatalf("Unexpected error after cancel: %v", err)
 	}
 }
