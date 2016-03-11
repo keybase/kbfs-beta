@@ -4,10 +4,9 @@ import (
 	"encoding/hex"
 	"time"
 
-	"github.com/keybase/go-framed-msgpack-rpc"
-
 	"github.com/keybase/client/go/logger"
 	keybase1 "github.com/keybase/client/go/protocol"
+	"github.com/keybase/go-framed-msgpack-rpc"
 	"golang.org/x/net/context"
 )
 
@@ -127,18 +126,25 @@ func (b *BlockServerRemote) OnDoCommandError(err error, wait time.Duration) {
 }
 
 // OnDisconnected implements the ConnectionHandler interface.
-func (b *BlockServerRemote) OnDisconnected(_ context.Context, status DisconnectStatus) {
+func (b *BlockServerRemote) OnDisconnected(ctx context.Context, status DisconnectStatus) {
 	if status == StartingNonFirstConnection {
-		b.log.Warning("disconnected")
+		b.log.CWarningf(ctx, "disconnected")
 	}
 	if b.authToken != nil {
 		b.authToken.Shutdown()
 	}
 }
 
-// ShouldThrottle implements the ConnectionHandler interface.
-func (b *BlockServerRemote) ShouldThrottle(err error) bool {
-	if err == nil {
+// ShouldRetry implements the ConnectionHandler interface.
+func (b *BlockServerRemote) ShouldRetry(rpcName string, err error) bool {
+	//do not let connection.go's DoCommand retry any batch rpcs automatically
+	//because i will manually retry them without successfully completed references
+	switch rpcName {
+	case "keybase.1.block.delReferenceWithCount":
+		return false
+	case "keybase.1.block.archiveReferenceWithCount":
+		return false
+	case "keybase.1.block.archiveReference":
 		return false
 	}
 	_, shouldThrottle := err.(BServerErrorThrottle)
@@ -151,8 +157,13 @@ func (b *BlockServerRemote) Get(ctx context.Context, id BlockID, tlfID TlfID,
 	var err error
 	size := -1
 	defer func() {
-		b.log.CDebugf(ctx, "Get id=%s uid=%s sz=%d err=%v",
-			id, context.GetWriter(), size, err)
+		if err != nil {
+			b.log.CWarningf(ctx, "Get id=%s uid=%s sz=%d err=%v",
+				id, context.GetWriter(), size, err)
+		} else {
+			b.log.CDebugf(ctx, "Get id=%s uid=%s sz=%d",
+				id, context.GetWriter(), size)
+		}
 	}()
 
 	arg := keybase1.GetBlockArg{
@@ -186,8 +197,13 @@ func (b *BlockServerRemote) Put(ctx context.Context, id BlockID, tlfID TlfID,
 	var err error
 	size := len(buf)
 	defer func() {
-		b.log.CDebugf(ctx, "Put id=%s uid=%s sz=%d err=%v",
-			id, context.GetWriter(), size, err)
+		if err != nil {
+			b.log.CWarningf(ctx, "Put id=%s uid=%s sz=%d err=%v",
+				id, context.GetWriter(), size, err)
+		} else {
+			b.log.CDebugf(ctx, "Put id=%s uid=%s sz=%d",
+				id, context.GetWriter(), size)
+		}
 	}()
 
 	arg := keybase1.PutBlockArg{
@@ -209,8 +225,13 @@ func (b *BlockServerRemote) AddBlockReference(ctx context.Context, id BlockID,
 	tlfID TlfID, context BlockContext) error {
 	var err error
 	defer func() {
-		b.log.CDebugf(ctx, "AddBlockReference id=%s uid=%s err=%v",
-			id, context.GetWriter(), err)
+		if err != nil {
+			b.log.CWarningf(ctx, "AddBlockReference id=%s uid=%s err=%v",
+				id, context.GetWriter(), err)
+		} else {
+			b.log.CDebugf(ctx, "AddBlockReference id=%s uid=%s",
+				id, context.GetWriter())
+		}
 	}()
 
 	ref := keybase1.BlockReference{
@@ -231,66 +252,138 @@ func (b *BlockServerRemote) AddBlockReference(ctx context.Context, id BlockID,
 
 // RemoveBlockReference implements the BlockServer interface for
 // BlockServerRemote
-func (b *BlockServerRemote) RemoveBlockReference(ctx context.Context, id BlockID,
-	tlfID TlfID, context BlockContext) error {
-	var err error
+func (b *BlockServerRemote) RemoveBlockReference(ctx context.Context,
+	tlfID TlfID, contexts map[BlockID][]BlockContext) (liveCounts map[BlockID]int, err error) {
 	defer func() {
-		b.log.CDebugf(ctx, "RemoveBlockReference id=%s uid=%s err=%v",
-			id, context.GetWriter(), err)
-	}()
-
-	ref := keybase1.BlockReference{
-		Bid: keybase1.BlockIdCombo{
-			ChargedTo: context.GetCreator(),
-			BlockHash: id.String(),
-		},
-		ChargedTo: context.GetWriter(), //the actual writer to decrement quota from
-		Nonce:     keybase1.BlockRefNonce(context.GetRefNonce()),
-	}
-
-	err = b.client.DelReference(ctx, keybase1.DelReferenceArg{
-		Ref:    ref,
-		Folder: tlfID.String(),
-	})
-	return err
-}
-
-func (b *BlockServerRemote) archiveBlockReferences(ctx context.Context,
-	tlfID TlfID, refs []keybase1.BlockReference) (err error) {
-	doneRefs := make(map[string]bool)
-	notDone := refs
-	prevProgress := true
-	var res []keybase1.BlockReference
-	for len(notDone) > 0 {
-
-		res, err = b.client.ArchiveReference(ctx, keybase1.ArchiveReferenceArg{
-			Refs:   notDone,
-			Folder: tlfID.String(),
-		})
-		b.log.CDebugf(ctx, "ArchiveBlockReference request to archive %d refs actual archived %d",
-			len(notDone), len(res))
 		if err != nil {
-			b.log.CWarningf(ctx, "ArchiveBlockReference err=%v", err)
+			b.log.CWarningf(ctx, "RemoveBlockReference batch size=%d err=%v", len(contexts), err)
+		} else {
+			b.log.CDebugf(ctx, "RemoveBlockReference batch size=%d", len(contexts))
 		}
-		if len(res) == 0 && !prevProgress {
-			b.log.CErrorf(ctx, "ArchiveBlockReference failed to make progress err=%v", err)
-			break
+	}()
+	doneRefs, err := b.batchDowngradeReferences(ctx, tlfID, contexts, false)
+	liveCounts = make(map[BlockID]int)
+	for id, nonces := range doneRefs {
+		for _, count := range nonces {
+			if existing, ok := liveCounts[id]; !ok || existing > count {
+				liveCounts[id] = count
+			}
 		}
-		prevProgress = len(res) != 0
-		for _, ref := range res {
-			doneRefs[ref.Bid.BlockHash+string(ref.Nonce[:])] = true
-		}
-		notDone = b.getNotDoneRefs(refs, doneRefs)
 	}
+	return liveCounts, err
+
+}
+
+// ArchiveBlockReferences implements the BlockServer interface for
+// BlockServerRemote
+func (b *BlockServerRemote) ArchiveBlockReferences(ctx context.Context,
+	tlfID TlfID, contexts map[BlockID][]BlockContext) (err error) {
+	defer func() {
+		if err != nil {
+			b.log.CWarningf(ctx, "ArchiveBlockReferences batch size=%d err=%v", len(contexts), err)
+		} else {
+			b.log.CDebugf(ctx, "ArchiveBlockReferences batch size=%d", len(contexts))
+		}
+	}()
+	_, err = b.batchDowngradeReferences(ctx, tlfID, contexts, true)
 	return err
 }
 
-func (b *BlockServerRemote) getNotDoneRefs(refs []keybase1.BlockReference, done map[string]bool) (
-	notDone []keybase1.BlockReference) {
-	for _, ref := range refs {
-		if _, ok := done[ref.Bid.BlockHash+string(ref.Nonce[:])]; ok {
+// batchDowngradeReferences archives or deletes a batch of references
+func (b *BlockServerRemote) batchDowngradeReferences(ctx context.Context,
+	tlfID TlfID, contexts map[BlockID][]BlockContext, archive bool) (
+	doneRefs map[BlockID]map[BlockRefNonce]int, finalError error) {
+	tries := 0
+	doneRefs = make(map[BlockID]map[BlockRefNonce]int)
+	notDone := b.getNotDone(contexts, doneRefs)
+	var res keybase1.DowngradeReferenceRes
+	var err error
+	for len(notDone) > 0 {
+		if archive {
+			res, err = b.client.ArchiveReferenceWithCount(ctx, keybase1.ArchiveReferenceWithCountArg{
+				Refs:   notDone,
+				Folder: tlfID.String(),
+			})
 		} else {
-			notDone = append(notDone, ref)
+			res, err = b.client.DelReferenceWithCount(ctx, keybase1.DelReferenceWithCountArg{
+				Refs:   notDone,
+				Folder: tlfID.String(),
+			})
+		}
+		tries++
+		if err != nil {
+			b.log.CWarningf(ctx, "batchDowngradeReferences archive %t (tries %d) sent=%s done=%s failedRef=%s err=%v",
+				archive, tries, notDone, res.Completed, res.Failed, err)
+		} else {
+			b.log.CDebugf(ctx, "batchDowngradeReferences archive %t (tries %d) sent=%s all succeeded",
+				archive, tries, notDone)
+		}
+		if err != nil {
+			//if Failed reference is not a throttle error, do not retry it
+			_, tmpErr := err.(BServerErrorThrottle)
+			if !tmpErr {
+				finalError = err
+				bid, err := BlockIDFromString(res.Failed.Bid.BlockHash)
+				if err == nil {
+					if refs, ok := contexts[bid]; ok {
+						for i := range refs {
+							if refs[i].GetRefNonce() == BlockRefNonce(res.Failed.Nonce) {
+								refs = append(refs[:i], refs[i+1:]...)
+								contexts[bid] = refs
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+
+		//update the set of completed reference
+		for _, ref := range res.Completed {
+			bid, err := BlockIDFromString(ref.Ref.Bid.BlockHash)
+			if err != nil {
+				continue
+			}
+			nonces, ok := doneRefs[bid]
+			if !ok {
+				nonces = make(map[BlockRefNonce]int)
+				doneRefs[bid] = nonces
+			}
+			nonces[BlockRefNonce(ref.Ref.Nonce)] = ref.LiveCount
+		}
+
+		//figure out the not-yet-deleted references
+		notDone = b.getNotDone(contexts, doneRefs)
+
+		//if context is cancelled, return immediately
+		select {
+		case <-ctx.Done():
+			return doneRefs, ctx.Err()
+		default:
+		}
+
+	}
+	return doneRefs, finalError
+}
+
+// getNotDone returns the set of block references in "all" that do not yet appear in "results"
+func (b *BlockServerRemote) getNotDone(all map[BlockID][]BlockContext, doneRefs map[BlockID]map[BlockRefNonce]int) (
+	notDone []keybase1.BlockReference) {
+	for id, idContexts := range all {
+		for _, context := range idContexts {
+			if _, ok := doneRefs[id]; ok {
+				if _, ok1 := doneRefs[id][context.GetRefNonce()]; ok1 {
+					continue
+				}
+			}
+			notDone = append(notDone, keybase1.BlockReference{
+				Bid: keybase1.BlockIdCombo{
+					ChargedTo: context.GetCreator(),
+					BlockHash: id.String(),
+				},
+				ChargedTo: context.GetWriter(),
+				Nonce:     keybase1.BlockRefNonce(context.GetRefNonce()),
+			})
 		}
 	}
 	return notDone
@@ -303,26 +396,6 @@ func (b *BlockServerRemote) GetUserQuotaInfo(ctx context.Context) (info *UserQuo
 		return nil, err
 	}
 	return UserQuotaInfoDecode(res, b.config)
-}
-
-// ArchiveBlockReferences implements the BlockServer interface for
-// BlockServerRemote
-func (b *BlockServerRemote) ArchiveBlockReferences(ctx context.Context,
-	tlfID TlfID, contexts map[BlockID][]BlockContext) error {
-	refs := make([]keybase1.BlockReference, 0, len(contexts))
-	for id, idContexts := range contexts {
-		for _, context := range idContexts {
-			refs = append(refs, keybase1.BlockReference{
-				Bid: keybase1.BlockIdCombo{
-					ChargedTo: context.GetCreator(),
-					BlockHash: id.String(),
-				},
-				ChargedTo: context.GetWriter(),
-				Nonce:     keybase1.BlockRefNonce(context.GetRefNonce()),
-			})
-		}
-	}
-	return b.archiveBlockReferences(ctx, tlfID, refs)
 }
 
 // Shutdown implements the BlockServer interface for BlockServerRemote.

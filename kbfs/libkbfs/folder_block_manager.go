@@ -19,7 +19,7 @@ type fbmHelper interface {
 const (
 	// How many pointers to delete in a single Delete call.  TODO:
 	// update this when a batched Delete RPC is available.
-	numPointersToDeletePerChunk = 1
+	numPointersToDeletePerChunk = 20
 	// Once the number of pointers being deleted in a single gc op
 	// passes this threshold, we'll stop garbage collection at the
 	// current revision.
@@ -205,10 +205,11 @@ func (fbm *folderBlockManager) waitForQuotaReclamations(
 }
 
 func (fbm *folderBlockManager) forceQuotaReclamation() {
+	fbm.reclamationGroup.Add(1)
 	select {
 	case fbm.forceReclamationChan <- struct{}{}:
-		fbm.reclamationGroup.Add(1)
 	default:
+		fbm.reclamationGroup.Done()
 	}
 }
 
@@ -268,15 +269,14 @@ func (fbm *folderBlockManager) processBlocksToDelete(ctx context.Context) error 
 		fbm.log.CDebugf(ctx, "Cleaning up blocks for failed revision %d",
 			md.Revision)
 
-		for _, ptr := range ptrs {
-			err := bops.Delete(ctx, md, ptr.ID, ptr)
-			// Ignore permanent errors
-			_, isPermErr := err.(BServerError)
-			if err != nil {
-				fbm.log.CWarningf(ctx, "Couldn't delete ref %v: %v", ptr, err)
-				if !isPermErr {
-					toDeleteAgain[md] = append(toDeleteAgain[md], ptr)
-				}
+		_, err = bops.Delete(ctx, md, ptrs)
+		// Ignore permanent errors
+		_, isPermErr := err.(BServerError)
+		_, isNonceNonExistentErr := err.(BServerErrorNonceNonExistent)
+		if err != nil {
+			fbm.log.CWarningf(ctx, "Couldn't delete some ref in batch %v: %v", ptrs, err)
+			if !isPermErr && !isNonceNonExistentErr {
+				toDeleteAgain[md] = ptrs
 			}
 		}
 	}
@@ -621,22 +621,20 @@ func (fbm *folderBlockManager) deleteBlockRefs(ctx context.Context,
 			fbm.log.CDebugf(ctx, "Deleting chunk of %d pointers", len(chunk))
 			// TODO: send the whole chunk at once whenever the batched
 			// Delete RPC is ready.
-			for _, ptr := range chunk {
-				err := bops.Delete(ctx, md, ptr.ID, ptr)
-				if err != nil {
-					select {
-					case errChan <- err:
-						// First error wins.
-					default:
-					}
-					return
-				}
+			_, err := bops.Delete(ctx, md, chunk)
+			if err != nil {
 				select {
-				// return early if the context has been canceled
-				case <-ctx.Done():
-					return
+				case errChan <- err:
+					// First error wins.
 				default:
 				}
+				return
+			}
+			select {
+			// return early if the context has been canceled
+			case <-ctx.Done():
+				return
+			default:
 			}
 		}
 	}
