@@ -1,9 +1,11 @@
 package libkbfs
 
 import (
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -54,6 +56,10 @@ type ConnectionHandler interface {
 	// should return whether or not that error signifies that that
 	// RPC should retried (with backoff)
 	ShouldRetry(name string, err error) bool
+
+	// HandlerName returns a string representing the type of the connection
+	// handler.
+	HandlerName() string
 }
 
 // ConnectionTransportTLS is a ConnectionTransport implementation that uses TLS+rpc.
@@ -220,6 +226,9 @@ func newConnectionWithTransport(config Config,
 	reconnectBackoff := backoff.NewExponentialBackOff()
 	// never give up reconnecting
 	reconnectBackoff.MaxElapsedTime = 0
+	randBytes := make([]byte, 4)
+	rand.Read(randBytes)
+	connectionPrefix := fmt.Sprintf("CONN %s %x", handler.HandlerName(), randBytes)
 	connection := &Connection{
 		config:           config,
 		handler:          handler,
@@ -227,7 +236,7 @@ func newConnectionWithTransport(config Config,
 		errorUnwrapper:   errorUnwrapper,
 		reconnectBackoff: reconnectBackoff,
 		doCommandBackoff: backoff.NewExponentialBackOff(),
-		log:              config.MakeLogger(""),
+		log:              config.MakeLogger(connectionPrefix),
 	}
 	if connectNow {
 		// start connecting now

@@ -2,20 +2,31 @@
 
 package libfuse
 
-import "bazil.org/fuse"
+import (
+	"errors"
 
-func getPlatformSpecificMountOptions(dir string) ([]fuse.MountOption, error) {
+	"bazil.org/fuse"
+)
+
+var kbfusePath = fuse.OSXFUSEPaths{
+	DevicePrefix: "/dev/kbfuse",
+	Load:         "/Library/Filesystems/kbfuse.fs/Contents/Resources/load_kbfuse",
+	Mount:        "/Library/Filesystems/kbfuse.fs/Contents/Resources/mount_kbfuse",
+	DaemonVar:    "MOUNT_KBFUSE_DAEMON_PATH",
+}
+
+func getPlatformSpecificMountOptions(dir string, platformParams PlatformParams) ([]fuse.MountOption, error) {
 	options := []fuse.MountOption{}
 
-	// Add kbfuse support.
-	kbfusePath := fuse.OSXFUSEPaths{
-		DevicePrefix: "/dev/kbfuse",
-		Load:         "/Library/Filesystems/kbfuse.fs/Contents/Resources/load_kbfuse",
-		Mount:        "/Library/Filesystems/kbfuse.fs/Contents/Resources/mount_kbfuse",
-		DaemonVar:    "MOUNT_KBFUSE_DAEMON_PATH",
+	var locationOption fuse.MountOption
+	if platformParams.UseSystemFuse {
+		// Only allow osxfuse 3.x.
+		locationOption = fuse.OSXFUSELocations(fuse.OSXFUSELocationV3)
+	} else {
+		// Only allow kbfuse.
+		locationOption = fuse.OSXFUSELocations(kbfusePath)
 	}
-	// Allow both kbfuse and osxfuse 3.x locations by default.
-	options = append(options, fuse.OSXFUSELocations(kbfusePath, fuse.OSXFUSELocationV3))
+	options = append(options, locationOption)
 
 	// Volume name option is only used on OSX (ignored on other platforms).
 	volName, err := volumeName(dir)
@@ -26,4 +37,26 @@ func getPlatformSpecificMountOptions(dir string) ([]fuse.MountOption, error) {
 	options = append(options, fuse.VolumeName(volName))
 
 	return options, nil
+}
+
+func getPlatformSpecificMountOptionsForTest() []fuse.MountOption {
+	// For now, test with either kbfuse or OSXFUSE for now.
+	// TODO: Consider mandate testing with kbfuse?
+	return []fuse.MountOption{
+		fuse.OSXFUSELocations(kbfusePath, fuse.OSXFUSELocationV3),
+	}
+}
+
+func translatePlatformSpecificError(err error, platformParams PlatformParams) error {
+	if err == fuse.ErrOSXFUSENotFound {
+		if platformParams.UseSystemFuse {
+			return errors.New(
+				"cannot locate OSXFUSE 3.x (3.2 recommended)")
+		}
+		return errors.New(
+			"cannot locate kbfuse; either install the Keybase " +
+				"app, or install OSXFUSE 3.x (3.2 " +
+				"recommended) and pass in --use-system-fuse")
+	}
+	return err
 }
