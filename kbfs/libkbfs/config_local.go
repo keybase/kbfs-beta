@@ -36,7 +36,6 @@ const (
 // server objects (no KBFS operations used RPCs).
 type ConfigLocal struct {
 	kbfs    KBFSOps
-	kbpki   KBPKI
 	keyman  KeyManager
 	rep     Reporter
 	mdcache MDCache
@@ -52,13 +51,22 @@ type ConfigLocal struct {
 	bopsLock sync.RWMutex
 	bops     BlockOps
 
-	mdserv       MDServer
-	bserv        BlockServer
-	keyserv      KeyServer
-	daemon       KeybaseDaemon
-	bsplit       BlockSplitter
-	notifier     Notifier
-	clock        Clock
+	mdserv  MDServer
+	bserv   BlockServer
+	keyserv KeyServer
+
+	daemonLock sync.RWMutex
+	daemon     KeybaseDaemon
+
+	bsplit   BlockSplitter
+	notifier Notifier
+
+	clockLock sync.RWMutex
+	clock     Clock
+
+	kbpkiLock sync.RWMutex
+	kbpki     KBPKI
+
 	renamer      ConflictRenamer
 	registry     metrics.Registry
 	loggerFn     func(prefix string) logger.Logger
@@ -229,11 +237,15 @@ func (c *ConfigLocal) SetKBFSOps(k KBFSOps) {
 
 // KBPKI implements the Config interface for ConfigLocal.
 func (c *ConfigLocal) KBPKI() KBPKI {
+	c.kbpkiLock.RLock()
+	defer c.kbpkiLock.RUnlock()
 	return c.kbpki
 }
 
 // SetKBPKI implements the Config interface for ConfigLocal.
 func (c *ConfigLocal) SetKBPKI(k KBPKI) {
+	c.kbpkiLock.Lock()
+	defer c.kbpkiLock.Unlock()
 	c.kbpki = k
 }
 
@@ -374,11 +386,15 @@ func (c *ConfigLocal) SetKeyServer(k KeyServer) {
 
 // KeybaseDaemon implements the Config interface for ConfigLocal.
 func (c *ConfigLocal) KeybaseDaemon() KeybaseDaemon {
+	c.daemonLock.RLock()
+	defer c.daemonLock.RUnlock()
 	return c.daemon
 }
 
 // SetKeybaseDaemon implements the Config interface for ConfigLocal.
 func (c *ConfigLocal) SetKeybaseDaemon(k KeybaseDaemon) {
+	c.daemonLock.Lock()
+	defer c.daemonLock.Unlock()
 	c.daemon = k
 }
 
@@ -404,11 +420,15 @@ func (c *ConfigLocal) SetNotifier(n Notifier) {
 
 // Clock implements the Config interface for ConfigLocal.
 func (c *ConfigLocal) Clock() Clock {
+	c.clockLock.RLock()
+	defer c.clockLock.RUnlock()
 	return c.clock
 }
 
 // SetClock implements the Config interface for ConfigLocal.
 func (c *ConfigLocal) SetClock(cl Clock) {
+	c.clockLock.Lock()
+	defer c.clockLock.Unlock()
 	c.clock = cl
 }
 
