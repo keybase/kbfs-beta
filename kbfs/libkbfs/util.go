@@ -109,3 +109,11 @@ func ctxWithRandomID(ctx context.Context, tagKey interface{},
 	}
 	return newCtx
 }
+
+// LogTagsFromContext is a wrapper around logger.LogTagsFromContext
+// that simply casts the result to the type expected by
+// rpc.Connection.
+func LogTagsFromContext(ctx context.Context) (map[interface{}]string, bool) {
+	tags, ok := logger.LogTagsFromContext(ctx)
+	return map[interface{}]string(tags), ok
+}
