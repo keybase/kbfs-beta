@@ -214,6 +214,9 @@ func (wmf writerMetadataFuture) toCurrentStruct() currentStruct {
 
 func makeFakeWriterMetadataFuture(t *testing.T) writerMetadataFuture {
 	wmd := writerMetadataCurrent{
+		// This needs to be list format so it fails to compile if new fields
+		// are added, effectively checking at compile time whether new fields
+		// have been added
 		[]byte{0xa, 0xb},
 		"uid1",
 		[]keybase1.UID{"uid1", "uid2"},
@@ -232,6 +235,10 @@ func makeFakeWriterMetadataFuture(t *testing.T) writerMetadataFuture {
 		tlfWriterKeyGenerationsFuture{&wkb},
 		&writerMetadataExtraFuture{
 			WriterMetadataExtra{
+				// This needs to be list format so it fails to compile if new
+				// fields are added, effectively checking at compile time
+				// whether new fields have been added
+				nil,
 				codec.UnknownFieldSet{},
 			},
 			makeExtraOrBust("WriterMetadata", t),
@@ -300,6 +307,9 @@ func makeFakeRootMetadataFuture(t *testing.T) rootMetadataFuture {
 		wmf,
 		rootMetadataCurrentWrapper{
 			rootMetadataCurrent{
+				// This needs to be list format so it fails to compile if new
+				// fields are added, effectively checking at compile time
+				// whether new fields have been added
 				WriterMetadata{},
 				SignatureInfo{
 					100,
@@ -310,6 +320,7 @@ func makeFakeRootMetadataFuture(t *testing.T) rootMetadataFuture {
 				0xb,
 				5,
 				MdID{h},
+				nil,
 				nil,
 				codec.UnknownFieldSet{},
 				PrivateMetadata{},

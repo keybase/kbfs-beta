@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
 	"github.com/keybase/go-codec/codec"
 	"golang.org/x/net/context"
@@ -120,6 +121,7 @@ type WriterMetadata struct {
 // WriterMetadataExtra stores more fields for WriterMetadata. (See
 // WriterMetadata comments as to why this type is needed.)
 type WriterMetadataExtra struct {
+	UnresolvedWriters []libkb.SocialAssertion `codec:"uw,omitempty"`
 	codec.UnknownFieldSet
 }
 
@@ -138,20 +140,15 @@ func (wm WriterMetadata) deepCopyHelper(f copyFields) WriterMetadata {
 		copy(wmCopy.Writers, wm.Writers)
 	}
 	wmCopy.WKeys = wm.WKeys.deepCopyHelper(f)
+
 	// Maintain the invariant that Extra is either non-empty or
 	// nil.
-	//
-	// TODO: Once WriterMetadataExtra picks up a field, this needs
-	// to be changed to
-	//
-	// if wm.Extra != nil {
-	//   ...
-	// }
-	if wm.Extra != nil && f == allFields {
+	wmCopy.Extra = nil
+	if wm.Extra != nil {
 		extraCopy := wm.Extra.deepCopyHelper(f)
-		wmCopy.Extra = &extraCopy
-	} else {
-		wmCopy.Extra = nil
+		if !extraCopy.isEmpty() {
+			wmCopy.Extra = &extraCopy
+		}
 	}
 	return wmCopy
 }
@@ -160,6 +157,10 @@ func (wm WriterMetadata) deepCopyHelper(f copyFields) WriterMetadata {
 // without unknown fields.
 func (wme WriterMetadataExtra) deepCopyHelper(f copyFields) WriterMetadataExtra {
 	wmeCopy := wme
+	if wme.UnresolvedWriters != nil {
+		wmeCopy.UnresolvedWriters = make([]libkb.SocialAssertion, len(wme.UnresolvedWriters))
+		copy(wmeCopy.UnresolvedWriters, wme.UnresolvedWriters)
+	}
 	if f == allFields {
 		wmeCopy.UnknownFieldSet = wme.UnknownFieldSet.DeepCopy()
 	} else {
@@ -224,6 +225,11 @@ func (wme WriterMetadataExtra) Equals(rhs WriterMetadataExtra) bool {
 	return reflect.DeepEqual(wme, rhs)
 }
 
+func (wme WriterMetadataExtra) isEmpty() bool {
+	return len(wme.UnresolvedWriters) == 0 &&
+		reflect.DeepEqual(wme.UnknownFieldSet, codec.UnknownFieldSet{})
+}
+
 // RootMetadata is the MD that is signed by the reader or writer.
 type RootMetadata struct {
 	// The metadata that is only editable by the writer.
@@ -251,6 +257,8 @@ type RootMetadata struct {
 	// WriterMetadata.WKeys. If there are no readers, each generation
 	// is empty.
 	RKeys TLFReaderKeyGenerations `codec:",omitempty"`
+	// For private TLFs. Any unresolved social assertions for readers.
+	UnresolvedReaders []libkb.SocialAssertion `codec:"ur,omitempty"`
 
 	codec.UnknownFieldSet
 
@@ -274,6 +282,10 @@ func (md RootMetadata) deepCopyHelper(f copyFields) RootMetadata {
 	mdCopy.WriterMetadata = md.WriterMetadata.deepCopyHelper(f)
 	mdCopy.WriterMetadataSigInfo = md.WriterMetadataSigInfo.DeepCopy()
 	mdCopy.RKeys = md.RKeys.deepCopyHelper(f)
+	if md.UnresolvedReaders != nil {
+		mdCopy.UnresolvedReaders = make([]libkb.SocialAssertion, len(md.UnresolvedReaders))
+		copy(mdCopy.UnresolvedReaders, md.UnresolvedReaders)
+	}
 	if f == allFields {
 		mdCopy.UnknownFieldSet = md.UnknownFieldSet.DeepCopy()
 	} else {
