@@ -20,18 +20,13 @@ type PrivateMetadata struct {
 	TLFPrivateKey TLFPrivateKey
 	// The block changes done as part of the update that created this MD
 	Changes BlockChanges
+
+	codec.UnknownFieldSetHandler
+
 	// When the above Changes field gets unembedded into its own
 	// block, we may want to temporarily keep around the old
 	// BlockChanges for easy reference.
 	cachedChanges BlockChanges
-}
-
-// Equals returns true if the given PrivateMetadata is equal to this
-// PrivateMetadata.
-func (pm PrivateMetadata) Equals(other PrivateMetadata) bool {
-	return pm.Dir == other.Dir &&
-		pm.TLFPrivateKey == other.TLFPrivateKey &&
-		pm.Changes.Equals(other.Changes)
 }
 
 // MetadataFlags bitfield.

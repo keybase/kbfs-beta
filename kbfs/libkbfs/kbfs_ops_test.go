@@ -11,6 +11,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
+	"github.com/keybase/go-codec/codec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/context"
@@ -577,6 +578,18 @@ func makeBI(id BlockID, rmd *RootMetadata, config Config,
 	return BlockInfo{
 		BlockPointer: makeBP(id, rmd, config, u),
 		EncodedSize:  encodedSize,
+	}
+}
+
+func makeIFP(id BlockID, rmd *RootMetadata, config Config,
+	u keybase1.UID, encodedSize uint32, off int64) IndirectFilePtr {
+	return IndirectFilePtr{
+		BlockInfo{
+			BlockPointer: makeBP(id, rmd, config, u),
+			EncodedSize:  encodedSize,
+		},
+		off,
+		codec.UnknownFieldSetHandler{},
 	}
 }
 
@@ -1646,10 +1659,10 @@ func TestKBFSOpRemoveMultiBlockFileSuccess(t *testing.T) {
 	fileBlock := NewFileBlock().(*FileBlock)
 	fileBlock.IsInd = true
 	fileBlock.IPtrs = []IndirectFilePtr{
-		{makeBI(id1, rmd, config, uid, 5), 0},
-		{makeBI(id2, rmd, config, uid, 5), 5},
-		{makeBI(id3, rmd, config, uid, 5), 10},
-		{makeBI(id4, rmd, config, uid, 5), 15},
+		makeIFP(id1, rmd, config, uid, 5, 0),
+		makeIFP(id2, rmd, config, uid, 5, 5),
+		makeIFP(id3, rmd, config, uid, 5, 10),
+		makeIFP(id4, rmd, config, uid, 5, 15),
 	}
 	block1 := NewFileBlock().(*FileBlock)
 	block1.Contents = []byte{5, 4, 3, 2, 1}
@@ -2514,10 +2527,10 @@ func TestKBFSOpsCacheReadFullMultiBlockSuccess(t *testing.T) {
 	fileBlock := NewFileBlock().(*FileBlock)
 	fileBlock.IsInd = true
 	fileBlock.IPtrs = []IndirectFilePtr{
-		{makeBI(id1, rmd, config, u, 0), 0},
-		{makeBI(id2, rmd, config, u, 6), 5},
-		{makeBI(id3, rmd, config, u, 7), 10},
-		{makeBI(id4, rmd, config, u, 8), 15},
+		makeIFP(id1, rmd, config, u, 0, 0),
+		makeIFP(id2, rmd, config, u, 6, 5),
+		makeIFP(id3, rmd, config, u, 7, 10),
+		makeIFP(id4, rmd, config, u, 8, 15),
 	}
 	block1 := NewFileBlock().(*FileBlock)
 	block1.Contents = []byte{5, 4, 3, 2, 1}
@@ -2568,10 +2581,10 @@ func TestKBFSOpsCacheReadPartialMultiBlockSuccess(t *testing.T) {
 	fileBlock := NewFileBlock().(*FileBlock)
 	fileBlock.IsInd = true
 	fileBlock.IPtrs = []IndirectFilePtr{
-		{makeBI(id1, rmd, config, u, 0), 0},
-		{makeBI(id2, rmd, config, u, 6), 5},
-		{makeBI(id3, rmd, config, u, 7), 10},
-		{makeBI(id4, rmd, config, u, 8), 15},
+		makeIFP(id1, rmd, config, u, 0, 0),
+		makeIFP(id2, rmd, config, u, 6, 5),
+		makeIFP(id3, rmd, config, u, 7, 10),
+		makeIFP(id4, rmd, config, u, 8, 15),
 	}
 	block1 := NewFileBlock().(*FileBlock)
 	block1.Contents = []byte{5, 4, 3, 2, 1}
@@ -2692,7 +2705,7 @@ func TestKBFSOpsServerReadFailNoSuchBlock(t *testing.T) {
 	}
 }
 
-func checkSyncOp(t *testing.T, so *syncOp, filePtr BlockPointer,
+func checkSyncOp(t *testing.T, codec Codec, so *syncOp, filePtr BlockPointer,
 	writes []WriteRange) {
 	if so == nil {
 		t.Error("No sync info for written file!")
@@ -2706,24 +2719,28 @@ func checkSyncOp(t *testing.T, so *syncOp, filePtr BlockPointer,
 			len(so.Writes), len(writes))
 	}
 	for i, w := range writes {
-		if so.Writes[i] != w {
+		writeEqual, err := CodecEqual(codec, so.Writes[i], w)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !writeEqual {
 			t.Errorf("Unexpected write: %v vs %v", so.Writes[i], w)
 		}
 	}
 }
 
-func checkSyncOpInCache(t *testing.T, ops *folderBranchOps,
+func checkSyncOpInCache(t *testing.T, codec Codec, ops *folderBranchOps,
 	filePtr BlockPointer, writes []WriteRange) {
 	// check the in-progress syncOp
 	si, ok := ops.blocks.unrefCache[filePtr.ref()]
 	if !ok {
 		t.Error("No sync info for written file!")
 	}
-	checkSyncOp(t, si.op, filePtr, writes)
+	checkSyncOp(t, codec, si.op, filePtr, writes)
 }
 
 func updateWithDirtyEntries(ctx context.Context, ops *folderBranchOps,
-	lState *lockState, block *DirBlock) *DirBlock {
+	lState *lockState, block *DirBlock) (*DirBlock, error) {
 	ops.blocks.blockLock.RLock(lState)
 	defer ops.blocks.blockLock.RUnlock(lState)
 	return ops.blocks.updateWithDirtyEntriesLocked(ctx, lState, block)
@@ -2771,7 +2788,8 @@ func TestKBFSOpsWriteNewBlockSuccess(t *testing.T) {
 		p.Branch)
 	newRootBlock := getDirBlockFromCache(t, config, node.BlockPointer, p.Branch)
 	lState := makeFBOLockState()
-	newRootBlock = updateWithDirtyEntries(ctx, ops, lState, newRootBlock)
+	newRootBlock, err := updateWithDirtyEntries(ctx, ops, lState, newRootBlock)
+	require.Nil(t, err)
 
 	if len(ops.nodeCache.PathFromNode(config.observer.localChange).path) !=
 		len(p.path) {
@@ -2793,8 +2811,8 @@ func TestKBFSOpsWriteNewBlockSuccess(t *testing.T) {
 		map[BlockPointer]BranchName{
 			fileNode.BlockPointer: p.Branch,
 		})
-	checkSyncOpInCache(t, ops, fileNode.BlockPointer,
-		[]WriteRange{{0, uint64(len(data))}})
+	checkSyncOpInCache(t, config.Codec(), ops, fileNode.BlockPointer,
+		[]WriteRange{{Off: 0, Len: uint64(len(data))}})
 }
 
 func TestKBFSOpsWriteExtendSuccess(t *testing.T) {
@@ -2854,8 +2872,8 @@ func TestKBFSOpsWriteExtendSuccess(t *testing.T) {
 		map[BlockPointer]BranchName{
 			fileNode.BlockPointer: p.Branch,
 		})
-	checkSyncOpInCache(t, ops, fileNode.BlockPointer,
-		[]WriteRange{{5, uint64(len(data))}})
+	checkSyncOpInCache(t, config.Codec(), ops, fileNode.BlockPointer,
+		[]WriteRange{{Off: 5, Len: uint64(len(data))}})
 }
 
 func TestKBFSOpsWritePastEndSuccess(t *testing.T) {
@@ -2915,8 +2933,8 @@ func TestKBFSOpsWritePastEndSuccess(t *testing.T) {
 		map[BlockPointer]BranchName{
 			fileNode.BlockPointer: p.Branch,
 		})
-	checkSyncOpInCache(t, ops, fileNode.BlockPointer,
-		[]WriteRange{{7, uint64(len(data))}})
+	checkSyncOpInCache(t, config.Codec(), ops, fileNode.BlockPointer,
+		[]WriteRange{{Off: 7, Len: uint64(len(data))}})
 }
 
 func TestKBFSOpsWriteCauseSplit(t *testing.T) {
@@ -2978,7 +2996,8 @@ func TestKBFSOpsWriteCauseSplit(t *testing.T) {
 	b, _ := config.BlockCache().Get(node.BlockPointer, p.Branch)
 	newRootBlock := b.(*DirBlock)
 	lState := makeFBOLockState()
-	newRootBlock = updateWithDirtyEntries(ctx, ops, lState, newRootBlock)
+	newRootBlock, err := updateWithDirtyEntries(ctx, ops, lState, newRootBlock)
+	require.Nil(t, err)
 
 	b, _ = config.BlockCache().Get(fileNode.BlockPointer, p.Branch)
 	pblock := b.(*FileBlock)
@@ -3025,8 +3044,8 @@ func TestKBFSOpsWriteCauseSplit(t *testing.T) {
 			pblock.IPtrs[0].BlockPointer: p.Branch,
 			pblock.IPtrs[1].BlockPointer: p.Branch,
 		})
-	checkSyncOpInCache(t, ops, fileNode.BlockPointer,
-		[]WriteRange{{1, uint64(len(newData))}})
+	checkSyncOpInCache(t, config.Codec(), ops, fileNode.BlockPointer,
+		[]WriteRange{{Off: 1, Len: uint64(len(newData))}})
 }
 
 func mergeUnrefCache(
@@ -3059,8 +3078,8 @@ func TestKBFSOpsWriteOverMultipleBlocks(t *testing.T) {
 	fileBlock := NewFileBlock().(*FileBlock)
 	fileBlock.IsInd = true
 	fileBlock.IPtrs = []IndirectFilePtr{
-		{makeBI(id1, rmd, config, uid, 5), 0},
-		{makeBI(id2, rmd, config, uid, 6), 5},
+		makeIFP(id1, rmd, config, uid, 5, 0),
+		makeIFP(id2, rmd, config, uid, 6, 5),
 	}
 	block1 := NewFileBlock().(*FileBlock)
 	block1.Contents = []byte{5, 4, 3, 2, 1}
@@ -3118,8 +3137,8 @@ func TestKBFSOpsWriteOverMultipleBlocks(t *testing.T) {
 	lState := makeFBOLockState()
 
 	// merge the unref cache to make it easy to check for changes
-	checkSyncOpInCache(t, ops, fileNode.BlockPointer,
-		[]WriteRange{{2, uint64(len(data))}})
+	checkSyncOpInCache(t, config.Codec(), ops, fileNode.BlockPointer,
+		[]WriteRange{{Off: 2, Len: uint64(len(data))}})
 	mergeUnrefCache(ops, lState, p, rmd)
 	checkBlockCache(t, config, []BlockID{rootID, fileID, id1, id2},
 		map[BlockPointer]BranchName{
@@ -3208,7 +3227,8 @@ func TestKBFSOpsTruncateToZeroSuccess(t *testing.T) {
 		p.Branch)
 	newRootBlock := getDirBlockFromCache(t, config, node.BlockPointer, p.Branch)
 	lState := makeFBOLockState()
-	newRootBlock = updateWithDirtyEntries(ctx, ops, lState, newRootBlock)
+	newRootBlock, err := updateWithDirtyEntries(ctx, ops, lState, newRootBlock)
+	require.Nil(t, err)
 
 	if len(ops.nodeCache.PathFromNode(config.observer.localChange).path) !=
 		len(p.path) {
@@ -3230,8 +3250,8 @@ func TestKBFSOpsTruncateToZeroSuccess(t *testing.T) {
 		map[BlockPointer]BranchName{
 			fileNode.BlockPointer: p.Branch,
 		})
-	checkSyncOpInCache(t, ops, fileNode.BlockPointer,
-		[]WriteRange{{0, 0}})
+	checkSyncOpInCache(t, config.Codec(), ops, fileNode.BlockPointer,
+		[]WriteRange{{Off: 0, Len: 0}})
 }
 
 func TestKBFSOpsTruncateSameSize(t *testing.T) {
@@ -3323,8 +3343,8 @@ func TestKBFSOpsTruncateSmallerSuccess(t *testing.T) {
 		map[BlockPointer]BranchName{
 			fileNode.BlockPointer: p.Branch,
 		})
-	checkSyncOpInCache(t, ops, fileNode.BlockPointer,
-		[]WriteRange{{5, 0}})
+	checkSyncOpInCache(t, config.Codec(), ops, fileNode.BlockPointer,
+		[]WriteRange{{Off: 5, Len: 0}})
 }
 
 func TestKBFSOpsTruncateShortensLastBlock(t *testing.T) {
@@ -3348,8 +3368,8 @@ func TestKBFSOpsTruncateShortensLastBlock(t *testing.T) {
 	fileBlock := NewFileBlock().(*FileBlock)
 	fileBlock.IsInd = true
 	fileBlock.IPtrs = []IndirectFilePtr{
-		{makeBI(id1, rmd, config, uid, 5), 0},
-		{makeBI(id2, rmd, config, uid, 6), 5},
+		makeIFP(id1, rmd, config, uid, 5, 0),
+		makeIFP(id2, rmd, config, uid, 6, 5),
 	}
 	block1 := NewFileBlock().(*FileBlock)
 	block1.Contents = []byte{5, 4, 3, 2, 1}
@@ -3382,8 +3402,8 @@ func TestKBFSOpsTruncateShortensLastBlock(t *testing.T) {
 	lState := makeFBOLockState()
 
 	// merge unref changes so we can easily check the block changes
-	checkSyncOpInCache(t, ops, fileNode.BlockPointer,
-		[]WriteRange{{7, 0}})
+	checkSyncOpInCache(t, config.Codec(), ops, fileNode.BlockPointer,
+		[]WriteRange{{Off: 7, Len: 0}})
 	mergeUnrefCache(ops, lState, p, rmd)
 
 	if len(ops.nodeCache.PathFromNode(config.observer.localChange).path) !=
@@ -3432,8 +3452,8 @@ func TestKBFSOpsTruncateRemovesABlock(t *testing.T) {
 	fileBlock := NewFileBlock().(*FileBlock)
 	fileBlock.IsInd = true
 	fileBlock.IPtrs = []IndirectFilePtr{
-		{makeBI(id1, rmd, config, uid, 5), 0},
-		{makeBI(id2, rmd, config, uid, 6), 5},
+		makeIFP(id1, rmd, config, uid, 5, 0),
+		makeIFP(id2, rmd, config, uid, 6, 5),
 	}
 	block1 := NewFileBlock().(*FileBlock)
 	block1.Contents = []byte{5, 4, 3, 2, 1}
@@ -3463,8 +3483,8 @@ func TestKBFSOpsTruncateRemovesABlock(t *testing.T) {
 	lState := makeFBOLockState()
 
 	// merge unref changes so we can easily check the block changes
-	checkSyncOpInCache(t, ops, fileNode.BlockPointer,
-		[]WriteRange{{4, 0}})
+	checkSyncOpInCache(t, config.Codec(), ops, fileNode.BlockPointer,
+		[]WriteRange{{Off: 4, Len: 0}})
 	mergeUnrefCache(ops, lState, p, rmd)
 
 	if len(ops.nodeCache.PathFromNode(config.observer.localChange).path) !=
@@ -3548,8 +3568,8 @@ func TestKBFSOpsTruncateBiggerSuccess(t *testing.T) {
 		})
 	// A truncate past the end of the file actually translates into a
 	// write for the difference
-	checkSyncOpInCache(t, ops, fileNode.BlockPointer,
-		[]WriteRange{{5, 5}})
+	checkSyncOpInCache(t, config.Codec(), ops, fileNode.BlockPointer,
+		[]WriteRange{{Off: 5, Len: 5}})
 }
 
 func testSetExSuccess(t *testing.T, entryType EntryType, ex bool) {
@@ -3924,7 +3944,8 @@ func testSyncDirtySuccess(t *testing.T, isUnmerged bool) {
 			fileUpdate)
 	}
 	// make sure the write is propagated
-	checkSyncOp(t, so, aNode.BlockPointer, []WriteRange{{0, 10}})
+	checkSyncOp(t, config.Codec(), so,
+		aNode.BlockPointer, []WriteRange{{Off: 0, Len: 10}})
 }
 
 func TestSyncDirtySuccess(t *testing.T) {
@@ -4030,11 +4051,11 @@ func TestSyncDirtyMultiBlocksSuccess(t *testing.T) {
 	fileBlock := NewFileBlock().(*FileBlock)
 	fileBlock.IsInd = true
 	fileBlock.IPtrs = []IndirectFilePtr{
-		{makeBI(id1, rmd, config, uid, 5), 0},
-		{makeBI(id2, rmd, config,
-			keybase1.MakeTestUID(0), 0), 5},
-		{makeBI(id3, rmd, config, uid, 7), 10},
-		{makeBI(id4, rmd, config, uid, 0), 15},
+		makeIFP(id1, rmd, config, uid, 5, 0),
+		makeIFP(id2, rmd, config,
+			keybase1.MakeTestUID(0), 0, 5),
+		makeIFP(id3, rmd, config, uid, 7, 10),
+		makeIFP(id4, rmd, config, uid, 0, 15),
 	}
 	block1 := NewFileBlock().(*FileBlock)
 	block1.Contents = []byte{5, 4, 3, 2, 1}
@@ -4233,7 +4254,8 @@ func TestSyncDirtyDupBlockSuccess(t *testing.T) {
 			fileUpdate)
 	}
 	// make sure the write is propagated
-	checkSyncOp(t, so, bNode.BlockPointer, []WriteRange{{0, 10}})
+	checkSyncOp(t, config.Codec(), so,
+		bNode.BlockPointer, []WriteRange{{Off: 0, Len: 10}})
 }
 
 func putAndCleanAnyBlock(config *ConfigMock, p path) {
@@ -4276,10 +4298,10 @@ func TestSyncDirtyMultiBlocksSplitInBlockSuccess(t *testing.T) {
 	fileBlock := NewFileBlock().(*FileBlock)
 	fileBlock.IsInd = true
 	fileBlock.IPtrs = []IndirectFilePtr{
-		{makeBI(id1, rmd, config, uid, 10), 0},
-		{makeBI(id2, rmd, config, uid, 0), 5},
-		{makeBI(id3, rmd, config, uid, 0), 10},
-		{makeBI(id4, rmd, config, uid, 0), 15},
+		makeIFP(id1, rmd, config, uid, 10, 0),
+		makeIFP(id2, rmd, config, uid, 0, 5),
+		makeIFP(id3, rmd, config, uid, 0, 10),
+		makeIFP(id4, rmd, config, uid, 0, 15),
 	}
 	block1 := NewFileBlock().(*FileBlock)
 	block1.Contents = []byte{5, 4, 3, 2, 1}
@@ -4462,10 +4484,10 @@ func TestSyncDirtyMultiBlocksCopyNextBlockSuccess(t *testing.T) {
 	fileBlock := NewFileBlock().(*FileBlock)
 	fileBlock.IsInd = true
 	fileBlock.IPtrs = []IndirectFilePtr{
-		{makeBI(id1, rmd, config, uid, 0), 0},
-		{makeBI(id2, rmd, config, uid, 10), 5},
-		{makeBI(id3, rmd, config, uid, 0), 10},
-		{makeBI(id4, rmd, config, uid, 15), 15},
+		makeIFP(id1, rmd, config, uid, 0, 0),
+		makeIFP(id2, rmd, config, uid, 10, 5),
+		makeIFP(id3, rmd, config, uid, 0, 10),
+		makeIFP(id4, rmd, config, uid, 15, 15),
 	}
 	block1 := NewFileBlock().(*FileBlock)
 	block1.Contents = []byte{5, 4, 3, 2, 1}
