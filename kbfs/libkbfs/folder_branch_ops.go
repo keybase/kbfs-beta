@@ -434,10 +434,7 @@ func (fbo *folderBranchOps) deleteFromFavorites(ctx context.Context,
 	}
 
 	h := head.GetTlfHandle()
-	if err := favorites.Delete(ctx, h.ToFavorite(ctx, fbo.config)); err != nil {
-		return err
-	}
-	return nil
+	return favorites.Delete(ctx, h.ToFavorite(ctx, fbo.config))
 }
 
 // getStaged should not be called if mdWriterLock is already taken.
@@ -670,7 +667,7 @@ func (fbo *folderBranchOps) getMDForWriteLocked(
 		return nil, err
 	}
 
-	return &newMd, nil
+	return newMd, nil
 }
 
 func (fbo *folderBranchOps) getMDForRekeyWriteLocked(
@@ -706,7 +703,7 @@ func (fbo *folderBranchOps) getMDForRekeyWriteLocked(
 			NewRekeyPermissionError(ctx, fbo.config, handle, username)
 	}
 
-	return &newMd, md.IsRekeySet(), nil
+	return newMd, md.IsRekeySet(), nil
 }
 
 func (fbo *folderBranchOps) nowUnixNano() int64 {
