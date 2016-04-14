@@ -665,37 +665,51 @@ func (m MergeStatus) String() string {
 	}
 }
 
-//UsageStat is a tuple containing quota usage and amount of archived bytes
+// UsageType indicates the type of usage that quota manager is keeping stats of
+type UsageType int
+
+const (
+	// UsageWrite indicates a block is written (written blocks include archived blocks)
+	UsageWrite UsageType = iota
+	// UsageArchive indicates an existing block is archived
+	UsageArchive
+	// UsageRead indicates a block is read
+	UsageRead
+	// NumUsage indicates the number of usage types
+	NumUsage
+)
+
+// UsageStat tracks the amount of bytes/blocks used, broken down by usage types
 type UsageStat struct {
-	UsageBytes     int64
-	UsageBlocks    int64
-	ArchivedBytes  int64
-	ArchivedBlocks int64
+	Bytes  map[UsageType]int64
+	Blocks map[UsageType]int64
 	// Mtime is in unix nanoseconds
 	Mtime int64
+}
+
+// NewUsageStat creates a new UsageStat
+func NewUsageStat() *UsageStat {
+	return &UsageStat{
+		Bytes:  make(map[UsageType]int64),
+		Blocks: make(map[UsageType]int64),
+	}
 }
 
 //AccumOne records the usage of one block, whose size is denoted by change
 //A positive change means the block is newly added, negative means the block
 //is deleted. If archive is true, it means the block is archived.
-func (u *UsageStat) AccumOne(change int, archived bool) {
+func (u *UsageStat) AccumOne(change int, usage UsageType) {
 	if change == 0 {
 		return
 	}
-	if archived {
-		u.ArchivedBytes += int64(change)
-		if change > 0 {
-			u.ArchivedBlocks++
-		} else {
-			u.ArchivedBlocks--
-		}
+	if usage < UsageWrite || usage > UsageRead {
+		return
+	}
+	u.Bytes[usage] += int64(change)
+	if change > 0 {
+		u.Blocks[usage]++
 	} else {
-		u.UsageBytes += int64(change)
-		if change > 0 {
-			u.UsageBlocks++
-		} else {
-			u.UsageBlocks--
-		}
+		u.Blocks[usage]--
 	}
 }
 
@@ -704,13 +718,15 @@ func (u *UsageStat) Accum(another *UsageStat, accumF func(int64, int64) int64) {
 	if another == nil {
 		return
 	}
-	u.UsageBytes = accumF(u.UsageBytes, another.UsageBytes)
-	u.UsageBlocks = accumF(u.UsageBlocks, another.UsageBlocks)
-	u.ArchivedBytes = accumF(u.ArchivedBytes, another.ArchivedBytes)
-	u.ArchivedBlocks = accumF(u.ArchivedBlocks, another.ArchivedBlocks)
+	for k, v := range another.Bytes {
+		u.Bytes[k] = accumF(u.Bytes[k], v)
+	}
+	for k, v := range another.Blocks {
+		u.Blocks[k] = accumF(u.Blocks[k], v)
+	}
 }
 
-//UserQuotaInfo contains a user's quota usage information
+// UserQuotaInfo contains a user's quota usage information
 type UserQuotaInfo struct {
 	Folders map[string]*UsageStat
 	Total   *UsageStat
@@ -718,12 +734,12 @@ type UserQuotaInfo struct {
 }
 
 // AccumOne combines one quota charge to the existing UserQuotaInfo
-func (u *UserQuotaInfo) AccumOne(change int, folder string, archived bool) {
+func (u *UserQuotaInfo) AccumOne(change int, folder string, usage UsageType) {
 	if _, ok := u.Folders[folder]; !ok {
-		u.Folders[folder] = &UsageStat{}
+		u.Folders[folder] = NewUsageStat()
 	}
-	u.Folders[folder].AccumOne(change, archived)
-	u.Total.AccumOne(change, archived)
+	u.Folders[folder].AccumOne(change, usage)
+	u.Total.AccumOne(change, usage)
 }
 
 // Accum combines changes to the existing UserQuotaInfo object using accumulation function accumF.
@@ -731,10 +747,13 @@ func (u *UserQuotaInfo) Accum(another *UserQuotaInfo, accumF func(int64, int64) 
 	if another == nil {
 		return
 	}
+	if u.Total == nil {
+		u.Total = NewUsageStat()
+	}
 	u.Total.Accum(another.Total, accumF)
 	for f, change := range another.Folders {
 		if _, ok := u.Folders[f]; !ok {
-			u.Folders[f] = &UsageStat{}
+			u.Folders[f] = NewUsageStat()
 		}
 		u.Folders[f].Accum(change, accumF)
 	}
