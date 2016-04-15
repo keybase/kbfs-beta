@@ -96,7 +96,8 @@ func MakeTestConfigOrBust(t logger.TestLogBackend,
 	localUsers := MakeLocalUsers(users)
 	loggedInUser := localUsers[0]
 
-	daemon := NewKeybaseDaemonMemory(loggedInUser.UID, localUsers)
+	daemon := NewKeybaseDaemonMemory(loggedInUser.UID, localUsers,
+		config.Codec())
 	config.SetKeybaseDaemon(daemon)
 
 	kbpki := NewKBPKIClient(config)
@@ -196,7 +197,7 @@ func ConfigAsUser(config *ConfigLocal, loggedInUser libkb.NormalizedUsername) *C
 	for _, u := range daemon.localUsers {
 		localUsers = append(localUsers, u)
 	}
-	newDaemon := NewKeybaseDaemonMemory(loggedInUID, localUsers)
+	newDaemon := NewKeybaseDaemonMemory(loggedInUID, localUsers, c.Codec())
 	c.SetKeybaseDaemon(newDaemon)
 	c.SetKBPKI(NewKBPKIClient(c))
 
@@ -320,29 +321,27 @@ func keySaltForUserDevice(name libkb.NormalizedUsername,
 	return name
 }
 
+func makeFakeKeys(name libkb.NormalizedUsername, index int) (
+	CryptPublicKey, VerifyingKey) {
+	keySalt := keySaltForUserDevice(name, index)
+	newCryptPublicKey := MakeLocalUserCryptPublicKeyOrBust(keySalt)
+	newVerifyingKey := MakeLocalUserVerifyingKeyOrBust(keySalt)
+	return newCryptPublicKey, newVerifyingKey
+}
+
 // AddDeviceForLocalUserOrBust creates a new device for a user and
 // returns the index for that device.
 func AddDeviceForLocalUserOrBust(t logger.TestLogBackend, config Config,
 	uid keybase1.UID) int {
 	kbd, ok := config.KeybaseDaemon().(*KeybaseDaemonLocal)
 	if !ok {
-		t.Fatalf("Bad keybase daemon")
+		t.Fatal("Bad keybase daemon")
 	}
 
-	user, err := kbd.getLocalUser(uid)
+	index, err := kbd.addDeviceForTesting(uid, makeFakeKeys)
 	if err != nil {
-		t.Fatalf("No such user %s: %v", uid, err)
+		t.Fatal(err.Error())
 	}
-
-	index := len(user.VerifyingKeys)
-	keySalt := keySaltForUserDevice(user.Name, index)
-	newVerifyingKey := MakeLocalUserVerifyingKeyOrBust(keySalt)
-	user.VerifyingKeys = append(user.VerifyingKeys, newVerifyingKey)
-	newCryptPublicKey := MakeLocalUserCryptPublicKeyOrBust(keySalt)
-	user.CryptPublicKeys = append(user.CryptPublicKeys, newCryptPublicKey)
-
-	kbd.setLocalUser(uid, user)
-
 	return index
 }
 
@@ -352,86 +351,39 @@ func RevokeDeviceForLocalUserOrBust(t logger.TestLogBackend, config Config,
 	uid keybase1.UID, index int) {
 	kbd, ok := config.KeybaseDaemon().(*KeybaseDaemonLocal)
 	if !ok {
-		t.Fatalf("Bad keybase daemon")
+		t.Fatal("Bad keybase daemon")
 	}
 
-	user, err := kbd.getLocalUser(uid)
-	if err != nil {
-		t.Fatalf("No such user %s: %v", uid, err)
+	if err := kbd.revokeDeviceForTesting(
+		config.Clock(), uid, index); err != nil {
+		t.Fatal(err.Error())
 	}
-
-	if index >= len(user.VerifyingKeys) ||
-		(kbd.currentUID == uid && index == user.CurrentCryptPublicKeyIndex) {
-		t.Fatalf("Can't revoke index %d", index)
-	}
-
-	if user.RevokedVerifyingKeys == nil {
-		user.RevokedVerifyingKeys = make(map[VerifyingKey]keybase1.KeybaseTime)
-	}
-	if user.RevokedCryptPublicKeys == nil {
-		user.RevokedCryptPublicKeys =
-			make(map[CryptPublicKey]keybase1.KeybaseTime)
-	}
-
-	kbtime := keybase1.KeybaseTime{
-		Unix:  keybase1.ToTime(config.Clock().Now()),
-		Chain: 100,
-	}
-	user.RevokedVerifyingKeys[user.VerifyingKeys[index]] = kbtime
-	user.RevokedCryptPublicKeys[user.CryptPublicKeys[index]] = kbtime
-
-	user.VerifyingKeys = append(user.VerifyingKeys[:index],
-		user.VerifyingKeys[index+1:]...)
-	user.CryptPublicKeys = append(user.CryptPublicKeys[:index],
-		user.CryptPublicKeys[index+1:]...)
-
-	if kbd.currentUID == uid && index < user.CurrentCryptPublicKeyIndex {
-		user.CurrentCryptPublicKeyIndex--
-	}
-	if kbd.currentUID == uid && index < user.CurrentVerifyingKeyIndex {
-		user.CurrentVerifyingKeyIndex--
-	}
-
-	kbd.setLocalUser(uid, user)
 }
 
 // SwitchDeviceForLocalUserOrBust switches the current user's current device
 func SwitchDeviceForLocalUserOrBust(t logger.TestLogBackend, config Config, index int) {
-	_, uid, err := config.KBPKI().GetCurrentUserInfo(context.Background())
+	name, uid, err := config.KBPKI().GetCurrentUserInfo(context.Background())
 	if err != nil {
 		t.Fatalf("Couldn't get UID: %v", err)
 	}
 
 	kbd, ok := config.KeybaseDaemon().(*KeybaseDaemonLocal)
 	if !ok {
-		t.Fatalf("Bad keybase daemon")
+		t.Fatal("Bad keybase daemon")
 	}
 
-	user, err := kbd.getLocalUser(uid)
-	if err != nil {
-		t.Fatalf("No such user %s: %v", uid, err)
+	if err := kbd.switchDeviceForTesting(uid, index); err != nil {
+		t.Fatal(err.Error())
 	}
 
-	if index >= len(user.CryptPublicKeys) {
-		t.Fatalf("Wrong crypt public key index: %d", index)
-	}
-	user.CurrentCryptPublicKeyIndex = index
-
-	if index >= len(user.VerifyingKeys) {
-		t.Fatalf("Wrong verifying key index: %d", index)
-	}
-	user.CurrentVerifyingKeyIndex = index
-
-	kbd.setLocalUser(uid, user)
-
-	crypto, ok := config.Crypto().(*CryptoLocal)
-	if !ok {
-		t.Fatalf("Bad crypto")
+	if _, ok := config.Crypto().(*CryptoLocal); !ok {
+		t.Fatal("Bad crypto")
 	}
 
-	keySalt := keySaltForUserDevice(user.Name, index)
-	crypto.signingKey = MakeLocalUserSigningKeyOrBust(keySalt)
-	crypto.cryptPrivateKey = MakeLocalUserCryptPrivateKeyOrBust(keySalt)
+	keySalt := keySaltForUserDevice(name, index)
+	signingKey := MakeLocalUserSigningKeyOrBust(keySalt)
+	cryptPrivateKey := MakeLocalUserCryptPrivateKeyOrBust(keySalt)
+	config.SetCrypto(NewCryptoLocal(config, signingKey, cryptPrivateKey))
 }
 
 func testWithCanceledContext(t logger.TestLogBackend, ctx context.Context,
