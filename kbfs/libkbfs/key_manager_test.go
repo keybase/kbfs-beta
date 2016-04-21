@@ -141,7 +141,7 @@ func TestKeyManagerCachedSecretKeyForEncryptionSuccess(t *testing.T) {
 
 	_, id, h := makeID(t, config, false)
 	rmd := NewRootMetadataForTest(h, id)
-	AddNewKeysOrBust(t, rmd, *NewTLFKeyBundle())
+	AddNewEmptyKeysOrBust(t, rmd)
 
 	expectCachedGetTLFCryptKey(config, rmd, rmd.LatestKeyGeneration())
 
@@ -157,7 +157,7 @@ func TestKeyManagerCachedSecretKeyForMDDecryptionSuccess(t *testing.T) {
 
 	_, id, h := makeID(t, config, false)
 	rmd := NewRootMetadataForTest(h, id)
-	AddNewKeysOrBust(t, rmd, *NewTLFKeyBundle())
+	AddNewEmptyKeysOrBust(t, rmd)
 
 	expectCachedGetTLFCryptKey(config, rmd, rmd.LatestKeyGeneration())
 
@@ -173,8 +173,8 @@ func TestKeyManagerCachedSecretKeyForBlockDecryptionSuccess(t *testing.T) {
 
 	_, id, h := makeID(t, config, false)
 	rmd := NewRootMetadataForTest(h, id)
-	AddNewKeysOrBust(t, rmd, *NewTLFKeyBundle())
-	AddNewKeysOrBust(t, rmd, *NewTLFKeyBundle())
+	AddNewEmptyKeysOrBust(t, rmd)
+	AddNewEmptyKeysOrBust(t, rmd)
 
 	keyGen := rmd.LatestKeyGeneration() - 1
 	expectCachedGetTLFCryptKey(config, rmd, keyGen)
@@ -193,7 +193,7 @@ func TestKeyManagerUncachedSecretKeyForEncryptionSuccess(t *testing.T) {
 	rmd := NewRootMetadataForTest(h, id)
 
 	subkey := MakeFakeCryptPublicKeyOrBust("crypt public key")
-	AddNewKeysOrBust(t, rmd, MakeDirRKeyBundle(uid, subkey))
+	AddNewKeysOrBust(t, rmd, NewEmptyTLFWriterKeyBundle(), MakeDirRKeyBundle(uid, subkey))
 
 	expectUncachedGetTLFCryptKey(config, rmd, rmd.LatestKeyGeneration(), uid, subkey, true)
 
@@ -211,7 +211,7 @@ func TestKeyManagerUncachedSecretKeyForMDDecryptionSuccess(t *testing.T) {
 	rmd := NewRootMetadataForTest(h, id)
 
 	subkey := MakeFakeCryptPublicKeyOrBust("crypt public key")
-	AddNewKeysOrBust(t, rmd, MakeDirRKeyBundle(uid, subkey))
+	AddNewKeysOrBust(t, rmd, NewEmptyTLFWriterKeyBundle(), MakeDirRKeyBundle(uid, subkey))
 
 	expectUncachedGetTLFCryptKeyAnyDevice(config, rmd, rmd.LatestKeyGeneration(), uid, subkey, false)
 
@@ -229,8 +229,8 @@ func TestKeyManagerUncachedSecretKeyForBlockDecryptionSuccess(t *testing.T) {
 	rmd := NewRootMetadataForTest(h, id)
 
 	subkey := MakeFakeCryptPublicKeyOrBust("crypt public key")
-	AddNewKeysOrBust(t, rmd, MakeDirRKeyBundle(uid, subkey))
-	AddNewKeysOrBust(t, rmd, MakeDirRKeyBundle(uid, subkey))
+	AddNewKeysOrBust(t, rmd, NewEmptyTLFWriterKeyBundle(), MakeDirRKeyBundle(uid, subkey))
+	AddNewKeysOrBust(t, rmd, NewEmptyTLFWriterKeyBundle(), MakeDirRKeyBundle(uid, subkey))
 
 	keyGen := rmd.LatestKeyGeneration() - 1
 	expectUncachedGetTLFCryptKey(config, rmd, keyGen, uid, subkey, false)
@@ -354,8 +354,11 @@ func TestKeyManagerRekeyAddAndRevokeDevice(t *testing.T) {
 		t.Errorf("Expected %d identify calls, but got %d", e, g)
 	}
 
-	// this device should be able to read now
-	root2Dev2 := GetRootNodeOrBust(t, config2Dev2, name, false)
+	// u2 syncs after the rekey
+	if err := kbfsOps2.SyncFromServerForTesting(ctx,
+		rootNode2.GetFolderBranch()); err != nil {
+		t.Fatalf("Couldn't sync from server: %v", err)
+	}
 
 	// user 2 creates another file
 	_, _, err = kbfsOps2.CreateFile(ctx, rootNode2, "c", false)
@@ -406,6 +409,9 @@ func TestKeyManagerRekeyAddAndRevokeDevice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Couldn't create file: %v", err)
 	}
+
+	// this device should be able to read now
+	root2Dev2 := GetRootNodeOrBust(t, config2Dev2, name, false)
 
 	kbfsOps2Dev2 := config2Dev2.KBFSOps()
 	err = kbfsOps2Dev2.SyncFromServerForTesting(ctx, root2Dev2.GetFolderBranch())

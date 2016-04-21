@@ -77,49 +77,33 @@ func TestPrivateMetadataUnknownFields(t *testing.T) {
 	testStructUnknownFields(t, makeFakePrivateMetadataFuture(t))
 }
 
-// Test that GetTlfHandle() generates a TlfHandle properly for public
-// TLFs if there is no cached TlfHandle.
+// Test that GetTlfHandle() works properly for public TLFs.
 func TestRootMetadataGetTlfHandlePublic(t *testing.T) {
+	h := makeTestTlfHandle(t, 14, true)
 	tlfID := FakeTlfID(0, true)
-	rmd := NewRootMetadata(nil, tlfID)
+	rmd := NewRootMetadata(h, tlfID)
 	dirHandle := rmd.GetTlfHandle()
-	if dirHandle == nil {
-		t.Fatal("nil TlfHandle")
-	}
-	if len(dirHandle.Readers) != 1 || dirHandle.Readers[0] != keybase1.PublicUID {
-		t.Errorf("Invalid reader list %v", dirHandle.Readers)
-	}
-	if len(dirHandle.Writers) != 0 {
-		t.Errorf("Invalid writer list %v", dirHandle.Writers)
-	}
+	require.Equal(t, h, dirHandle)
 }
 
-// Test that GetTlfHandle() generates a TlfHandle properly for
-// non-public TLFs if there is no cached TlfHandle.
+// Test that GetTlfHandle() works properly for non-public TLFs.
 func TestRootMetadataGetTlfHandlePrivate(t *testing.T) {
+	h := makeTestTlfHandle(t, 14, false)
 	tlfID := FakeTlfID(0, false)
-	rmd := NewRootMetadata(nil, tlfID)
-	AddNewKeysOrBust(t, rmd, *NewTLFKeyBundle())
+	rmd := NewRootMetadata(h, tlfID)
 	dirHandle := rmd.GetTlfHandle()
-	if dirHandle == nil {
-		t.Fatal("nil TlfHandle")
-	}
-	if len(dirHandle.Readers) != 0 {
-		t.Errorf("Invalid reader list %v", dirHandle.Readers)
-	}
-	if len(dirHandle.Writers) != 0 {
-		t.Errorf("Invalid writer list %v", dirHandle.Writers)
-	}
+	require.Equal(t, h, dirHandle)
 }
 
 // Test that key generations work as expected for private TLFs.
 func TestRootMetadataLatestKeyGenerationPrivate(t *testing.T) {
 	tlfID := FakeTlfID(0, false)
-	rmd := NewRootMetadata(nil, tlfID)
+	h := makeTestTlfHandle(t, 14, false)
+	rmd := NewRootMetadata(h, tlfID)
 	if rmd.LatestKeyGeneration() != 0 {
 		t.Errorf("Expected key generation to be invalid (0)")
 	}
-	AddNewKeysOrBust(t, rmd, *NewTLFKeyBundle())
+	AddNewEmptyKeysOrBust(t, rmd)
 	if rmd.LatestKeyGeneration() != FirstValidKeyGen {
 		t.Errorf("Expected key generation to be valid(%d)", FirstValidKeyGen)
 	}
@@ -128,7 +112,8 @@ func TestRootMetadataLatestKeyGenerationPrivate(t *testing.T) {
 // Test that key generations work as expected for public TLFs.
 func TestRootMetadataLatestKeyGenerationPublic(t *testing.T) {
 	tlfID := FakeTlfID(0, true)
-	rmd := NewRootMetadata(nil, tlfID)
+	h := makeTestTlfHandle(t, 14, true)
+	rmd := NewRootMetadata(h, tlfID)
 	if rmd.LatestKeyGeneration() != PublicKeyGen {
 		t.Errorf("Expected key generation to be public (%d)", PublicKeyGen)
 	}
@@ -193,7 +178,7 @@ func TestWriterMetadataEncodedFields(t *testing.T) {
 	wm := WriterMetadata{
 		ID:      FakeTlfID(0xa, false),
 		Writers: []keybase1.UID{"uid1", "uid2"},
-		WKeys:   TLFWriterKeyGenerations{nil},
+		WKeys:   TLFWriterKeyGenerations{{}},
 		Extra: WriterMetadataExtra{
 			UnresolvedWriters: []keybase1.SocialAssertion{sa1, sa2},
 		},
@@ -245,7 +230,7 @@ func (wkgf tlfWriterKeyGenerationsFuture) toCurrent() TLFWriterKeyGenerations {
 	wkg := make(TLFWriterKeyGenerations, len(wkgf))
 	for i, wkbf := range wkgf {
 		wkb := wkbf.toCurrent()
-		wkg[i] = (*TLFWriterKeyBundle)(&wkb)
+		wkg[i] = wkb
 	}
 	return wkg
 }
@@ -314,7 +299,7 @@ func (rkgf tlfReaderKeyGenerationsFuture) toCurrent() TLFReaderKeyGenerations {
 	rkg := make(TLFReaderKeyGenerations, len(rkgf))
 	for i, rkbf := range rkgf {
 		rkb := rkbf.toCurrent()
-		rkg[i] = (*TLFReaderKeyBundle)(&rkb)
+		rkg[i] = rkb
 	}
 	return rkg
 }
@@ -377,7 +362,6 @@ func makeFakeRootMetadataFuture(t *testing.T) *rootMetadataFuture {
 				[]keybase1.SocialAssertion{sa},
 				codec.UnknownFieldSetHandler{},
 				PrivateMetadata{},
-				sync.RWMutex{},
 				nil,
 				sync.RWMutex{},
 				MdID{},

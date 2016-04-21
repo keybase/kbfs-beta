@@ -1,7 +1,8 @@
 package libkbfs
 
 import (
-	"sort"
+	"errors"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -148,9 +149,9 @@ type RootMetadata struct {
 	// The plaintext, deserialized PrivateMetadata
 	data PrivateMetadata
 
-	// A cached copy of the directory handle calculated for this MD.
-	cachedTlfHandleLock sync.RWMutex
-	cachedTlfHandle     *TlfHandle
+	// The TLF handle for this MD. May be nil if this object was
+	// deserialized (more common on the server side).
+	tlfHandle *TlfHandle
 
 	// The cached ID for this MD structure (hash)
 	mdIDLock sync.RWMutex
@@ -242,6 +243,10 @@ func (md *RootMetadata) IsReader(user keybase1.UID, deviceKID keybase1.KID) bool
 }
 
 func updateNewRootMetadata(rmd *RootMetadata, d *TlfHandle, id TlfID) {
+	if d == nil {
+		panic("nil TlfHandle")
+	}
+
 	var writers []keybase1.UID
 	var wKeys TLFWriterKeyGenerations
 	var rKeys TLFReaderKeyGenerations
@@ -259,10 +264,9 @@ func updateNewRootMetadata(rmd *RootMetadata, d *TlfHandle, id TlfID) {
 	}
 	rmd.Revision = MetadataRevisionInitial
 	rmd.RKeys = rKeys
-	// need to keep the dir handle around long
-	// enough to rekey the metadata for the first
-	// time
-	rmd.cachedTlfHandle = d
+	// need to keep the dir handle around long enough to rekey the
+	// metadata for the first time
+	rmd.tlfHandle = d
 }
 
 // NewRootMetadata constructs a new RootMetadata object with the given
@@ -306,7 +310,7 @@ func (md *RootMetadata) clearLastRevision() {
 	md.Flags &= ^MetadataFlagWriterMetadataCopied
 }
 
-func (md *RootMetadata) deepCopy(codec Codec) (*RootMetadata, error) {
+func (md *RootMetadata) deepCopy(codec Codec, copyHandle bool) (*RootMetadata, error) {
 	var newMd RootMetadata
 	err := CodecUpdate(codec, &newMd, md)
 	if err != nil {
@@ -316,20 +320,32 @@ func (md *RootMetadata) deepCopy(codec Codec) (*RootMetadata, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	if copyHandle {
+		newMd.tlfHandle, err = md.tlfHandle.deepCopy(codec)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// No need to copy mdID.
+
 	return &newMd, nil
 }
 
-// DeepCopyForTest returns a complete copy of this RootMetadata for
-// testing. Non-test code should use MakeSuccessor() instead.
-func (md *RootMetadata) DeepCopyForTest(codec Codec) (*RootMetadata, error) {
-	return md.deepCopy(codec)
+// DeepCopyForServerTest returns a complete copy of this RootMetadata
+// for testing, except for tlfHandle. Non-test code should use
+// MakeSuccessor() instead.
+func (md *RootMetadata) DeepCopyForServerTest(
+	codec Codec) (*RootMetadata, error) {
+	return md.deepCopy(codec, false)
 }
 
 // MakeSuccessor returns a complete copy of this RootMetadata (but
 // with cleared block change lists and cleared serialized metadata),
 // with the revision incremented and a correct backpointer.
 func (md *RootMetadata) MakeSuccessor(config Config, isWriter bool) (*RootMetadata, error) {
-	newMd, err := md.deepCopy(config.Codec())
+	newMd, err := md.deepCopy(config.Codec(), true)
 	if err != nil {
 		return nil, err
 	}
@@ -350,23 +366,19 @@ func (md *RootMetadata) MakeSuccessor(config Config, isWriter bool) (*RootMetada
 	return newMd, nil
 }
 
-// TODO get rid of this once we're fully dependent on reader and writer metadata separately
-func (md *RootMetadata) getTLFKeyBundle(keyGen KeyGen) (*TLFKeyBundle, error) {
+func (md *RootMetadata) getTLFKeyBundles(keyGen KeyGen) (*TLFWriterKeyBundle, *TLFReaderKeyBundle, error) {
 	if md.ID.IsPublic() {
-		return nil, InvalidPublicTLFOperation{md.ID, "getTLFKeyBundle"}
+		return nil, nil, InvalidPublicTLFOperation{md.ID, "getTLFKeyBundle"}
 	}
 
 	if keyGen < FirstValidKeyGen {
-		return nil, InvalidKeyGenerationError{md.GetTlfHandle(), keyGen}
+		return nil, nil, InvalidKeyGenerationError{md.GetTlfHandle(), keyGen}
 	}
 	i := int(keyGen - FirstValidKeyGen)
 	if i >= len(md.WKeys) || i >= len(md.RKeys) {
-		return nil, NewKeyGenerationError{md.GetTlfHandle(), keyGen}
+		return nil, nil, NewKeyGenerationError{md.GetTlfHandle(), keyGen}
 	}
-	return &TLFKeyBundle{
-		md.WKeys[i],
-		md.RKeys[i],
-	}, nil
+	return &md.WKeys[i], &md.RKeys[i], nil
 }
 
 // GetTLFCryptKeyInfo returns the TLFCryptKeyInfo entry for the given user
@@ -374,24 +386,37 @@ func (md *RootMetadata) getTLFKeyBundle(keyGen KeyGen) (*TLFKeyBundle, error) {
 func (md *RootMetadata) GetTLFCryptKeyInfo(keyGen KeyGen, user keybase1.UID,
 	currentCryptPublicKey CryptPublicKey) (
 	info TLFCryptKeyInfo, ok bool, err error) {
-	tkb, err := md.getTLFKeyBundle(keyGen)
+	wkb, rkb, err := md.getTLFKeyBundles(keyGen)
 	if err != nil {
-		return
+		return TLFCryptKeyInfo{}, false, err
 	}
 
-	return tkb.GetTLFCryptKeyInfo(user, currentCryptPublicKey)
+	key := currentCryptPublicKey.kid
+	if u, ok1 := wkb.WKeys[user]; ok1 {
+		info, ok := u[key]
+		return info, ok, nil
+	} else if u, ok1 = rkb.RKeys[user]; ok1 {
+		info, ok := u[key]
+		return info, ok, nil
+	}
+	return TLFCryptKeyInfo{}, false, nil
 }
 
 // GetTLFCryptPublicKeys returns the public crypt keys for the given user
 // at the given key generation.
 func (md *RootMetadata) GetTLFCryptPublicKeys(keyGen KeyGen, user keybase1.UID) (
 	[]keybase1.KID, bool) {
-	tkb, err := md.getTLFKeyBundle(keyGen)
+	wkb, rkb, err := md.getTLFKeyBundles(keyGen)
 	if err != nil {
 		return nil, false
 	}
 
-	return tkb.GetTLFCryptPublicKeys(user)
+	if u, ok1 := wkb.WKeys[user]; ok1 {
+		return u.GetKIDs(), true
+	} else if u, ok1 = rkb.RKeys[user]; ok1 {
+		return u.GetKIDs(), true
+	}
+	return nil, false
 }
 
 // GetTLFEphemeralPublicKey returns the ephemeral public key used for
@@ -399,12 +424,26 @@ func (md *RootMetadata) GetTLFCryptPublicKeys(keyGen KeyGen, user keybase1.UID) 
 func (md *RootMetadata) GetTLFEphemeralPublicKey(
 	keyGen KeyGen, user keybase1.UID,
 	currentCryptPublicKey CryptPublicKey) (TLFEphemeralPublicKey, error) {
-	tkb, err := md.getTLFKeyBundle(keyGen)
+	wkb, rkb, err := md.getTLFKeyBundles(keyGen)
 	if err != nil {
 		return TLFEphemeralPublicKey{}, err
 	}
 
-	return tkb.GetTLFEphemeralPublicKey(user, currentCryptPublicKey)
+	info, ok, err := md.GetTLFCryptKeyInfo(
+		keyGen, user, currentCryptPublicKey)
+	if err != nil {
+		return TLFEphemeralPublicKey{}, err
+	}
+	if !ok {
+		return TLFEphemeralPublicKey{},
+			TLFEphemeralPublicKeyNotFoundError{
+				user, currentCryptPublicKey.kid}
+	}
+
+	if info.EPubKeyIndex < 0 {
+		return rkb.TLFReaderEphemeralPublicKeys[-1-info.EPubKeyIndex], nil
+	}
+	return wkb.TLFEphemeralPublicKeys[info.EPubKeyIndex], nil
 }
 
 // LatestKeyGeneration returns the newest key generation for this RootMetadata.
@@ -417,57 +456,64 @@ func (md *RootMetadata) LatestKeyGeneration() KeyGen {
 
 // AddNewKeys makes a new key generation for this RootMetadata using the
 // given TLFKeyBundle.
-func (md *RootMetadata) AddNewKeys(keys TLFKeyBundle) error {
+func (md *RootMetadata) AddNewKeys(
+	wkb TLFWriterKeyBundle, rkb TLFReaderKeyBundle) error {
 	if md.ID.IsPublic() {
 		return InvalidPublicTLFOperation{md.ID, "AddNewKeys"}
 	}
-	md.WKeys = append(md.WKeys, keys.TLFWriterKeyBundle)
-	md.RKeys = append(md.RKeys, keys.TLFReaderKeyBundle)
+	md.WKeys = append(md.WKeys, wkb)
+	md.RKeys = append(md.RKeys, rkb)
 	return nil
 }
 
-// GetTlfHandle computes and returns the TlfHandle for this
-// RootMetadata, caching it in the process.
+// GetTlfHandle returns the TlfHandle for this RootMetadata.
 func (md *RootMetadata) GetTlfHandle() *TlfHandle {
-	cachedTlfHandle := func() *TlfHandle {
-		md.cachedTlfHandleLock.RLock()
-		defer md.cachedTlfHandleLock.RUnlock()
-		return md.cachedTlfHandle
-	}()
-	if cachedTlfHandle != nil {
-		return cachedTlfHandle
+	if md.tlfHandle == nil {
+		panic(fmt.Sprintf("RootMetadata %v with no handle", md))
 	}
 
-	h := &TlfHandle{}
+	return md.tlfHandle
+}
+
+// MakeBareTlfHandle makes a BareTlfHandle for this
+// RootMetadata. Should be used only by servers and MDOps.
+func (md *RootMetadata) MakeBareTlfHandle() (BareTlfHandle, error) {
+	if md.tlfHandle != nil {
+		panic(errors.New("MakeBareTlfHandle called when md.tlfHandle exists"))
+	}
+
+	var writers, readers []keybase1.UID
 	if md.ID.IsPublic() {
-		h.Readers = []keybase1.UID{keybase1.PublicUID}
-		h.Writers = make([]keybase1.UID, len(md.Writers))
-		copy(h.Writers, md.Writers)
+		writers = md.Writers
+		readers = []keybase1.UID{keybase1.PublicUID}
 	} else {
-		wtkb := md.WKeys[len(md.WKeys)-1]
-		rtkb := md.RKeys[len(md.RKeys)-1]
-		h.Writers = make([]keybase1.UID, 0, len(wtkb.WKeys))
-		h.Readers = make([]keybase1.UID, 0, len(rtkb.RKeys))
-		for w := range wtkb.WKeys {
-			h.Writers = append(h.Writers, w)
+		if len(md.WKeys) == 0 {
+			return BareTlfHandle{}, errors.New("No writer key generations; need rekey?")
 		}
-		for r := range rtkb.RKeys {
+
+		if len(md.RKeys) == 0 {
+			return BareTlfHandle{}, errors.New("No reader key generations; need rekey?")
+		}
+
+		wkb := md.WKeys[len(md.WKeys)-1]
+		rkb := md.RKeys[len(md.RKeys)-1]
+		writers = make([]keybase1.UID, 0, len(wkb.WKeys))
+		readers = make([]keybase1.UID, 0, len(rkb.RKeys))
+		for w := range wkb.WKeys {
+			writers = append(writers, w)
+		}
+		for r := range rkb.RKeys {
 			// TODO: Return an error instead if r is
 			// PublicUID. Maybe return an error if r is in
-			// WKeys also.
-			if _, ok := wtkb.WKeys[r]; !ok &&
+			// WKeys also. Or do all this in
+			// MakeBareTlfHandle.
+			if _, ok := wkb.WKeys[r]; !ok &&
 				r != keybase1.PublicUID {
-				h.Readers = append(h.Readers, r)
+				readers = append(readers, r)
 			}
 		}
 	}
-	sort.Sort(UIDList(h.Writers))
-	sort.Sort(UIDList(h.Readers))
-
-	md.cachedTlfHandleLock.Lock()
-	defer md.cachedTlfHandleLock.Unlock()
-	md.cachedTlfHandle = h
-	return h
+	return MakeBareTlfHandle(writers, readers)
 }
 
 // IsInitialized returns whether or not this RootMetadata has been initialized
@@ -565,7 +611,7 @@ func (md *RootMetadata) isReadableOrError(ctx context.Context, config Config) er
 	if err != nil {
 		return err
 	}
-	return makeRekeyReadError(ctx, config, md, md.LatestKeyGeneration(),
+	return makeRekeyReadError(md, md.LatestKeyGeneration(),
 		uid, username)
 }
 

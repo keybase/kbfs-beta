@@ -130,7 +130,7 @@ func (km *KeyManagerStandard) getTLFCryptKey(ctx context.Context,
 			}
 		}
 		if len(keys) == 0 {
-			err = makeRekeyReadError(ctx, km.config, md, keyGen, uid, username)
+			err = makeRekeyReadError(md, keyGen, uid, username)
 			return tlfCryptKey, err
 		}
 		var index int
@@ -140,7 +140,7 @@ func (km *KeyManagerStandard) getTLFCryptKey(ctx context.Context,
 			// The likely error here is DecryptionError, which we will replace
 			// with a ReadAccessError to communicate to the caller that we were
 			// unable to decrypt because we didn't have a key with access.
-			return tlfCryptKey, makeRekeyReadError(ctx, km.config, md, keyGen,
+			return tlfCryptKey, makeRekeyReadError(md, keyGen,
 				uid, username)
 		}
 		info = keysInfo[index]
@@ -157,7 +157,7 @@ func (km *KeyManagerStandard) getTLFCryptKey(ctx context.Context,
 			return tlfCryptKey, err
 		}
 		if !ok {
-			err = makeRekeyReadError(ctx, km.config, md, keyGen, uid, username)
+			err = makeRekeyReadError(md, keyGen, uid, username)
 			return tlfCryptKey, err
 		}
 
@@ -202,12 +202,13 @@ func (km *KeyManagerStandard) updateKeyBundle(ctx context.Context,
 	md *RootMetadata, keyGen KeyGen, wKeys map[keybase1.UID][]CryptPublicKey,
 	rKeys map[keybase1.UID][]CryptPublicKey, ePubKey TLFEphemeralPublicKey,
 	ePrivKey TLFEphemeralPrivateKey, tlfCryptKey TLFCryptKey) error {
-	tkb, err := md.getTLFKeyBundle(keyGen)
+	wkb, rkb, err := md.getTLFKeyBundles(keyGen)
 	if err != nil {
 		return err
 	}
 
-	newServerKeys, err := tkb.fillInDevices(km.config.Crypto(), wKeys, rKeys,
+	newServerKeys, err := fillInDevices(km.config.Crypto(),
+		wkb, rkb, wKeys, rKeys,
 		ePubKey, ePrivKey, tlfCryptKey)
 	if err != nil {
 		return err
@@ -336,26 +337,15 @@ func (km *KeyManagerStandard) deleteKeysForRemovedDevices(ctx context.Context,
 func (km *KeyManagerStandard) identifyUIDSets(ctx context.Context,
 	md *RootMetadata, writersToIdentify map[keybase1.UID]bool,
 	readersToIdentify map[keybase1.UID]bool) error {
-	// Fire off identifies to make sure the users are legit. TODO:
-	// parallelize?
-	handle := md.GetTlfHandle()
+	uids := make([]keybase1.UID, 0, len(writersToIdentify)+len(readersToIdentify))
 	for u := range writersToIdentify {
-		err := identifyUID(ctx, km.config.KBPKI(),
-			handle.GetCanonicalName(ctx, km.config), u, true,
-			md.ID.IsPublic())
-		if err != nil {
-			return err
-		}
+		uids = append(uids, u)
 	}
 	for u := range readersToIdentify {
-		err := identifyUID(ctx, km.config.KBPKI(),
-			handle.GetCanonicalName(ctx, km.config), u, false,
-			md.ID.IsPublic())
-		if err != nil {
-			return err
-		}
+		uids = append(uids, u)
 	}
-	return nil
+	kbpki := km.config.KBPKI()
+	return identifyUserList(ctx, kbpki, kbpki, uids, md.ID.IsPublic())
 }
 
 func (km *KeyManagerStandard) generateKeyMapForUsers(ctx context.Context, users []keybase1.UID) (map[keybase1.UID][]CryptPublicKey, error) {
@@ -402,7 +392,7 @@ func (km *KeyManagerStandard) doRekey(ctx context.Context, md *RootMetadata,
 
 	if !handle.IsWriter(uid) && incKeyGen {
 		// Readers cannot create the first key generation
-		return false, nil, NewReadAccessError(ctx, km.config, handle, username)
+		return false, nil, NewReadAccessError(handle, username)
 	}
 
 	wKeys, err := km.generateKeyMapForUsers(ctx, handle.Writers)
@@ -422,18 +412,18 @@ func (km *KeyManagerStandard) doRekey(ctx context.Context, md *RootMetadata,
 	if !incKeyGen {
 		// See if there is at least one new device in relation to the
 		// current key bundle
-		tkb, err := md.getTLFKeyBundle(currKeyGen)
+		wkb, rkb, err := md.getTLFKeyBundles(currKeyGen)
 		if err != nil {
 			return false, nil, err
 		}
 
-		newWriterUsers = km.usersWithNewDevices(ctx, md, tkb.WKeys, wKeys)
-		newReaderUsers = km.usersWithNewDevices(ctx, md, tkb.RKeys, rKeys)
+		newWriterUsers = km.usersWithNewDevices(ctx, md, wkb.WKeys, wKeys)
+		newReaderUsers = km.usersWithNewDevices(ctx, md, rkb.RKeys, rKeys)
 		addNewWriterDevice = len(newWriterUsers) > 0
 		addNewReaderDevice = len(newReaderUsers) > 0
 
-		wRemoved := km.usersWithRemovedDevices(ctx, md, tkb.WKeys, wKeys)
-		rRemoved := km.usersWithRemovedDevices(ctx, md, tkb.RKeys, rKeys)
+		wRemoved := km.usersWithRemovedDevices(ctx, md, wkb.WKeys, wKeys)
+		rRemoved := km.usersWithRemovedDevices(ctx, md, rkb.RKeys, rKeys)
 		incKeyGen = len(wRemoved) > 0 || len(rRemoved) > 0
 
 		for u := range wRemoved {
@@ -465,7 +455,7 @@ func (km *KeyManagerStandard) doRekey(ctx context.Context, md *RootMetadata,
 		} else {
 			// No new reader device for our user, so the reader can't do
 			// anything
-			return false, nil, NewReadAccessError(ctx, km.config, handle, username)
+			return false, nil, NewReadAccessError(handle, username)
 		}
 	}
 
@@ -528,18 +518,16 @@ func (km *KeyManagerStandard) doRekey(ctx context.Context, md *RootMetadata,
 	km.config.Reporter().Notify(ctx, rekeyNotification(ctx, km.config, handle,
 		false))
 
-	newClientKeys := TLFKeyBundle{
-		TLFWriterKeyBundle: &TLFWriterKeyBundle{
-			WKeys:        make(UserDeviceKeyInfoMap),
-			TLFPublicKey: pubKey,
-			// TLFEphemeralPublicKeys will be filled in by updateKeyBundle
-		},
-		TLFReaderKeyBundle: &TLFReaderKeyBundle{
-			RKeys: make(UserDeviceKeyInfoMap),
-			// TLFReaderEphemeralPublicKeys will be filled in by updateKeyBundle
-		},
+	newWriterKeys := TLFWriterKeyBundle{
+		WKeys:        make(UserDeviceKeyInfoMap),
+		TLFPublicKey: pubKey,
+		// TLFEphemeralPublicKeys will be filled in by updateKeyBundle
 	}
-	err = md.AddNewKeys(newClientKeys)
+	newReaderKeys := TLFReaderKeyBundle{
+		RKeys: make(UserDeviceKeyInfoMap),
+		// TLFReaderEphemeralPublicKeys will be filled in by updateKeyBundle
+	}
+	err = md.AddNewKeys(newWriterKeys, newReaderKeys)
 	if err != nil {
 		return false, nil, err
 	}
@@ -553,16 +541,16 @@ func (km *KeyManagerStandard) doRekey(ctx context.Context, md *RootMetadata,
 
 	// Delete server-side key halves for any revoked devices.
 	for keygen := KeyGen(FirstValidKeyGen); keygen <= currKeyGen; keygen++ {
-		tkb, err := md.getTLFKeyBundle(keygen)
+		wkb, rkb, err := md.getTLFKeyBundles(keygen)
 		if err != nil {
 			return false, nil, err
 		}
 
-		err = km.deleteKeysForRemovedDevices(ctx, md, tkb.WKeys, wKeys)
+		err = km.deleteKeysForRemovedDevices(ctx, md, wkb.WKeys, wKeys)
 		if err != nil {
 			return false, nil, err
 		}
-		err = km.deleteKeysForRemovedDevices(ctx, md, tkb.RKeys, rKeys)
+		err = km.deleteKeysForRemovedDevices(ctx, md, rkb.RKeys, rKeys)
 		if err != nil {
 			return false, nil, err
 		}

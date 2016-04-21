@@ -26,7 +26,7 @@ func TestMDServerBasics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	keys := MakeDirWKeyBundle(uid, key)
+	wkb := MakeDirWKeyBundle(uid, key)
 
 	// (1) get metadata -- allocates an ID
 	handle, _ := NewFolderWithIDAndWriter(t, NullTlfID, 1, true, false, uid)
@@ -45,7 +45,7 @@ func TestMDServerBasics(t *testing.T) {
 		_, md := NewFolderWithIDAndWriter(t, id, i, true, false, uid)
 		md.MD.SerializedPrivateMetadata = make([]byte, 1)
 		md.MD.SerializedPrivateMetadata[0] = 0x1
-		AddNewKeysOrBust(t, &md.MD, keys)
+		AddNewKeysOrBust(t, &md.MD, wkb, NewEmptyTLFReaderKeyBundle())
 		md.MD.clearCachedMetadataIDForTest()
 		if i > 1 {
 			md.MD.PrevRoot = prevRoot
@@ -70,7 +70,7 @@ func TestMDServerBasics(t *testing.T) {
 	_, md = NewFolderWithIDAndWriter(t, id, 10, true, false, uid)
 	md.MD.SerializedPrivateMetadata = make([]byte, 1)
 	md.MD.SerializedPrivateMetadata[0] = 0x1
-	AddNewKeysOrBust(t, &md.MD, keys)
+	AddNewKeysOrBust(t, &md.MD, wkb, NewEmptyTLFReaderKeyBundle())
 	md.MD.PrevRoot = prevRoot
 	err = mdServer.Put(ctx, md)
 	if _, ok := err.(MDServerErrorConflictRevision); !ok {
@@ -89,7 +89,7 @@ func TestMDServerBasics(t *testing.T) {
 		md.MD.SerializedPrivateMetadata = make([]byte, 1)
 		md.MD.SerializedPrivateMetadata[0] = 0x1
 		md.MD.PrevRoot = prevRoot
-		AddNewKeysOrBust(t, &md.MD, keys)
+		AddNewKeysOrBust(t, &md.MD, wkb, NewEmptyTLFReaderKeyBundle())
 		md.MD.clearCachedMetadataIDForTest()
 		md.MD.WFlags |= MetadataFlagUnmerged
 		md.MD.BID = bid
@@ -200,8 +200,15 @@ func TestMDServerRegisterForUpdate(t *testing.T) {
 	}
 
 	// Create first TLF.
-	h1 := NewTlfHandle()
-	h1.Writers = []keybase1.UID{uid}
+	bareH1, err := MakeBareTlfHandle([]keybase1.UID{uid}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h1, err := MakeTlfHandle(ctx, bareH1, testNormalizedUsernameGetter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	id1, _, err := mdServer.GetForHandle(ctx, h1, Merged)
 	if err != nil {
 		t.Fatal(err)
@@ -209,9 +216,16 @@ func TestMDServerRegisterForUpdate(t *testing.T) {
 
 	// Create second TLF, which should end up being different from
 	// the first one.
-	h2 := NewTlfHandle()
-	h2.Readers = []keybase1.UID{keybase1.PublicUID}
-	h2.Writers = []keybase1.UID{uid}
+	bareH2, err := MakeBareTlfHandle(
+		[]keybase1.UID{uid}, []keybase1.UID{keybase1.PublicUID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h2, err := MakeTlfHandle(ctx, bareH2, testNormalizedUsernameGetter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	id2, _, err := mdServer.GetForHandle(ctx, h2, Merged)
 	if err != nil {
 		t.Fatal(err)
