@@ -78,12 +78,12 @@ func (f *Favorites) handleReq(req *favReq) (err error) {
 	//  * The user wants the list of favorites.  TODO: use the cached list
 	//    once we have proper invalidation from the server.
 	if req.refresh || f.cache == nil || req.favs != nil {
-		f.cache = make(map[Favorite]bool)
 		folders, err := kbpki.FavoriteList(req.ctx)
 		if err != nil {
 			return err
 		}
 
+		f.cache = make(map[Favorite]bool)
 		for _, folder := range folders {
 			f.cache[*NewFavoriteFromFolder(folder)] = true
 		}
@@ -219,9 +219,13 @@ func (f *Favorites) Add(ctx context.Context, fav Favorite) error {
 // AddAsync initiates a request to add this favorite to your favorites
 // list, if one is not already in flight, but it doesn't wait for the
 // result.  (It could block while kicking off the request, if lots of
-// different favorite operations are in flight.)
+// different favorite operations are in flight.)  The given context is
+// used only for enqueuing the request on an internal queue, not for
+// any resulting I/O.
 func (f *Favorites) AddAsync(ctx context.Context, fav Favorite) {
-	req, doSend := f.startOrJoinAddReq(ctx, fav)
+	// Use a fresh context, since we want the request to succeed even
+	// if the original context is canceled.
+	req, doSend := f.startOrJoinAddReq(context.Background(), fav)
 	if doSend {
 		select {
 		case f.reqChan <- req:
