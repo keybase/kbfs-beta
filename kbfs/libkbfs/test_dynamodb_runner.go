@@ -12,8 +12,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
+	"github.com/aalness/goamz/dynamodb"
+	"github.com/goamz/goamz/aws"
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/logger"
 )
@@ -21,9 +24,9 @@ import (
 const (
 	// LocalDynamoDBDownloadURI source: http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Tools.DynamoDBLocal.html
 	// We don't use latest because Amazon doesn't offer https downloads of this. So we peg to a revision and verify the hash.
-	LocalDynamoDBDownloadURI = "http://dynamodb-local.s3-website-us-west-2.amazonaws.com/dynamodb_local_2015-07-16_1.0.tar.gz"
+	LocalDynamoDBDownloadURI = "http://dynamodb-local.s3-website-us-west-2.amazonaws.com/dynamodb_local_2016-04-19.tar.gz"
 	// LocalDynamoDBSha256Hash is the sha256 hash of the above tar ball.
-	LocalDynamoDBSha256Hash = "5868fd4b9f624001cda88059af7a54f412a4794dea0d3497e7c57470bfb272fa"
+	LocalDynamoDBSha256Hash = "35bcbf97c1c3ef8607ac0032d6127eae313edd26a73c80fdc230e4d8a14c1c33"
 	// LocalDynamoDBTmpDir is relative to the system's own TempDir.
 	LocalDynamoDBTmpDir = "dynamodb_local"
 	// LocalDynamoDBPidFile contains the process ID.
@@ -133,19 +136,28 @@ func (tdr *TestDynamoDBRunner) downloadIfNecessary() error {
 	return untar.Run()
 }
 
+func findAndKill(t logger.TestLogBackend, pid int, created bool) {
+	if p, err := os.FindProcess(pid); err == nil {
+		if err := p.Signal(syscall.SIGTERM); err != nil {
+			if err.Error() != "os: process already finished" {
+				t.Fatal(err)
+			}
+		} else if created {
+			p.Wait()
+		}
+	}
+}
+
+// Shutdown terminates any running instance.
+func (tdr *TestDynamoDBRunner) Shutdown(t logger.TestLogBackend) {
+	findAndKill(t, tdr.cmd.Process.Pid, true)
+}
+
 // Run starts the local DynamoDB server.
 func (tdr *TestDynamoDBRunner) Run(t logger.TestLogBackend) {
 	// kill any old process
 	if pid, err := tdr.getPid(); err == nil {
-		if p, err := os.FindProcess(pid); err == nil {
-			if err := p.Kill(); err != nil {
-				// you might think this would satisfy !os.IsNotExist
-				// but alas, no, you'd be really wrong about this.
-				if err.Error() != "os: process already finished" {
-					t.Fatal(err)
-				}
-			}
-		}
+		findAndKill(t, pid, false)
 	}
 
 	// setup the command
@@ -170,11 +182,18 @@ func (tdr *TestDynamoDBRunner) Run(t logger.TestLogBackend) {
 	// wait for it to come up
 	ok := false
 	for i := 0; i < 200; i++ {
-		if _, err := http.Get(LocalDynamoDBUri); err == nil {
+		region := aws.Region{
+			DynamoDBEndpoint:        LocalDynamoDBUri,
+			DynamoDBStreamsEndpoint: LocalDynamoDBUri,
+		}
+		auth := aws.Auth{AccessKey: "DUMMY_KEY", SecretKey: "DUMMY_SECRET"}
+		server := &dynamodb.Server{Auth: auth, Region: region}
+		if _, err := server.ListTables(); err != nil {
+			time.Sleep(time.Millisecond * 250)
+		} else {
 			ok = true
 			break
 		}
-		time.Sleep(time.Millisecond * 250)
 	}
 	if !ok {
 		t.Fatal("dynamodb did not start up cleanly")
