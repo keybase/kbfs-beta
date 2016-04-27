@@ -109,14 +109,11 @@ func TestMakeBareTlfHandleFailures(t *testing.T) {
 }
 
 func TestNormalizeNamesInTLF(t *testing.T) {
-	writerNames := []string{"B", "C@Twitter", "d@twitter", "a"}
-	readerNames := []string{"E", "f", "AA@HackerNews", "a", "B", "b", "ZZ@hackernews"}
-	// "A@hackernews" will 'incorrectly' be normalized to
-	// "a@hackernews" because it fails validation as a hackernews
-	// username (too short) and so is treated as a username. See
-	// TODO in normalizeAssertionOrName.
-	s := normalizeNamesInTLF(writerNames, readerNames)
-	assert.Equal(t, "a,b,c@twitter,d@twitter#AA@hackernews,ZZ@hackernews,a,b,b,e,f", s)
+	writerNames := []string{"BB", "C@Twitter", "d@twitter", "aa"}
+	readerNames := []string{"EE", "ff", "AA@HackerNews", "aa", "BB", "bb", "ZZ@hackernews"}
+	s, err := normalizeNamesInTLF(writerNames, readerNames)
+	require.Nil(t, err)
+	assert.Equal(t, "aa,bb,c@twitter,d@twitter#AA@hackernews,ZZ@hackernews,aa,bb,bb,ee,ff", s)
 }
 
 func TestParseTlfHandleEarlyFailure(t *testing.T) {
@@ -310,4 +307,56 @@ func TestParseTlfHandleSocialAssertion(t *testing.T) {
 	h2, err := MakeTlfHandle(context.Background(), h.BareTlfHandle, kbpki)
 	require.Nil(t, err)
 	assert.Equal(t, CanonicalTlfName(name), h2.GetCanonicalName())
+}
+
+func TestParseTlfHandleUIDAssertion(t *testing.T) {
+	ctx := context.Background()
+
+	localUsers := MakeLocalUsers([]libkb.NormalizedUsername{"u1", "u2"})
+	currentUID := localUsers[0].UID
+	daemon := NewKeybaseDaemonMemory(currentUID, localUsers, NewCodecMsgpack())
+
+	kbpki := &daemonKBPKI{
+		daemon: daemon,
+	}
+
+	a := currentUID.String() + "@uid"
+	_, err := ParseTlfHandle(ctx, kbpki, a, false, false)
+	assert.Equal(t, 1, kbpki.getIdentifyCalls())
+	assert.Equal(t, TlfNameNotCanonical{a, "u1"}, err)
+}
+
+func TestParseTlfHandleAndAssertion(t *testing.T) {
+	ctx := context.Background()
+
+	localUsers := MakeLocalUsers([]libkb.NormalizedUsername{"u1", "u2"})
+	localUsers[0].Asserts = []string{"u1@twitter"}
+	currentUID := localUsers[0].UID
+	daemon := NewKeybaseDaemonMemory(currentUID, localUsers, NewCodecMsgpack())
+
+	kbpki := &daemonKBPKI{
+		daemon: daemon,
+	}
+
+	a := currentUID.String() + "@uid+u1@twitter"
+	_, err := ParseTlfHandle(ctx, kbpki, a, false, false)
+	assert.Equal(t, 1, kbpki.getIdentifyCalls())
+	assert.Equal(t, TlfNameNotCanonical{a, "u1"}, err)
+}
+
+func TestParseTlfHandleFailConflictingAssertion(t *testing.T) {
+	ctx := context.Background()
+
+	localUsers := MakeLocalUsers([]libkb.NormalizedUsername{"u1", "u2"})
+	localUsers[1].Asserts = []string{"u2@twitter"}
+	currentUID := localUsers[0].UID
+	daemon := NewKeybaseDaemonMemory(currentUID, localUsers, NewCodecMsgpack())
+
+	kbpki := &daemonKBPKI{
+		daemon: daemon,
+	}
+
+	a := currentUID.String() + "@uid+u2@twitter"
+	_, err := ParseTlfHandle(ctx, kbpki, a, false, false)
+	require.NotNil(t, err)
 }
