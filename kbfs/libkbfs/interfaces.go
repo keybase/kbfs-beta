@@ -319,6 +319,20 @@ type KeybaseDaemon interface {
 	Shutdown()
 }
 
+type resolver interface {
+	// Resolve, given an assertion, resolves it to a username/UID
+	// pair. The username <-> UID mapping is trusted and
+	// immutable, so it can be cached. If the assertion is just
+	// the username or a UID assertion, then the resolution can
+	// also be trusted. If the returned pair is equal to that of
+	// the current session, then it can also be
+	// trusted. Otherwise, Identify() needs to be called on the
+	// assertion before the assertion -> (username, UID) mapping
+	// can be trusted.
+	Resolve(ctx context.Context, assertion string) (
+		libkb.NormalizedUsername, keybase1.UID, error)
+}
+
 type identifier interface {
 	// Identify resolves an assertion (which could also be a
 	// username) to a UserInfo struct, spawning tracker popups if
@@ -348,18 +362,7 @@ type KBPKI interface {
 	// currently-active device.
 	GetCurrentVerifyingKey(ctx context.Context) (VerifyingKey, error)
 
-	// Resolve, given an assertion, resolves it to a username/UID
-	// pair. The username <-> UID mapping is trusted and
-	// immutable, so it can be cached. If the assertion is just
-	// the username or a UID assertion, then the resolution can
-	// also be trusted. If the returned pair is equal to that of
-	// the current session, then it can also be
-	// trusted. Otherwise, Identify() needs to be called on the
-	// assertion before the assertion -> (username, UID) mapping
-	// can be trusted.
-	Resolve(ctx context.Context, assertion string) (
-		libkb.NormalizedUsername, keybase1.UID, error)
-
+	resolver
 	identifier
 	normalizedUsernameGetter
 
@@ -803,8 +806,8 @@ type MDServer interface {
 	// the logged-in user has read permission on the folder.  It
 	// creates the folder if one doesn't exist yet, and the logged-in
 	// user has permission to do so.
-	GetForHandle(ctx context.Context, handle *TlfHandle, mStatus MergeStatus) (
-		TlfID, *RootMetadataSigned, error)
+	GetForHandle(ctx context.Context, handle BareTlfHandle,
+		mStatus MergeStatus) (TlfID, *RootMetadataSigned, error)
 
 	// GetForTLF returns the current (signed/encrypted) metadata object
 	// corresponding to the given top-level folder, if the logged-in

@@ -43,36 +43,6 @@ func fakeMdID(b byte) MdID {
 	return MdID{h}
 }
 
-func updateNewRootMetadataForTest(
-	rmd *RootMetadata, d *TlfHandle, id TlfID) *RootMetadata {
-	updateNewRootMetadata(rmd, d, id)
-	var keyGen KeyGen
-	if id.IsPublic() {
-		keyGen = PublicKeyGen
-	} else {
-		keyGen = 1
-	}
-	rmd.data.Dir = DirEntry{
-		BlockInfo: BlockInfo{
-			BlockPointer: BlockPointer{
-				KeyGen:  keyGen,
-				DataVer: 1,
-			},
-			EncodedSize: 1,
-		},
-	}
-	// make up the MD ID
-	rmd.mdID = fakeMdID(fakeTlfIDByte(id))
-	return rmd
-}
-
-// NewRootMetadataForTest returns a new initialized RootMetadata object for testing.
-func NewRootMetadataForTest(d *TlfHandle, id TlfID) *RootMetadata {
-	var rmd RootMetadata
-	updateNewRootMetadataForTest(&rmd, d, id)
-	return &rmd
-}
-
 func setTestLogger(config Config, t logger.TestLogBackend) {
 	config.SetLoggerMaker(func(m string) logger.Logger {
 		return logger.NewTestLogger(t)
@@ -92,6 +62,7 @@ func MakeTestConfigOrBust(t logger.TestLogBackend,
 
 	config.SetBlockSplitter(&BlockSplitterSimple{64 * 1024, 8 * 1024})
 	config.SetKeyManager(NewKeyManagerStandard(config))
+	config.SetMDOps(NewMDOpsStandard(config))
 
 	localUsers := MakeLocalUsers(users)
 	loggedInUser := localUsers[0]
@@ -185,6 +156,7 @@ func ConfigAsUser(config *ConfigLocal, loggedInUser libkb.NormalizedUsername) *C
 
 	c.SetBlockSplitter(config.BlockSplitter())
 	c.SetKeyManager(NewKeyManagerStandard(c))
+	c.SetMDOps(NewMDOpsStandard(c))
 	c.SetClock(config.Clock())
 
 	daemon := config.KeybaseDaemon().(*KeybaseDaemonLocal)
@@ -258,61 +230,6 @@ func FakeTlfID(b byte, public bool) TlfID {
 
 func fakeTlfIDByte(id TlfID) byte {
 	return id.id[0]
-}
-
-// NewFolder returns a new RootMetadataSigned for testing.
-func NewFolder(t logger.TestLogBackend, x byte, revision MetadataRevision, share bool, public bool) (
-	TlfID, *TlfHandle, *RootMetadataSigned) {
-	id := FakeTlfID(x, public)
-	h, rmds := NewFolderWithIDAndWriter(t, id, revision, share, public, keybase1.MakeTestUID(15))
-	return id, h, rmds
-}
-
-// NewFolderWithID returns a new RootMetadataSigned for testing.
-func NewFolderWithID(t logger.TestLogBackend, id TlfID, revision MetadataRevision, share bool, public bool) (
-	*TlfHandle, *RootMetadataSigned) {
-	return NewFolderWithIDAndWriter(t, id, revision, share, public, keybase1.MakeTestUID(15))
-}
-
-// NewFolderWithIDAndWriter returns a new RootMetadataSigned for testing.
-func NewFolderWithIDAndWriter(t logger.TestLogBackend, id TlfID, revision MetadataRevision,
-	share bool, public bool, writer keybase1.UID) (*TlfHandle, *RootMetadataSigned) {
-	var writers, readers []keybase1.UID
-	if public {
-		readers = []keybase1.UID{keybase1.PublicUID}
-	}
-	writers = append(writers, writer)
-	if share {
-		writer2 := keybase1.MakeTestUID(16)
-		writers = append(writers, writer2)
-	}
-	bareH, err := MakeBareTlfHandle(writers, readers, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h, err := MakeTlfHandle(context.Background(), bareH,
-		testNormalizedUsernameGetter{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	rmds := &RootMetadataSigned{}
-	updateNewRootMetadataForTest(&rmds.MD, h, id)
-	rmds.MD.Revision = revision
-	rmds.MD.LastModifyingWriter = h.Writers[0]
-	rmds.MD.LastModifyingUser = h.Writers[0]
-	if !public {
-		AddNewEmptyKeysOrBust(t, &rmds.MD)
-	} else {
-		rmds.MD.Writers = writers
-	}
-
-	rmds.SigInfo = SignatureInfo{
-		Version:      SigED25519,
-		Signature:    []byte{42},
-		VerifyingKey: MakeFakeVerifyingKeyOrBust("fake key"),
-	}
-	return h, rmds
 }
 
 // NewEmptyTLFWriterKeyBundle creates a new empty TLFWriterKeyBundle
@@ -432,32 +349,6 @@ func testWithCanceledContext(t logger.TestLogBackend, ctx context.Context,
 	}
 }
 
-// MakeDirRKeyBundle creates a new bundle with a reader key.
-func MakeDirRKeyBundle(uid keybase1.UID, cryptPublicKey CryptPublicKey) TLFReaderKeyBundle {
-	return TLFReaderKeyBundle{
-		RKeys: UserDeviceKeyInfoMap{
-			uid: {
-				cryptPublicKey.kid: TLFCryptKeyInfo{
-					EPubKeyIndex: -1,
-				},
-			},
-		},
-		TLFReaderEphemeralPublicKeys: make([]TLFEphemeralPublicKey, 1),
-	}
-}
-
-// MakeDirWKeyBundle creates a new bundle with a writer key.
-func MakeDirWKeyBundle(uid keybase1.UID, cryptPublicKey CryptPublicKey) TLFWriterKeyBundle {
-	return TLFWriterKeyBundle{
-		WKeys: UserDeviceKeyInfoMap{
-			uid: {
-				cryptPublicKey.kid: TLFCryptKeyInfo{},
-			},
-		},
-		TLFEphemeralPublicKeys: make([]TLFEphemeralPublicKey, 1),
-	}
-}
-
 // DisableUpdatesForTesting stops the given folder from acting on new
 // updates.  Send a struct{}{} down the returned channel to restart
 // notifications
@@ -565,9 +456,7 @@ func CheckConfigAndShutdown(t logger.TestLogBackend, config Config) {
 
 // GetRootNodeForTest gets the root node for the given TLF name, which
 // must be canonical, creating it if necessary.
-func GetRootNodeForTest(
-	t logger.TestLogBackend, config Config, name string, public bool) (
-	Node, error) {
+func GetRootNodeForTest(config Config, name string, public bool) (Node, error) {
 	ctx := context.Background()
 	h, err := ParseTlfHandle(ctx, config.KBPKI(), name, public,
 		config.SharingBeforeSignupEnabled())
@@ -588,7 +477,7 @@ func GetRootNodeForTest(
 // an error.
 func GetRootNodeOrBust(
 	t logger.TestLogBackend, config Config, name string, public bool) Node {
-	n, err := GetRootNodeForTest(t, config, name, public)
+	n, err := GetRootNodeForTest(config, name, public)
 	if err != nil {
 		t.Fatalf("Couldn't get root node for %s (public=%t): %v",
 			name, public, err)
