@@ -123,7 +123,7 @@ func (fs *KBFSOpsStandard) DeleteFavorite(ctx context.Context,
 	isLoggedIn := err == nil
 
 	// Let this ops remove itself, if we have one available.
-	fav := Favorite{name, public}
+	fav := Favorite{name, public, false}
 	ops := func() *folderBranchOps {
 		fs.opsLock.Lock()
 		defer fs.opsLock.Unlock()
@@ -170,7 +170,7 @@ func (fs *KBFSOpsStandard) getOpsNoAdd(fb FolderBranch) *folderBranchOps {
 func (fs *KBFSOpsStandard) getOps(
 	ctx context.Context, fb FolderBranch) *folderBranchOps {
 	ops := fs.getOpsNoAdd(fb)
-	if err := ops.addToFavorites(ctx, fs.favs); err != nil {
+	if err := ops.addToFavorites(ctx, fs.favs, false); err != nil {
 		// Failure to favorite shouldn't cause a failure.  Just log
 		// and move on.
 		fs.log.CDebugf(ctx, "Couldn't add favorite: %v", err)
@@ -224,10 +224,11 @@ func (fs *KBFSOpsStandard) GetOrCreateRootNode(
 
 	fb := FolderBranch{Tlf: md.ID, Branch: branch}
 	ops := fs.getOpsByHandle(ctx, h, fb)
+	var created bool
 	if branch == MasterBranch {
 		// For now, only the master branch can be initialized with a
 		// branch new MD object.
-		err = ops.CheckForNewMDAndInit(ctx, md)
+		created, err = ops.CheckForNewMDAndInit(ctx, md)
 		if err != nil {
 			return nil, EntryInfo{}, err
 		}
@@ -238,7 +239,7 @@ func (fs *KBFSOpsStandard) GetOrCreateRootNode(
 		return nil, EntryInfo{}, err
 	}
 
-	if err := ops.addToFavorites(ctx, fs.favs); err != nil {
+	if err := ops.addToFavorites(ctx, fs.favs, created); err != nil {
 		// Failure to favorite shouldn't cause a failure.  Just log
 		// and move on.
 		fs.log.CDebugf(ctx, "Couldn't add favorite: %v", err)
@@ -400,7 +401,7 @@ func (fs *KBFSOpsStandard) UnstageForTesting(
 // Rekey implements the KBFSOps interface for KBFSOpsStandard
 func (fs *KBFSOpsStandard) Rekey(ctx context.Context, id TlfID) error {
 	// We currently only support rekeys of master branches.
-	ops := fs.getOps(ctx, FolderBranch{Tlf: id, Branch: MasterBranch})
+	ops := fs.getOpsNoAdd(FolderBranch{Tlf: id, Branch: MasterBranch})
 	return ops.Rekey(ctx, id)
 }
 

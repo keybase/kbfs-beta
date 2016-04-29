@@ -90,8 +90,8 @@ func (f *Favorites) handleReq(req *favReq) (err error) {
 		username, _, err := f.config.KBPKI().GetCurrentUserInfo(req.ctx)
 		if err == nil {
 			// Add favorites for the current user, that cannot be deleted.
-			f.cache[Favorite{string(username), true}] = true
-			f.cache[Favorite{string(username), false}] = true
+			f.cache[Favorite{string(username), true, false}] = true
+			f.cache[Favorite{string(username), false, false}] = true
 		}
 	}
 

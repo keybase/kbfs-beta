@@ -32,7 +32,7 @@ func TestFavoritesAddTwice(t *testing.T) {
 
 	f := NewFavorites(config)
 	// Call Add twice in a row, but only get one Add KBPKI call
-	fav1 := Favorite{"test", true}
+	fav1 := Favorite{"test", true, false}
 	config.mockKbpki.EXPECT().FavoriteList(gomock.Any()).Return(nil, nil)
 	config.mockKbpki.EXPECT().FavoriteAdd(gomock.Any(), fav1.toKBFolder()).
 		Return(nil)
@@ -46,12 +46,32 @@ func TestFavoritesAddTwice(t *testing.T) {
 	}
 }
 
+func TestFavoritesAddCreated(t *testing.T) {
+	mockCtrl, config, ctx := favTestInit(t)
+	defer favTestShutdown(mockCtrl, config)
+
+	f := NewFavorites(config)
+	// Call Add with created = true
+	fav1 := Favorite{"test", true, true}
+	config.mockKbpki.EXPECT().FavoriteList(gomock.Any()).Return(nil, nil)
+	expected := keybase1.Folder{
+		Name:    "test",
+		Private: false,
+		Created: true,
+	}
+	config.mockKbpki.EXPECT().FavoriteAdd(gomock.Any(), expected).
+		Return(nil)
+	if err := f.Add(ctx, fav1); err != nil {
+		t.Fatalf("Couldn't add favorite: %v", err)
+	}
+}
+
 func TestFavoritesAddRemoveAdd(t *testing.T) {
 	mockCtrl, config, ctx := favTestInit(t)
 	defer favTestShutdown(mockCtrl, config)
 
 	f := NewFavorites(config)
-	fav1 := Favorite{"test", true}
+	fav1 := Favorite{"test", true, false}
 	config.mockKbpki.EXPECT().FavoriteList(gomock.Any()).Return(nil, nil)
 	folder1 := fav1.toKBFolder()
 	config.mockKbpki.EXPECT().FavoriteAdd(gomock.Any(), folder1).
@@ -84,7 +104,7 @@ func TestFavoritesAddAsync(t *testing.T) {
 	// Only one task at a time
 	f := newFavoritesWithChan(config, make(chan *favReq, 1))
 	// Call Add twice in a row, but only get one Add KBPKI call
-	fav1 := Favorite{"test", true}
+	fav1 := Favorite{"test", true, false}
 	config.mockKbpki.EXPECT().FavoriteList(gomock.Any()).Return(nil, nil)
 
 	c := make(chan struct{})
@@ -111,7 +131,7 @@ func TestFavoritesListFailsDuringAddAsync(t *testing.T) {
 	// Only one task at a time
 	f := newFavoritesWithChan(config, make(chan *favReq, 1))
 	// Call Add twice in a row, but only get one Add KBPKI call
-	fav1 := Favorite{"test", true}
+	fav1 := Favorite{"test", true, false}
 
 	// Cancel the first list request
 	c := make(chan struct{})
