@@ -3,6 +3,7 @@ package libkbfs
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -478,6 +479,7 @@ func (fbo *folderBranchOps) setHeadLocked(ctx context.Context,
 	fbo.headLock.AssertLocked(lState)
 
 	isFirstHead := fbo.head == nil
+	var oldHandle *TlfHandle
 	if !isFirstHead {
 		mdID, err := md.MetadataID(fbo.config)
 		if err != nil {
@@ -493,6 +495,8 @@ func (fbo *folderBranchOps) setHeadLocked(ctx context.Context,
 			// only save this new MD if the MDID has changed
 			return nil
 		}
+
+		oldHandle = fbo.head.GetTlfHandle()
 	}
 
 	fbo.log.CDebugf(ctx, "Setting head revision to %d", md.Revision)
@@ -521,6 +525,18 @@ func (fbo *folderBranchOps) setHeadLocked(ctx context.Context,
 			fbo.updateDoneChan = make(chan struct{})
 			go fbo.registerAndWaitForUpdates()
 		}
+	} else if h := fbo.head.GetTlfHandle(); !reflect.DeepEqual(oldHandle, h) {
+		fbo.log.CDebugf(ctx, "Handle changed (%s -> %s)",
+			oldHandle.GetCanonicalName(), h.GetCanonicalName())
+		// If the handle has changed, send out a notification.
+		fbo.observers.tlfHandleChange(ctx, h)
+		// Also the folder should be re-identified given the
+		// newly-resolved assertions.
+		func() {
+			fbo.identifyLock.Lock()
+			defer fbo.identifyLock.Unlock()
+			fbo.identifyDone = false
+		}()
 	}
 	return nil
 }
@@ -3079,7 +3095,9 @@ func (fbo *folderBranchOps) applyMDUpdatesLocked(ctx context.Context,
 		return errors.New("Ignoring MD updates while writes are dirty")
 	}
 
-	fbo.reembedBlockChanges(ctx, lState, rmds)
+	if err := fbo.reembedBlockChanges(ctx, lState, rmds); err != nil {
+		return err
+	}
 
 	for _, rmd := range rmds {
 		// check that we're applying the expected MD revision
@@ -3090,6 +3108,10 @@ func (fbo *folderBranchOps) applyMDUpdatesLocked(ctx context.Context,
 		if rmd.Revision != fbo.getCurrMDRevisionLocked(lState)+1 {
 			return MDUpdateApplyError{rmd.Revision,
 				fbo.getCurrMDRevisionLocked(lState)}
+		}
+
+		if err := rmd.isReadableOrError(ctx, fbo.config); err != nil {
+			return err
 		}
 
 		err := fbo.setHeadLocked(ctx, lState, rmd)
@@ -3121,7 +3143,9 @@ func (fbo *folderBranchOps) undoMDUpdatesLocked(ctx context.Context,
 		return NotPermittedWhileDirtyError{}
 	}
 
-	fbo.reembedBlockChanges(ctx, lState, rmds)
+	if err := fbo.reembedBlockChanges(ctx, lState, rmds); err != nil {
+		return err
+	}
 
 	// go backwards through the updates
 	for i := len(rmds) - 1; i >= 0; i-- {

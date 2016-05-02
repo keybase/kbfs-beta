@@ -403,11 +403,13 @@ type KeyManager interface {
 	GetTLFCryptKeyForEncryption(ctx context.Context, md *RootMetadata) (
 		TLFCryptKey, error)
 
-	// GetTLFCryptKeyForMDDecryption gets the crypt key to use for
-	// the TLF with the given metadata to decrypt the private
-	// portion of the metadata.
-	GetTLFCryptKeyForMDDecryption(ctx context.Context, md *RootMetadata) (
-		TLFCryptKey, error)
+	// GetTLFCryptKeyForMDDecryption gets the crypt key to use for the
+	// TLF with the given metadata to decrypt the private portion of
+	// the metadata.  It finds the appropriate key from mdWithKeys
+	// (which in most cases is the same as mdToDecrypt) if it's not
+	// already cached.
+	GetTLFCryptKeyForMDDecryption(ctx context.Context,
+		mdToDecrypt, mdWithKeys *RootMetadata) (TLFCryptKey, error)
 
 	// GetTLFCryptKeyForBlockDecryption gets the crypt key to use
 	// for the TLF with the given metadata to decrypt the block
@@ -991,7 +993,15 @@ type Observer interface {
 	// together atomically.  Each NodeChange in changes affects the
 	// same top-level folder and branch.
 	BatchChanges(ctx context.Context, changes []NodeChange)
-	// TODO: Notify about changes in favorites list
+	// TlfHandleChange announces that the handle of the corresponding
+	// folder branch has changed, likely due to previously-unresolved
+	// assertions becoming resolved.  This indicates that the listener
+	// should switch over any cached paths for this folder-branch to
+	// the new name.  Nodes that were acquired under the old name will
+	// still continue to work, but new lookups on the old name may
+	// either encounter alias errors or entirely new TLFs (in the case
+	// of conflicts).
+	TlfHandleChange(ctx context.Context, newHandle *TlfHandle)
 }
 
 // Notifier notifies registrants of directory changes

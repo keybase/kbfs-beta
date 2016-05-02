@@ -171,3 +171,27 @@ func isTlfNameNotCanonical(err error) bool {
 	_, ok := err.(libkbfs.TlfNameNotCanonical)
 	return ok
 }
+
+func (fl *FolderList) updateTlfName(ctx context.Context, oldName string,
+	newName string) {
+	fl.mu.Lock()
+	defer fl.mu.Unlock()
+	tlf, ok := fl.folders[oldName]
+	if !ok {
+		return
+	}
+
+	fl.fs.log.CDebugf(ctx, "Folder name updated: %s -> %s", oldName, newName)
+	delete(fl.folders, oldName)
+	fl.folders[newName] = tlf
+	if err := fl.fs.fuse.InvalidateEntry(fl, oldName); err != nil {
+		// TODO we have no mechanism to do anything about this
+		fl.fs.log.CErrorf(ctx, "FUSE invalidate error for oldName=%s: %v",
+			oldName, err)
+	}
+	if err := fl.fs.fuse.InvalidateEntry(fl, newName); err != nil {
+		// TODO we have no mechanism to do anything about this
+		fl.fs.log.CErrorf(ctx, "FUSE invalidate error for newName=%s: %v",
+			newName, err)
+	}
+}

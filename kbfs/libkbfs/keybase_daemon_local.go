@@ -231,9 +231,10 @@ func (k *KeybaseDaemonLocal) CurrentSession(ctx context.Context, sessionID int) 
 // addNewAssertionForTest makes newAssertion, which should be a single
 // assertion that doesn't already resolve to anything, resolve to the
 // same UID as oldAssertion, which should be an arbitrary assertion
-// that doesn't already resolve to something.
+// that does already resolve to something.  It returns the UID of the
+// user associated with the given assertions.
 func (k *KeybaseDaemonLocal) addNewAssertionForTest(
-	oldAssertion, newAssertion string) {
+	oldAssertion, newAssertion string) keybase1.UID {
 	k.lock.Lock()
 	defer k.lock.Unlock()
 	uid, err := k.assertionToUIDLocked(context.Background(), oldAssertion)
@@ -248,6 +249,7 @@ func (k *KeybaseDaemonLocal) addNewAssertionForTest(
 	lu.Asserts = append(lu.Asserts, newAssertion)
 	k.asserts[newAssertion] = uid
 	k.localUsers[uid] = lu
+	return uid
 }
 
 type makeKeysFunc func(libkb.NormalizedUsername, int) (
