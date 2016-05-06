@@ -3415,12 +3415,12 @@ func (fbo *folderBranchOps) rekeyLocked(ctx context.Context,
 	}
 
 	if fbo.rekeyWithPromptTimer != nil {
-		fbo.rekeyWithPromptTimer.Stop()
-		fbo.rekeyWithPromptTimer = nil
 		if !promptPaper {
-			fbo.log.CDebugf(ctx, "rekeyWithPrompt interrupted before it fires.")
+			fbo.log.CDebugf(ctx, "rekeyWithPrompt superseded before it fires.")
 		} else if !md.IsRekeySet() {
-			// If the rekey bit isn't set, than some other device
+			fbo.rekeyWithPromptTimer.Stop()
+			fbo.rekeyWithPromptTimer = nil
+			// If the rekey bit isn't set, then some other device
 			// already took care of our request, and we can stop
 			// early.  Note that if this FBO never registered for
 			// updates, then we might not yet have seen the update, in
@@ -3483,10 +3483,16 @@ func (fbo *folderBranchOps) rekeyLocked(ctx context.Context,
 		// user for any known paper keys.  We do this even if the
 		// rekey bit is already set, since we may have restarted since
 		// the previous rekey attempt, before prompting for the paper
-		// key.
-		d := fbo.config.RekeyWithPromptWaitTime()
-		fbo.log.CDebugf(ctx, "Scheduling a rekeyWithPrompt in %s", d)
-		fbo.rekeyWithPromptTimer = time.AfterFunc(d, fbo.rekeyWithPrompt)
+		// key.  Only schedule this as a one-time event, since direct
+		// folder accesses from the user will also cause a
+		// rekeyWithPrompt.
+		//
+		// Only ever set the timer once.
+		if fbo.rekeyWithPromptTimer == nil {
+			d := fbo.config.RekeyWithPromptWaitTime()
+			fbo.log.CDebugf(ctx, "Scheduling a rekeyWithPrompt in %s", d)
+			fbo.rekeyWithPromptTimer = time.AfterFunc(d, fbo.rekeyWithPrompt)
+		}
 
 		if rekeyWasSet {
 			// Devices not yet keyed shouldn't set the rekey bit again
@@ -3519,22 +3525,18 @@ func (fbo *folderBranchOps) rekeyLocked(ctx context.Context,
 	handle := md.GetTlfHandle()
 	fbo.config.Reporter().Notify(ctx,
 		rekeyNotification(ctx, fbo.config, handle, true))
+	if !stillNeedsRekey && fbo.rekeyWithPromptTimer != nil {
+		fbo.log.CDebugf(ctx, "Scheduled rekey timer no longer needed")
+		fbo.rekeyWithPromptTimer.Stop()
+		fbo.rekeyWithPromptTimer = nil
+	}
 	return nil
 }
 
 func (fbo *folderBranchOps) rekeyWithPrompt() {
-	var ctx context.Context
 	var err error
-	{
-		// TODO: replace this with a helper method once KBFS-745 is done.
-		logTags := make(logger.CtxLogTags)
-		logTags[CtxRekeyIDKey] = CtxRekeyOpID
-		ctx = logger.NewContextWithLogTags(context.Background(), logTags)
-		ctxID, err := MakeRandomRequestID()
-		if err == nil {
-			ctx = context.WithValue(ctx, CtxRekeyIDKey, ctxID)
-		}
-	}
+	ctx := ctxWithRandomID(context.Background(), CtxRekeyIDKey, CtxRekeyOpID,
+		fbo.log)
 
 	// Only give the user limited time to enter their paper key, so we
 	// don't wait around forever.

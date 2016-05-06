@@ -161,6 +161,12 @@ const (
 	// valid data version. For historical reasons 0 is considered
 	// valid.
 	FirstValidMetadataVer = 0
+	// PreExtraMetadataVer is the latest metadata version that did not include
+	// support for extra MD fields.
+	PreExtraMetadataVer = 1
+	// InitialExtraMetadataVer is the first metadata version that did
+	// include support for extra MD fields.
+	InitialExtraMetadataVer = 2
 )
 
 // DataVer is the type of a version for marshalled KBFS data
@@ -695,6 +701,16 @@ func NewUsageStat() *UsageStat {
 		Bytes:  make(map[UsageType]int64),
 		Blocks: make(map[UsageType]int64),
 	}
+}
+
+// NonZero checks whether UsageStat has accumulated any usage info
+func (u *UsageStat) NonZero() bool {
+	for i := UsageType(0); i < NumUsage; i++ {
+		if u.Bytes[i] != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 //AccumOne records the usage of one block, whose size is denoted by change

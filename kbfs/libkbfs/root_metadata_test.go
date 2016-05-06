@@ -513,3 +513,112 @@ func TestIsValidRekeyRequestBasic(t *testing.T) {
 		t.Fatal("Expected valid rekey request")
 	}
 }
+
+func TestRootMetadataVersion(t *testing.T) {
+	config := MakeTestConfigOrBust(t, "alice", "bob", "charlie")
+	config.SetSharingBeforeSignupEnabled(true)
+	defer config.Shutdown()
+
+	// Sign the writer metadata
+	id := FakeTlfID(1, false)
+	h := parseTlfHandleOrBust(t, config, "alice,bob@twitter", false)
+	rmd := newRootMetadataOrBust(t, id, h)
+	rmds := RootMetadataSigned{MD: *rmd}
+	if g, e := rmds.Version(), config.MetadataVersion(); g != e {
+		t.Errorf("MD with unresolved users got wrong version %d, expected %d",
+			g, e)
+	}
+
+	// All other folders should use the pre-extra MD version.
+	id2 := FakeTlfID(2, false)
+	h2 := parseTlfHandleOrBust(t, config, "alice,charlie", false)
+	rmd2 := newRootMetadataOrBust(t, id2, h2)
+	rmds2 := RootMetadataSigned{MD: *rmd2}
+	if g, e := rmds2.Version(), MetadataVer(PreExtraMetadataVer); g != e {
+		t.Errorf("MD without unresolved users got wrong version %d, "+
+			"expected %d", g, e)
+	}
+
+	// ... including if the assertions get resolved.
+	AddNewAssertionForTestOrBust(t, config,
+		keybase1.SocialAssertion{User: "bob"},
+		keybase1.SocialAssertion{
+			User:    "bob",
+			Service: "twitter",
+		})
+	rmd.SerializedPrivateMetadata = []byte{1} // MakeSuccessor requires this
+	FakeInitialRekey(rmd, h.BareTlfHandle)
+	if rmd.SerializedPrivateMetadata == nil {
+		t.Fatalf("Nil private MD")
+	}
+	h3, err := h.ResolveAgain(context.Background(), config.KBPKI())
+	if err != nil {
+		t.Fatalf("Couldn't resolve again: %v", err)
+	}
+	rmd3, err := rmd.MakeSuccessor(config, true)
+	if err != nil {
+		t.Fatalf("Couldn't make MD successor: %v", err)
+	}
+	FakeInitialRekey(rmd3, h3.BareTlfHandle)
+	err = rmd3.updateTlfHandle(h3)
+	if err != nil {
+		t.Fatalf("Couldn't update TLF handle: %v", err)
+	}
+	rmds3 := RootMetadataSigned{MD: *rmd3}
+	if g, e := rmds3.Version(), MetadataVer(PreExtraMetadataVer); g != e {
+		t.Errorf("MD without unresolved users got wrong version %d, "+
+			"expected %d", g, e)
+	}
+}
+
+func TestMakeRekeyReadError(t *testing.T) {
+	config := MakeTestConfigOrBust(t, "alice", "bob")
+	defer config.Shutdown()
+
+	id := FakeTlfID(1, false)
+	h := parseTlfHandleOrBust(t, config, "alice", false)
+	rmd := newRootMetadataOrBust(t, id, h)
+	FakeInitialRekey(rmd, h.BareTlfHandle)
+
+	u, uid, err := config.KBPKI().Resolve(context.Background(), "bob")
+	require.Nil(t, err)
+
+	err = makeRekeyReadError(rmd, h, FirstValidKeyGen, uid, u)
+	require.Equal(t, NewReadAccessError(h, u), err)
+
+	err = makeRekeyReadError(
+		rmd, h, FirstValidKeyGen, h.Writers[0], "alice")
+	require.Equal(t, NeedSelfRekeyError{"alice"}, err)
+
+	err = makeRekeyReadError(
+		rmd, h, FirstValidKeyGen+1, h.Writers[0], "alice")
+	require.Equal(t, NeedOtherRekeyError{"alice"}, err)
+}
+
+func TestMakeRekeyReadErrorResolvedHandle(t *testing.T) {
+	config := MakeTestConfigOrBust(t, "alice", "bob")
+	defer config.Shutdown()
+
+	id := FakeTlfID(1, false)
+	ctx := context.Background()
+	h, err := ParseTlfHandle(ctx, config.KBPKI(), "alice,bob@twitter",
+		false, true)
+	require.Nil(t, err)
+	rmd := newRootMetadataOrBust(t, id, h)
+	FakeInitialRekey(rmd, h.BareTlfHandle)
+
+	u, uid, err := config.KBPKI().Resolve(ctx, "bob")
+	require.Nil(t, err)
+
+	err = makeRekeyReadError(rmd, h, FirstValidKeyGen, uid, u)
+	require.Equal(t, NewReadAccessError(h, u), err)
+
+	config.KeybaseDaemon().(*KeybaseDaemonLocal).addNewAssertionForTest(
+		"bob", "bob@twitter")
+
+	resolvedHandle, err := h.ResolveAgain(ctx, config.KBPKI())
+	require.Nil(t, err)
+
+	err = makeRekeyReadError(rmd, resolvedHandle, FirstValidKeyGen, uid, u)
+	require.Equal(t, NeedOtherRekeyError{"alice,bob"}, err)
+}

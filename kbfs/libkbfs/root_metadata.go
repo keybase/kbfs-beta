@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol"
 	"github.com/keybase/go-codec/codec"
 	"golang.org/x/net/context"
@@ -640,7 +641,12 @@ func (md *RootMetadata) isReadableOrError(ctx context.Context, config Config) er
 	if err != nil {
 		return err
 	}
-	return makeRekeyReadError(md, md.LatestKeyGeneration(),
+	h := md.GetTlfHandle()
+	resolvedHandle, err := h.ResolveAgain(ctx, config.KBPKI())
+	if err != nil {
+		return err
+	}
+	return makeRekeyReadError(md, resolvedHandle, md.LatestKeyGeneration(),
 		uid, username)
 }
 
@@ -748,4 +754,37 @@ func (rmds *RootMetadataSigned) VerifyRootMetadata(codec Codec, crypto Crypto) e
 // into the KBFS Merkle tree.
 func (rmds *RootMetadataSigned) MerkleHash(config Config) (MerkleHash, error) {
 	return config.Crypto().MakeMerkleHash(rmds)
+}
+
+// Version returns the metadata version of this MD block, depending on
+// which features it uses.
+func (rmds *RootMetadataSigned) Version() MetadataVer {
+	// Only folders with unresolved assertions get the new version.
+	if len(rmds.MD.Extra.UnresolvedWriters) > 0 ||
+		len(rmds.MD.UnresolvedReaders) > 0 {
+		return InitialExtraMetadataVer
+	}
+	// Let other types of MD objects use the older version since they
+	// are still compatible with older clients.
+	return PreExtraMetadataVer
+}
+
+func makeRekeyReadError(
+	md *RootMetadata, resolvedHandle *TlfHandle, keyGen KeyGen,
+	uid keybase1.UID, username libkb.NormalizedUsername) error {
+	// If the user is not a legitimate reader of the folder, this is a
+	// normal read access error.
+	if resolvedHandle.IsPublic() {
+		panic("makeRekeyReadError called on public folder")
+	}
+	if !resolvedHandle.IsReader(uid) {
+		return NewReadAccessError(resolvedHandle, username)
+	}
+
+	// Otherwise, this folder needs to be rekeyed for this device.
+	tlfName := resolvedHandle.GetCanonicalName()
+	if keys, _ := md.GetTLFCryptPublicKeys(keyGen, uid); len(keys) > 0 {
+		return NeedSelfRekeyError{tlfName}
+	}
+	return NeedOtherRekeyError{tlfName}
 }

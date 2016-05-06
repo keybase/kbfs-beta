@@ -1,7 +1,6 @@
 package libkbfs
 
 import (
-	"errors"
 	"testing"
 	"time"
 
@@ -35,7 +34,7 @@ func expectCachedGetTLFCryptKey(config *ConfigMock, rmd *RootMetadata, keyGen Ke
 
 func expectUncachedGetTLFCryptKey(config *ConfigMock, rmd *RootMetadata, keyGen KeyGen, uid keybase1.UID, subkey CryptPublicKey, encrypt bool) {
 	config.mockKcache.EXPECT().GetTLFCryptKey(rmd.ID, keyGen).
-		Return(TLFCryptKey{}, errors.New("NONE"))
+		Return(TLFCryptKey{}, KeyCacheMissError{})
 
 	// get the xor'd key out of the metadata
 	config.mockKbpki.EXPECT().GetCurrentCryptPublicKey(gomock.Any()).
@@ -58,7 +57,7 @@ func expectUncachedGetTLFCryptKey(config *ConfigMock, rmd *RootMetadata, keyGen 
 
 func expectUncachedGetTLFCryptKeyAnyDevice(config *ConfigMock, rmd *RootMetadata, keyGen KeyGen, uid keybase1.UID, subkey CryptPublicKey, encrypt bool) {
 	config.mockKcache.EXPECT().GetTLFCryptKey(rmd.ID, keyGen).
-		Return(TLFCryptKey{}, errors.New("NONE"))
+		Return(TLFCryptKey{}, KeyCacheMissError{})
 
 	// get the xor'd key out of the metadata
 	config.mockKbpki.EXPECT().GetCryptPublicKeys(gomock.Any(), uid).
@@ -1498,4 +1497,90 @@ func TestKeyManagerRekeyAddDeviceWithPromptAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Couldn't create file: %v", err)
 	}
+}
+
+func TestKeyManagerRekeyAddDeviceWithPromptViaFolderAccess(t *testing.T) {
+	var u1, u2 libkb.NormalizedUsername = "u1", "u2"
+	config1, _, ctx := kbfsOpsConcurInit(t, u1, u2)
+	defer CheckConfigAndShutdown(t, config1)
+
+	config2 := ConfigAsUser(config1.(*ConfigLocal), u2)
+	defer CheckConfigAndShutdown(t, config2)
+	_, uid2, err := config2.KBPKI().GetCurrentUserInfo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a shared folder
+	name := u1.String() + "," + u2.String()
+
+	rootNode1 := GetRootNodeOrBust(t, config1, name, false)
+	config2Dev2 := ConfigAsUser(config1.(*ConfigLocal), u2)
+	defer CheckConfigAndShutdown(t, config2Dev2)
+
+	// Now give u2 a new device.  The configs don't share a Keybase
+	// Daemon so we have to do it in all places.
+	AddDeviceForLocalUserOrBust(t, config1, uid2)
+	AddDeviceForLocalUserOrBust(t, config2, uid2)
+	devIndex := AddDeviceForLocalUserOrBust(t, config2Dev2, uid2)
+	SwitchDeviceForLocalUserOrBust(t, config2Dev2, devIndex)
+
+	// The new device should be unable to rekey on its own, and will
+	// just set the rekey bit.
+	kbfsOps2Dev2 := config2Dev2.KBFSOps()
+	err = kbfsOps2Dev2.Rekey(ctx, rootNode1.GetFolderBranch().Tlf)
+	if err != nil {
+		t.Fatalf("First rekey failed %v", err)
+	}
+
+	ops := getOps(config2Dev2, rootNode1.GetFolderBranch().Tlf)
+
+	// Make sure just the rekey bit is set
+	if !ops.head.IsRekeySet() {
+		t.Fatalf("Couldn't set rekey bit")
+	}
+
+	// Allow the prompt rekey attempt to fail by using dev2's crypto
+	// (which still isn't keyed for)
+	c := make(chan bool)
+	// Use our other device as a standin for the paper key.
+	clta := &cryptoLocalTrapAny{config2Dev2.Crypto(), c, config2Dev2.Crypto()}
+	config2Dev2.SetCrypto(clta)
+	ops.rekeyWithPromptTimer.Reset(1 * time.Millisecond)
+	promptPaper := <-c
+	if !promptPaper {
+		t.Fatalf("Didn't prompt paper")
+	}
+	// Make sure the rekey attempt is finished by taking the lock.
+	// Keep the lock for a while, to control when the second rekey starts.
+	lState := makeFBOLockState()
+	ops.mdWriterLock.Lock(lState)
+
+	// Now cause a paper prompt unlock via a folder access
+	errCh := make(chan error)
+	go func() {
+		_, err := GetRootNodeForTest(config2Dev2, name, false)
+		errCh <- err
+	}()
+	// One failed decryption attempt
+	<-c
+	err = <-errCh
+	if _, ok := err.(NeedSelfRekeyError); !ok {
+		t.Fatalf("Got unexpected error when reading with new key: %v", err)
+	}
+
+	// Let the background rekeyer decrypt.
+	clta.cryptoToUse = config2.Crypto()
+	ops.mdWriterLock.Unlock(lState)
+
+	promptPaper = <-c
+	if !promptPaper {
+		t.Fatalf("Didn't prompt paper")
+	}
+	<-c // called a second time for decrypting the private data
+	// Make sure the rekey attempt is finished
+	ops.mdWriterLock.Lock(lState)
+	ops.mdWriterLock.Unlock(lState)
+
+	GetRootNodeOrBust(t, config2Dev2, name, false)
 }
