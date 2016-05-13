@@ -165,6 +165,7 @@ func (fbm *folderBlockManager) cleanUpBlockState(
 	md *RootMetadata, bps *blockPutState) {
 	fbm.blocksToDeleteLock.Lock()
 	defer fbm.blocksToDeleteLock.Unlock()
+	fbm.log.CDebugf(nil, "Clean up md %d %s", md.Revision, md.MergedStatus())
 	for _, bs := range bps.blockStates {
 		fbm.blocksToDeleteAfterError[md] =
 			append(fbm.blocksToDeleteAfterError[md], bs.blockPtr)
@@ -339,19 +340,14 @@ func (fbm *folderBlockManager) processBlocksToDelete(ctx context.Context) error 
 		// part of the folder history.  (This could happen
 		// if the Sync was canceled while the MD put was
 		// outstanding.)
-		var rmds []*RootMetadata
-		var err error
-		if md.MergedStatus() == Merged {
-			rmds, err = getMergedMDUpdates(ctx, fbm.config, fbm.id, md.Revision)
-		} else {
-			_, rmds, err = getUnmergedMDUpdates(ctx, fbm.config, fbm.id,
-				md.BID, md.Revision)
-		}
+		rmds, err := getMDRange(ctx, fbm.config, fbm.id, md.BID,
+			md.Revision, md.Revision, md.MergedStatus())
 		if err != nil || len(rmds) == 0 {
 			toDeleteAgain[md] = ptrs
 			continue
 		}
-		dirsEqual, err := CodecEqual(fbm.config.Codec(), rmds[0].data.Dir, md.data.Dir)
+		dirsEqual, err := CodecEqual(fbm.config.Codec(),
+			rmds[0].data.Dir, md.data.Dir)
 		if err != nil {
 			fbm.log.CErrorf(ctx, "Error when comparing dirs: %v", err)
 		} else if dirsEqual {

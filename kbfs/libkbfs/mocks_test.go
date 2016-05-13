@@ -1044,8 +1044,8 @@ func (_m *MockMDCache) EXPECT() *_MockMDCacheRecorder {
 	return _m.recorder
 }
 
-func (_m *MockMDCache) Get(tlf TlfID, rev MetadataRevision, mStatus MergeStatus) (*RootMetadata, error) {
-	ret := _m.ctrl.Call(_m, "Get", tlf, rev, mStatus)
+func (_m *MockMDCache) Get(tlf TlfID, rev MetadataRevision, bid BranchID) (*RootMetadata, error) {
+	ret := _m.ctrl.Call(_m, "Get", tlf, rev, bid)
 	ret0, _ := ret[0].(*RootMetadata)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
@@ -1063,14 +1063,6 @@ func (_m *MockMDCache) Put(md *RootMetadata) error {
 
 func (_mr *_MockMDCacheRecorder) Put(arg0 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "Put", arg0)
-}
-
-func (_m *MockMDCache) Delete(md *RootMetadata) {
-	_m.ctrl.Call(_m, "Delete", md)
-}
-
-func (_mr *_MockMDCacheRecorder) Delete(arg0 interface{}) *gomock.Call {
-	return _mr.mock.ctrl.RecordCall(_mr.mock, "Delete", arg0)
 }
 
 // Mock of KeyCache interface
@@ -2888,6 +2880,14 @@ func (_m *MockConfig) QuotaReclamationMinUnrefAge() time.Duration {
 
 func (_mr *_MockConfigRecorder) QuotaReclamationMinUnrefAge() *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "QuotaReclamationMinUnrefAge")
+}
+
+func (_m *MockConfig) ResetCaches() {
+	_m.ctrl.Call(_m, "ResetCaches")
+}
+
+func (_mr *_MockConfigRecorder) ResetCaches() *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "ResetCaches")
 }
 
 func (_m *MockConfig) MakeLogger(module string) logger.Logger {

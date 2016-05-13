@@ -64,6 +64,11 @@ func (f *stallingBlockOps) Put(
 	ctx context.Context, md *RootMetadata, blockPtr BlockPointer,
 	readyBlockData ReadyBlockData) error {
 	f.maybeStall(ctx, "Put")
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	err := f.delegate.Put(ctx, md, blockPtr, readyBlockData)
 	select {
 	case <-ctx.Done():
@@ -156,5 +161,19 @@ func (m *stallingMDOps) Put(ctx context.Context, md *RootMetadata) error {
 func (m *stallingMDOps) PutUnmerged(ctx context.Context, md *RootMetadata,
 	bid BranchID) error {
 	m.maybeStall(ctx, "PutUnmerged")
-	return m.delegate.PutUnmerged(ctx, md, bid)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	err := m.delegate.PutUnmerged(ctx, md, bid)
+	// If the PutUnmerged was canceled, return the cancel error.  This
+	// emulates the PutUnmerged being canceled while the RPC is
+	// outstanding.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return err
+	}
 }

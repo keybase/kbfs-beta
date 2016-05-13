@@ -16,6 +16,7 @@ import (
 type KBFSOpsStandard struct {
 	config   Config
 	log      logger.Logger
+	deferLog logger.Logger
 	ops      map[FolderBranch]*folderBranchOps
 	opsByFav map[Favorite]*folderBranchOps
 	opsLock  sync.RWMutex
@@ -39,6 +40,7 @@ func NewKBFSOpsStandard(config Config) *KBFSOpsStandard {
 	kops := &KBFSOpsStandard{
 		config:                config,
 		log:                   log,
+		deferLog:              log.CloneWithAddedDepth(1),
 		ops:                   make(map[FolderBranch]*folderBranchOps),
 		opsByFav:              make(map[Favorite]*folderBranchOps),
 		reIdentifyControlChan: make(chan struct{}),
@@ -210,7 +212,7 @@ func (fs *KBFSOpsStandard) GetOrCreateRootNode(
 	node Node, ei EntryInfo, err error) {
 	fs.log.CDebugf(ctx, "GetOrCreateRootNode(%s, %v)",
 		h.GetCanonicalPath(), branch)
-	defer func() { fs.log.CDebugf(ctx, "Done: %#v", err) }()
+	defer func() { fs.deferLog.CDebugf(ctx, "Done: %#v", err) }()
 
 	// Do GetForHandle() unlocked -- no cache lookups, should be fine
 	mdops := fs.config.MDOps()
@@ -393,16 +395,22 @@ func (fs *KBFSOpsStandard) FolderStatus(
 // Status implements the KBFSOps interface for KBFSOpsStandard
 func (fs *KBFSOpsStandard) Status(ctx context.Context) (
 	KBFSStatus, <-chan StatusUpdate, error) {
-	username, _, _ := fs.config.KBPKI().GetCurrentUserInfo(ctx)
+	username, _, err := fs.config.KBPKI().GetCurrentUserInfo(ctx)
 	var usageBytes int64 = -1
 	var limitBytes int64 = -1
-	quotaInfo, err := fs.config.BlockServer().GetUserQuotaInfo(ctx)
-	if err == nil {
-		limitBytes = quotaInfo.Limit
-		if quotaInfo.Total != nil {
-			usageBytes = quotaInfo.Total.Bytes[UsageWrite]
-		} else {
-			usageBytes = 0
+	// Don't request the quota info until we're sure we've
+	// authenticated with our password.  TODO: fix this in the
+	// service/GUI by handling multiple simultaneous passphrase
+	// requests at once.
+	if err == nil && fs.config.MDServer().IsConnected() {
+		quotaInfo, err := fs.config.BlockServer().GetUserQuotaInfo(ctx)
+		if err == nil {
+			limitBytes = quotaInfo.Limit
+			if quotaInfo.Total != nil {
+				usageBytes = quotaInfo.Total.Bytes[UsageWrite]
+			} else {
+				usageBytes = 0
+			}
 		}
 	}
 	failures, ch := fs.currentStatus.CurrentStatus()
