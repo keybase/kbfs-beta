@@ -398,6 +398,43 @@ type WriteRange struct {
 	codec.UnknownFieldSetHandler
 }
 
+func (w WriteRange) isTruncate() bool {
+	return w.Len == 0
+}
+
+// End returns the index of the largest byte not affected by this
+// write.  It only makes sense to call this for non-truncates.
+func (w WriteRange) End() uint64 {
+	if w.isTruncate() {
+		panic("Truncates don't have an end")
+	}
+	return w.Off + w.Len
+}
+
+// Affects returns true if the regions affected by this write
+// operation and `other` overlap in some way.  Specifically, it
+// returns true if:
+//
+// - both operations are writes and their write ranges overlap;
+// - one operation is a write and one is a truncate, and the truncate is
+//   within the write's range or before it; or
+// - both operations are truncates.
+func (w WriteRange) Affects(other WriteRange) bool {
+	if w.isTruncate() {
+		if other.isTruncate() {
+			return true
+		}
+		// A truncate affects a write if it lands inside or before the
+		// write.
+		return other.End() > w.Off
+	} else if other.isTruncate() {
+		return w.End() > other.Off
+	}
+	// Both are writes -- do their ranges overlap?
+	return (w.Off <= other.End() && other.End() <= w.End()) ||
+		(other.Off <= w.End() && w.End() <= other.End())
+}
+
 // syncOp is an op that represents a series of writes to a file.
 type syncOp struct {
 	OpCommon
@@ -488,6 +525,118 @@ func (so *syncOp) GetDefaultAction(mergedPath path) crAction {
 		toName:   mergedPath.tailName(),
 		symPath:  "",
 	}
+}
+
+// In the functions below. a collapsed []WriteRange is a sequence of
+// non-overlapping writes with strictly increasing Off, and maybe a
+// trailing truncate (with strictly greater Off).
+
+// coalesceWrites combines the given `wNew` with the head and tail of
+// the given collapsed `existingWrites` slice.  For example, if the
+// new write is {5, 100}, and `existingWrites` = [{7,5}, {18,10},
+// {98,10}], the returned write will be {5,103}.  There may be a
+// truncate at the end of the returned slice as well.
+func coalesceWrites(existingWrites []WriteRange,
+	wNew WriteRange) []WriteRange {
+	if wNew.isTruncate() {
+		panic("coalesceWrites cannot be called with a new truncate.")
+	}
+	if len(existingWrites) == 0 {
+		return []WriteRange{wNew}
+	}
+	newOff := wNew.Off
+	newEnd := wNew.End()
+	wOldHead := existingWrites[0]
+	wOldTail := existingWrites[len(existingWrites)-1]
+	if !wOldTail.isTruncate() && wOldTail.End() > newEnd {
+		newEnd = wOldTail.End()
+	}
+	if !wOldHead.isTruncate() && wOldHead.Off < newOff {
+		newOff = wOldHead.Off
+	}
+	ret := []WriteRange{{Off: newOff, Len: newEnd - newOff}}
+	if wOldTail.isTruncate() {
+		ret = append(ret, WriteRange{Off: newEnd})
+	}
+	return ret
+}
+
+// Assumes writes is already collapsed, i.e. a sequence of
+// non-overlapping writes with strictly increasing Off, and maybe a
+// trailing truncate (with strictly greater Off).
+func addToCollapsedWriteRange(writes []WriteRange,
+	wNew WriteRange) []WriteRange {
+	// Form three regions: head, mid, and tail: head is the maximal prefix
+	// of writes less than (with respect to Off) and unaffected by wNew,
+	// tail is the maximal suffix of writes greater than (with respect to
+	// Off) and unaffected by wNew, and mid is everything else, i.e. the
+	// range of writes affected by wNew.
+	var headEnd int
+	for ; headEnd < len(writes); headEnd++ {
+		wOld := writes[headEnd]
+		if wOld.Off >= wNew.Off || wNew.Affects(wOld) {
+			break
+		}
+	}
+	head := writes[:headEnd]
+
+	if wNew.isTruncate() {
+		// end is empty, since a truncate affects a suffix of writes.
+		mid := writes[headEnd:]
+
+		if len(mid) == 0 {
+			// Truncate past the last write.
+			return append(head, wNew)
+		} else if mid[0].isTruncate() {
+			// Min truncate wins
+			if mid[0].Off < wNew.Off {
+				return append(head, mid[0])
+			}
+			return append(head, wNew)
+		} else if mid[0].Off < wNew.Off {
+			return append(head, WriteRange{
+				Off: mid[0].Off,
+				Len: wNew.Off - mid[0].Off,
+			}, wNew)
+		}
+		return append(head, wNew)
+	}
+
+	// wNew is a write.
+
+	midEnd := headEnd
+	for ; midEnd < len(writes); midEnd++ {
+		wOld := writes[midEnd]
+		if !wNew.Affects(wOld) {
+			break
+		}
+	}
+
+	mid := writes[headEnd:midEnd]
+	end := writes[midEnd:]
+	mid = coalesceWrites(mid, wNew)
+	return append(head, append(mid, end...)...)
+}
+
+// collapseWriteRange returns a set of writes that represent the final
+// dirty state of this file after this syncOp, given a previous write
+// range.  It coalesces overlapping dirty writes, and it erases any
+// writes that occurred before a truncation with an offset smaller
+// than its max dirty byte.
+//
+// This function assumes that `writes` has already been collapsed (or
+// is nil).
+//
+// NOTE: Truncates past a file's end get turned into writes by
+// folderBranchOps, but in the future we may have bona fide truncate
+// WriteRanges past a file's end.
+func (so *syncOp) collapseWriteRange(writes []WriteRange) (
+	newWrites []WriteRange) {
+	newWrites = writes
+	for _, wNew := range so.Writes {
+		newWrites = addToCollapsedWriteRange(newWrites, wNew)
+	}
+	return newWrites
 }
 
 type attrChange uint16
